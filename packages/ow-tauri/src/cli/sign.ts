@@ -12,6 +12,9 @@
  * 4. `owe.json` (`{"appUid": ...}`) for the `OWEINTEGRITY/OWE` resource that
  *    the app's `build.rs` compiles.
  *
+ * It then touches `package.json`, so the next `cargo build` re-runs the
+ * app's build script and picks the signed output up.
+ *
  * Never calls `/sign/asar` and never writes an asar integrity token: Tauri has
  * no asar (step f).
  *
@@ -19,9 +22,10 @@
  */
 
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, utimes, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
+import { findAppExeNames } from './app-exe.js';
 import type { Credentials } from './http.js';
 import { download, postJson } from './http.js';
 import type { JsonObject } from './package-json.js';
@@ -77,8 +81,16 @@ export interface SignResult {
   readonly isOwCertificateEnabled: boolean;
   /** Whether `enableOWCertSigning` (or `OW_ENABLE_CERT_SIGNING`) asked for it. */
   readonly enableOWCertSigning: boolean;
-  /** The hashed entry file, relative to the project folder. */
+  /** The hashed entry file, relative to the project folder (the `fileHashes` key). */
   readonly mainFile: string;
+  /** The hashed entry file, absolute, for the build's staleness check. */
+  readonly mainPath: string;
+  /**
+   * The app exe file names of the Tauri project next to `package.json`
+   * (`mainBinaryName`, else Cargo's binary name and `productName`), for
+   * `sign-exe`; empty when no `tauri.conf.json` was found.
+   */
+  readonly appExeNames: readonly string[];
   /** Its SHA-256 (hex). */
   readonly mainSha256: string;
   /** The signed app version. */
@@ -177,7 +189,14 @@ export async function sign(options: SignOptions): Promise<SignOutcome> {
   const required =
     options.platform === 'win32' && isSigningRequired(owBuild['requireSigning'], env);
   try {
-    return await signInner(options, pkg, pkgDir, owBuild);
+    const outcome = await signInner(options, pkg, pkgDir, owBuild);
+    if (outcome.status === 'signed') {
+      // Cargo watches package.json: a build after signing re-runs the
+      // app's build script, which then applies the signed output.
+      const now = new Date();
+      await utimes(packagePath, now, now);
+    }
+    return outcome;
   } catch (error) {
     if (required) {
       log.warn('Overwolf signing failed - aborting build (requireSigning is enabled)');
@@ -270,6 +289,8 @@ async function signInner(
     isOwCertificateEnabled: response.isOwCertificateEnabled === true,
     enableOWCertSigning: isCertSigningEnabled(owBuild['enableOWCertSigning'], env),
     mainFile: mainRel,
+    mainPath: join(projectDir, mainRel),
+    appExeNames: await findAppExeNames([pkgDir]),
     mainSha256: mainHash,
     version: typeof signedPackage['version'] === 'string' ? signedPackage['version'] : '',
   };

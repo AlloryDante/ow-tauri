@@ -13,13 +13,20 @@
  * to the `--fallback` command (the developer's own signing), or is left
  * unsigned when there is none.
  *
+ * The app exe is the file Tauri names after `mainBinaryName` (else Cargo's
+ * binary name or `productName`; see `app-exe.ts`), found from
+ * `tauri.conf.json` next to the working folder, the names `ow-tauri sign`
+ * recorded, and the signed `package.json`. `--app-exe` overrides them.
+ *
  * @packageDocumentation
  */
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
+
+import { findAppExeNames } from './app-exe.js';
 
 import { download, postFile } from './http.js';
 import { isObject } from './package-json.js';
@@ -31,7 +38,11 @@ import { readZipEntries } from './zip.js';
 export interface SignExeOptions {
   /** The binary Tauri asks to sign. */
   readonly file: string;
-  /** The app exe's file name; default `<productName>.exe` of the signed `package.json`. */
+  /**
+   * The app exe's file name. Default: the names Tauri may give it, from
+   * `tauri.conf.json` (`mainBinaryName`, else Cargo's binary name and
+   * `productName`), `sign-result.json` and the signed `package.json`.
+   */
   readonly appExe?: string | undefined;
   /** The `ow-tauri sign` output folder; default `./ow-tauri-signed`, else `../ow-tauri-signed`. */
   readonly signedDir?: string | undefined;
@@ -113,6 +124,46 @@ export function splitCommand(line: string): string[] {
   return words;
 }
 
+/**
+ * The default app exe names: from `tauri.conf.json` next to the working
+ * folder or the signed output, then the names `ow-tauri sign` recorded,
+ * then the signed `package.json`'s `productName` / `name`.
+ *
+ * @param cwd - the working folder
+ * @param signedDir - the `ow-tauri sign` output, if found
+ * @param sign - its `sign-result.json`
+ * @param signedPkg - its signed `package.json`
+ * @returns the names, without duplicates
+ */
+async function defaultAppExeNames(
+  cwd: string,
+  signedDir: string | null,
+  sign: Partial<SignResult> | null,
+  signedPkg: Record<string, unknown> | null,
+): Promise<string[]> {
+  const dirs = [cwd, ...(signedDir ? [dirname(signedDir)] : [])];
+  const names = [...(await findAppExeNames(dirs))];
+  for (const recorded of Array.isArray(sign?.appExeNames) ? sign.appExeNames : []) {
+    if (typeof recorded === 'string') names.push(recorded);
+  }
+  for (const key of ['productName', 'name']) {
+    const value = signedPkg?.[key];
+    if (typeof value === 'string' && value !== '') names.push(`${value}.exe`);
+  }
+  return [...new Set(names)];
+}
+
+/**
+ * Whether Tauri asks to sign a binary that sits where the main binary
+ * does: an `.exe` outside the installer `bundle` folders.
+ *
+ * @param file - the absolute path
+ * @returns whether to warn when it is not matched
+ */
+function looksLikeMainBinary(file: string): boolean {
+  return file.toLowerCase().endsWith('.exe') && !file.split(sep).includes('bundle');
+}
+
 function runFallback(command: string, file: string): Promise<void> {
   const words = splitCommand(command).map((w) => w.replaceAll('%1', file));
   const [program, ...args] = words;
@@ -139,18 +190,21 @@ export async function signExe(options: SignExeOptions): Promise<SignExeOutcome> 
   const signedDir = findSignedDir(options);
   const result = signedDir ? await readJson(join(signedDir, RESULT_FILE)) : null;
   const signedPkg = signedDir ? await readJson(join(signedDir, 'package.json')) : null;
-  const productName =
-    typeof signedPkg?.['productName'] === 'string'
-      ? signedPkg['productName']
-      : typeof signedPkg?.['name'] === 'string'
-        ? signedPkg['name']
-        : '';
-  const appExe = options.appExe ?? (productName ? `${productName}.exe` : '');
   const sign = result as Partial<SignResult> | null;
   const owActive = sign?.isOwCertificateEnabled === true && sign.enableOWCertSigning === true;
-  const isAppExe = appExe !== '' && basename(file).toLowerCase() === appExe.toLowerCase();
+  const appExeNames =
+    options.appExe !== undefined
+      ? [options.appExe]
+      : await defaultAppExeNames(options.cwd, signedDir, sign, signedPkg);
+  const name = basename(file).toLowerCase();
+  const isAppExe = appExeNames.some((n) => n.toLowerCase() === name);
   if (owActive && isAppExe) {
     return signWithOverwolfCertificate(file, env, log);
+  }
+  if (owActive && looksLikeMainBinary(file)) {
+    log.warn(
+      `${basename(file)} is not the app exe (${appExeNames.join(', ') || 'unknown'}), so it is not signed with Overwolf's certificate; pass --app-exe "${basename(file)}" if it is the app exe`,
+    );
   }
   if (options.fallback !== undefined) {
     await runFallback(options.fallback, file);

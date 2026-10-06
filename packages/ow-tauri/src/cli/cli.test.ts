@@ -1,7 +1,15 @@
 // @vitest-environment node
 /// <reference types="node" />
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  statSync,
+  utimesSync,
+} from 'node:fs';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -11,6 +19,7 @@ import { deflateRawSync } from 'node:zlib';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { cargoBinaryName, tauriAppExeNames } from './app-exe.js';
 import { deepAssign, envOn, isSigningRequired, packagedForm } from './package-json.js';
 import { USAGE, parseArgs, run } from './run.js';
 import type { CliIo } from './run.js';
@@ -275,6 +284,8 @@ describe('ow-tauri sign', () => {
       isOwCertificateEnabled: true,
       enableOWCertSigning: true,
       mainFile: 'dist/main.js',
+      mainPath: join(dir, 'dist/main.js'),
+      appExeNames: [],
       version: '1.2.3',
     });
 
@@ -297,6 +308,31 @@ describe('ow-tauri sign', () => {
       'dist/main.js': createHash('sha256').update('console.log(1);\n').digest('hex'),
     });
     expect(service.seen.some((s) => s.url.includes('asar'))).toBe(false);
+  });
+
+  it('touches package.json and records the Tauri app exe names', async () => {
+    const pkgPath = join(dir, 'package.json');
+    const past = new Date('2020-01-01T00:00:00Z');
+    utimesSync(pkgPath, past, past);
+    mkdirSync(join(dir, 'src-tauri'));
+    writeFileSync(
+      join(dir, 'src-tauri', 'tauri.conf.json'),
+      JSON.stringify({ productName: 'Demo Studio App' }),
+    );
+    writeFileSync(
+      join(dir, 'src-tauri', 'Cargo.toml'),
+      '[package]\nname = "demo-app-shell"\nversion = "0.1.0"\n',
+    );
+    expect((await sign(options({ projectDir: dir }))).status).toBe('signed');
+    expect(statSync(pkgPath).mtimeMs).toBeGreaterThan(past.getTime());
+    const result = JSON.parse(
+      readFileSync(join(dir, 'ow-tauri-signed', 'sign-result.json'), 'utf8'),
+    ) as { appExeNames: string[] };
+    expect(result.appExeNames).toEqual(['demo-app-shell.exe', 'Demo Studio App.exe']);
+    // Not touched when nothing was signed.
+    utimesSync(pkgPath, past, past);
+    await sign(options({ dryRun: true }));
+    expect(statSync(pkgPath).mtimeMs).toBe(past.getTime());
   });
 
   it('gates on credentials like the builder', async () => {
@@ -436,6 +472,56 @@ describe('ow-tauri sign-exe', () => {
     await expect(signExe(exeOptions('Demo App.exe', { env: {} }))).rejects.toThrow(
       /certificate signing required/,
     );
+  });
+
+  it('finds the app exe from tauri.conf.json when its name differs from package.json', async () => {
+    // As in the packages sample: package.json has only `name`, tauri.conf
+    // a different productName, and Cargo names the binary.
+    const src = join(dir, 'src-tauri');
+    mkdirSync(src);
+    writeFileSync(join(src, 'tauri.conf.json'), JSON.stringify({ productName: 'Shell App' }));
+    writeFileSync(
+      join(src, 'Cargo.toml'),
+      '[package]\nname = "shell-app"\n\n[[bin]]\nname = "shell-main" # the app\npath = "src/main.rs"\n',
+    );
+    mkdirSync(join(src, 'target', 'release'), { recursive: true });
+    writeFileSync(join(src, 'target', 'release', 'shell-main.exe'), 'UNSIGNED');
+    writeFileSync(join(src, 'target', 'release', 'other.exe'), 'UNSIGNED');
+    service.routes.set('GET /files/signed.zip', (_req, res) => {
+      res.writeHead(200).end(makeZip({ 'shell-main.exe': 'SIGNED' }, true));
+    });
+    // Tauri runs signCommand in src-tauri.
+    const run = (file: string) =>
+      signExe({ ...exeOptions(file), file: join('target', 'release', file), cwd: src });
+    expect(await run('shell-main.exe')).toBe('overwolf');
+    expect(readFileSync(join(src, 'target', 'release', 'shell-main.exe'), 'utf8')).toBe('SIGNED');
+    // Another exe where the main binary sits: skipped, with a warning.
+    const log = collectLog();
+    const outcome = await signExe({
+      ...exeOptions('other.exe'),
+      file: join('target', 'release', 'other.exe'),
+      cwd: src,
+      log,
+    });
+    expect(outcome).toBe('skipped');
+    expect(log.lines.join('\n')).toMatch(/other\.exe is not the app exe \(shell-main\.exe/);
+    // mainBinaryName wins.
+    writeFileSync(
+      join(src, 'tauri.windows.conf.json'),
+      JSON.stringify({ mainBinaryName: 'Renamed' }),
+    );
+    expect(await tauriAppExeNames(src)).toEqual(['Renamed.exe']);
+  });
+
+  it('reads the Cargo binary name', () => {
+    expect(cargoBinaryName('[package]\nname = "a"\n')).toBe('a');
+    expect(cargoBinaryName('[package]\nname = "a"\ndefault-run = "b"\n[[bin]]\nname = "c"\n')).toBe(
+      'b',
+    );
+    expect(
+      cargoBinaryName('[[bin]]\nname = "c"\n[[bin]]\nname = "d"\n[package]\nname = "a"\n'),
+    ).toBe('c');
+    expect(cargoBinaryName('[dependencies]\nname = "x"\n')).toBeUndefined();
   });
 
   it('reports a bad certificate response', async () => {
