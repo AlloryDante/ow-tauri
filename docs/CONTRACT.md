@@ -238,6 +238,10 @@ line switches (last wins). Every field is optional.
 }
 ```
 
+The whole `plugins.overwolf` object is optional. Tauri hands a missing
+object to the plugin as `null`, so the plugin's configuration type is
+`Option<Config>` (A.5) and `null` means "all defaults".
+
 Removed by the parity revision, and rejected with a build warning when
 present: `analytics.hostFields` (ow-electron sends no host fields),
 `ads.experimentalElementApi` (the element members are now always defined,
@@ -257,6 +261,8 @@ Environment variables:
 | `OW_CLI_EMAIL`, `OW_CLI_API_KEY`, `OW_DEV_KEY` | dev-mode credentials, read with Overwolf's documented precedence (`OW_CLI_EMAIL` with `OW_CLI_API_KEY`, else `OW_DEV_KEY`) in debug builds only and kept for a future package runtime (Appendix P); never logged and never sent anywhere by ow-tauri [DOC] |
 | `OW_CLI_EMAIL`, `OW_CLI_API_KEY`, `OW_BUILD_KEY`, `OW_CLI_API_URL`, `OW_REQUIRE_SIGNING` | build time only: the signing step (G.4) [BUILDER] |
 | `OW_TAURI_PACKAGE_RUNTIME=<path>` | reserved for Appendix P; ignored with a warning |
+| `OW_TAURI_ALLOW_MISSING_JS=1` | build time only: the crate builds without the injected scripts (`js/bootstrap.js` and the guest scripts, ADR 0012) and embeds a placeholder that only reports their absence. For CI jobs that test the Rust side and never run the app. Without it a release build fails when a script is missing; a debug build embeds the placeholder and prints a build warning |
+| `OW_TAURI_REQUIRE_JS=1` | build time only: a debug build also fails when an injected script is missing |
 
 Command line switches (read from the process arguments at setup):
 
@@ -299,11 +305,14 @@ hidden main webview's timers running (A.6). `app.commandLine.appendSwitch()`
 and `app.disableHardwareAcceleration()` called from app code at runtime cannot
 change arguments of webviews that already exist: the call is recorded in
 `ow-tauri.json` (`pendingBrowserArgs`), applied on the next launch to both
-environments, and logs a warning (partial, B.2.1). Each session replaces the
-stored set with the calls it made before `main_ready`, so an app that stops
-calling them gets the defaults back on the following launch. macOS and Linux
-have no browser arguments; the same settings are ignored there with a
-warning.
+environments, and logs a warning (partial, B.2.1). Only `--disable-gpu` and
+`--remote-debugging-port=<n>` (n > 0; used in debug builds only) are kept;
+other switches are dropped, and duplicates are removed. Each session replaces
+the stored set with the set it recorded: `main_ready` carries the set recorded
+so far (`pendingBrowserArgs`, A.2.1; absent means none), and every change
+sends the session's whole set again with `app_record_browser_args`. An app that stops calling them gets the defaults
+back on the following launch. macOS and Linux have no browser arguments; the
+set is stored all the same and ignored there with a warning.
 
 ### A.2 Commands
 
@@ -320,16 +329,18 @@ possible for every command with arguments).
 |---|---|---|---|---|
 | `ipc_subscribe` | `{ onMessage: Channel<HostMessage[]>; userAgent?: string }` | `{ epoch: string }` | none | Registers the calling document's host-message channel (A.3, C.1). Called once per document load, before any other command except `bootstrap`. The first call from `ow-main` carries the platform webview's default `navigator.userAgent`, from which Rust composes `<UA>` (E.1). Returns a fresh random `epoch` that tags this document's IPC sequence numbers (C.3). A second call from the same webview replaces the first channel and resets that webview's IPC state. |
 | `bootstrap` | none | `HostSnapshot` | none | Returns the current snapshot, the same shape as the injected `window.__OW_TAURI_BOOTSTRAP__`. Used to resynchronise the cache after a state sequence gap (B.1.6). |
-| `main_ready` | none | `void` | none | The app's top-level module code has run and `app.whenReady()` is about to resolve. Seals pre-ready switches and starts the launch analytics sequence (E.2). Idempotent. If it never arrives, analytics start after 10 s with a warning. |
+| `main_ready` | `{ pendingBrowserArgs?: string[] }` | `void` | none | The app's top-level module code has run and `app.whenReady()` is about to resolve. The main runtime sends it after `DOMContentLoaded` plus one macrotask, by which time the app's scripts, modules included, have run their synchronous top-level code. Seals pre-ready switches, replaces the stored `pendingBrowserArgs` with the filtered argument (A.1.1; absent means none) and starts the launch analytics sequence (E.2). Idempotent: only the first call has an effect. If it never arrives, analytics start after 10 s with a warning. |
+| `app_record_browser_args` | `{ args: string[] }` | `void` | none | Replaces the stored `pendingBrowserArgs` with the filtered `args` (A.1.1). The main runtime sends the session's whole recorded set each time `app.commandLine.appendSwitch()`, `removeSwitch()` or `app.disableHardwareAcceleration()` changes it, before or after `main_ready`; the last call (or `main_ready`, whichever is later) wins. Takes effect from the next launch. |
 | `ipc_main_ready` | none | `void` | none | `ipcMain` is installed; flushes the startup queue (section C.4). |
 | `app_quit_reply` | `{ requestId: number; prevent: boolean }` | `void` | `not-found` (unknown or expired request) | Answer to a `lifecycle` `before-quit` message (A.6). |
-| `app_relaunch` | `{ args?: string[], execPath?: null }` | `void` | `unsupported` (non-null `execPath`) | Schedules a relaunch on the next `app_exit` / `app_quit`, like Electron `app.relaunch()`. |
+| `app_relaunch` | `{ args?: string[], execPath?: null }` | `void` | `unsupported` (non-null `execPath`) | Schedules a relaunch on the next `app_exit` / `app_quit`, like Electron `app.relaunch()`. `args` replaces the original arguments; absent means the original arguments without the executable. The new process is started at `RunEvent::Exit` (A.6). |
 | `app_quit` | none | `void` | none | Graceful exit: the A.6 quit sequence (`before-quit`, window `close` events, `will-quit`), analytics drain, then exit. |
 | `app_exit` | `{ code?: number }` | `void` | none | Immediate exit with `code` (default 0) after an analytics drain of at most 1.5 s. |
-| `app_focus` | `{ steal?: boolean }` | `void` | none | Focuses the most recent visible UI window. |
+| `app_focus` | `{ steal?: boolean }` | `void` | none | Focuses the most recent visible UI window. `steal` is accepted and ignored (partial, B.2.1). |
 | `log` | `{ level: 'debug'\|'info'\|'warn'\|'error', message: string }` | `void` | none | Appends to the ow-tauri log file when `logging.enabled`; dropped otherwise (F.4). |
-| `ipc_reply` | `{ id: number; ok: boolean; value?: OtjValue; error?: IpcErrorWire; seq: number }` | `void` | none (unknown ids are ignored) | Answers an `invoke` request (C.2). `seq` is the main runtime's per-target counter shared with `ipc_emit`, so a reply is delivered after every message the handler sent to the same window before returning (C.5). An absent `value` decodes to `undefined`. |
-| `ipc_emit` | `{ target: number; channel: string; args: OtjValue[]; seq: number }` | `void` | `ipc-serialization`, `ipc-overloaded` | `webContents.send` / `event.reply` to window id `target` (C.5). |
+| `ipc_reply` | `{ id: number; ok: boolean; value?: OtjValue; error?: IpcErrorWire; seq: number }` | `void` | none (unknown ids are ignored) | Answers an `invoke` request (C.2). `seq` is the main runtime's per-target counter shared with `ipc_emit`, so a reply is delivered after every message the handler sent to the same window before returning (C.5). An absent `value` decodes to `undefined`. A reply to a request that already timed out still uses up its `seq`. A reply that cannot be ordered (its `seq` was already used, or is too far ahead of the target's order) settles the invoke at once with `ipc-overloaded`, so it never hangs. Rust does not check the reply's size; the main runtime does (C.5). |
+| `ipc_emit` | `{ target: number; channel: string; args: OtjValue[]; seq: number }` | `void` | `ipc-serialization`, `ipc-overloaded` | `webContents.send` / `event.reply` to window id `target` (C.5). A rejected call still uses up its `seq`. |
+| `ipc_emit_skip` | `{ target: number; seq: number }` | `void` | none | The main runtime reports that the `ipc_emit` or `ipc_reply` it numbered `seq` for window `target` never reached the plugin (C.5), so the target's outbound order does not wait for it. Numbers already used or skipped are ignored. |
 
 `HostSnapshot`:
 
@@ -341,15 +352,29 @@ interface HostSnapshot {
   identity: { uid: string; cuid: string; muid: string; muidV2: string; phasePercent: number };
   utmParams?: unknown;                      // ow-electron.json utmParams; absent (undefined in JS) when there are none (F.2)
   switches: { argv: string[]; testAd: boolean };
-  paths: Record<ElectronPathName, string>;  // see B.2 app.getPath
+  paths: Record<ElectronPathName | 'appPath', string>;  // see B.2 app.getPath; appPath backs getAppPath()
   isPackaged: boolean;
   locale: string;
   displays: ElectronDisplay[];              // see B.2 screen
   primaryDisplayId: number;
   packages: PackagesSnapshot;               // A.2.4 (H)
   flags: { anonymousAnalyticsDisabled: boolean; adsOptimizationDisabled: boolean; adsFpdDisabled: boolean };
+  platform: string;                         // Node-style: 'win32' | 'darwin' | 'linux'
+  arch: string;                             // Node-style: 'x64' | 'arm64' | ...
+  cursor?: { x: number; y: number };        // cursor in DIP when the snapshot was taken
+  ipcLimits?: { maxMessageBytes: number };  // ipc.maxMessageBytes (A.1), for the runtime's own size checks
 }
 ```
+
+`paths.appPath` is the directory that holds the app's resources (Tauri's
+resource directory, or the executable's directory when Tauri cannot name
+one); the `fs_*` scope serves the embedded `package.json` under it (A.2.3).
+The JS side treats `cursor` and `ipcLimits` as optional: without `cursor` the
+first `screen.getCursorScreenPoint()` returns the cached `(0, 0)` and starts a
+refresh; without `ipcLimits` the runtime checks against the default 8 MiB.
+
+UI windows get a smaller object as `window.__OW_TAURI_BOOTSTRAP__`, the
+subset the `process` shim needs: `{ versions, switches, platform, arch }`.
 
 #### A.2.2 Main webview: Overwolf API (`overwolf:main`)
 
@@ -402,13 +427,16 @@ directly by the facade through `core:window:*` / `core:webview:*` permissions
 and are not repeated here.
 
 The opener, dialog and global-shortcut plugins are dependencies of
-`tauri-plugin-overwolf`; the plugin registers them itself (`AppHandle::plugin`
-in its setup hook) unless the app has already registered them, and calls them
-from Rust. No webview, including `ow-main`, is granted their permissions.
+`tauri-plugin-overwolf`; the plugin registers them itself unless the app has
+already registered them, and calls them from Rust. No webview, including
+`ow-main`, is granted their permissions. The registration
+(`AppHandle::plugin`) runs in a task the setup hook posts to the event loop,
+not in the setup hook itself: Tauri holds its plugin-store lock during plugin
+setup and during `on_event`, so registering from there deadlocks.
 
 | Command | Arguments | Returns | Errors | Behaviour |
 |---|---|---|---|---|
-| `window_create` | `WindowCreateRequest` | `{ id: number; label: string }` | `invalid-argument`, `io` | Creates the window behind `new BrowserWindow(options)` (B.2): native window `bw-<id>` with one webview `bw-<id>`. Injects the renderer bootstrap and the preload script as initialization scripts, both wrapped in an app-origin guard (A.2.3.1). Installs the navigation policy (A.2.3.1). Registers the window class. |
+| `window_create` | `WindowCreateRequest` | `{ id: number; label: string }` | `invalid-argument`, `io`, `not-found` (unknown `parentId`), `unsupported` (`windowClass: 'overlay'`, which needs a package runtime) | Creates the window behind `new BrowserWindow(options)` (B.2): native window `bw-<id>` with one webview `bw-<id>`. Injects the renderer bootstrap and the preload script as initialization scripts, both wrapped in an app-origin guard (A.2.3.1). Installs the navigation policy and the `window.open` handler (A.2.3.1). Registers the window class. `id` is the plugin's window id; the main runtime maps it to the app-visible `BrowserWindow.id` (B.2.2). |
 | `window_load` | `{ id: number; target: LoadTarget }` | `void` | `not-found`, `io` | `loadURL` / `loadFile`. A target that is an app asset loads in the existing webview. An `http(s)` URL that is not an app asset switches the window to class `remote` for good: the `bw-<id>` webview is closed and a fresh child webview `bwr-<id>` filling the window is created for the URL, with no initialization scripts and no capability (A.2.3.1). The window keeps its id, bounds and native handle. |
 | `window_close_reply` | `{ id: number; requestId: number; prevent: boolean }` | `void` | `not-found` | Answer to a `close` window event (A.3); `prevent: false` lets the close proceed. |
 | `window_destroy` | `{ id: number }` | `void` | `not-found` | `destroy()`: closes without a `close` event. |
@@ -423,7 +451,7 @@ from Rust. No webview, including `ow-main`, is granted their permissions.
 | `dialog_save` | `SaveDialogOptions` | `{ canceled: boolean; filePath: string }` | `io` | via `tauri-plugin-dialog`. |
 | `dialog_message` | `MessageBoxOptions` | `{ response: number; checkboxChecked: boolean }` | `io` | Up to 3 buttons (partial, B.2). |
 | `global_shortcut_register` | `{ accelerator: string; id: number }` | `boolean` | none | Electron accelerator syntax; presses arrive as `global-shortcut` host messages (A.3). |
-| `global_shortcut_unregister` | `{ accelerator?: string }` | `void` | none | Absent `accelerator` unregisters all. |
+| `global_shortcut_unregister` | `{ accelerator?: string }` | `void` | none | Absent `accelerator` unregisters all. An accelerator matches a registration that names the same keys, whatever the spelling (`Ctrl+K` unregisters a `CommandOrControl+K` registration on Windows and Linux). |
 | `fs_read_text` | `{ path: string }` | `string \| null` | `forbidden` (out of scope), `io` | `null` when the file does not exist. |
 | `fs_write_text` | `{ path: string; data: string }` | `void` | `forbidden`, `io` | Atomic (temp file + rename); creates parent directories. |
 | `fs_exists` | `{ path: string }` | `boolean` | `forbidden` | |
@@ -445,7 +473,7 @@ that may start with `$USERDATA`, `$PICTURES`, `$VIDEOS`, `$DOCUMENTS`,
 interface WindowCreateRequest {
   options: BrowserWindowOptionsWire;  // supported subset of BrowserWindowConstructorOptions (B.2), parent as parentId
   preload: string | null;             // app-asset path of the preload bundle, e.g. "preload/preload.js"
-  windowClass: 'ui' | 'overlay';      // 'overlay' is reserved for a package runtime (Appendix P); always 'ui' today
+  windowClass: 'ui' | 'overlay';      // 'overlay' is reserved for a package runtime (Appendix P) and is `unsupported` today
   overlayOptions?: OverlayOptions;    // only with windowClass 'overlay'
 }
 type LoadTarget = { kind: 'file'; path: string; query?: Record<string, string>; hash?: string }
@@ -462,16 +490,31 @@ Tauri cannot remove an initialization script from a webview, and it re-runs
 initialization scripts on every top-level navigation. ow-tauri therefore never
 lets a webview that carries app scripts show a remote document:
 
-- **Origin guard.** The renderer bootstrap and every preload are wrapped in
-  `if (location.origin === <app origin>) { ... }`, where the app origin is the
-  platform's asset origin (`tauri://localhost`, `http://tauri.localhost`, or the
-  dev server origin in debug builds). They do nothing in any other document.
-- **Navigation policy.** Every `bw-*` webview gets an `on_navigation` handler
-  that allows top-level navigations to the app origin only. Any other target is
-  cancelled: an `http(s)` URL is opened in the system browser (as
-  `shell_open_external` validates it), anything else is dropped and logged.
-  `window_load` with a remote URL does not navigate; it uses the recreate path
-  above.
+- **Origin guard.** The renderer bootstrap, every preload and the `ow-main`
+  bootstrap are wrapped in `if (location.origin === <app origin>) { ... }`,
+  where the app origin is the platform's asset origin (`tauri://localhost`,
+  `http://tauri.localhost`, or the dev server origin in debug builds). They do
+  nothing in any other document. The UI capability is also `local: true`, so
+  a remote document in a `bw-*` webview cannot call a command.
+- **Navigation policy.** Every `bw-*` webview gets an `on_navigation`
+  handler. Navigations to the app origin and to in-page documents
+  (`about:`, `blob:`, `data:`) are allowed everywhere; any scheme other than
+  those and `http(s)` is cancelled and logged. For `http(s)` targets outside
+  the app origin the platforms differ, because only WebView2 reports
+  top-level navigations alone to the hook; WKWebView and WebKitGTK also
+  report every frame's navigations without saying which frame navigates:
+
+  | Platform | `http(s)` navigation outside the app origin |
+  |---|---|
+  | Windows | cancelled; the URL is opened in the system browser (validated as `shell_open_external` does) and `ow-main` gets a `will-navigate { url }` window message |
+  | macOS, Linux | allowed by the hook, so embedded frames (video or stream widgets) work. To keep top-level behaviour the same as on Windows, the renderer bootstrap intercepts primary clicks on links (`a[href]` without a `target` other than `_self` / `_top`) and form submissions in the top frame whose target is an `http(s)` URL outside the app origin: it cancels them and calls `navigation_external { url }` (A.2.5), which opens the URL in the system browser and sends the same `will-navigate`. A page script that assigns `location` directly is not intercepted: the remote page then loads inside the `bw-*` webview, without IPC (origin guard, local-only capability), until the app reloads the window |
+
+  `window_load` with a remote URL does not navigate; it uses the recreate
+  path above.
+- **New windows.** `window.open()` and `target="_blank"` requests from any
+  webview of a `bw-<id>` window are always denied natively and reported to
+  `ow-main` as a `new-window { url }` window message, where the main runtime
+  runs the app's `setWindowOpenHandler` (B.2.2).
 - **Remote class.** `bwr-<id>` webviews have no initialization scripts, no
   capability and no host-message channel; `webContents.send` to them is
   dropped (C.5), `executeJavaScript` runs through native `eval` and resolves
@@ -489,12 +532,26 @@ renderer, so the plugin checks it first:
 2. It must lie inside the `fs_*` scope below (read or read-write); otherwise
    `"path is outside the allowed scope"`.
 3. Unless `shell.openPathAllowExecutables` is `true`, it must not be an
-   executable or a launcher: on Windows any extension in `PATHEXT` plus `.lnk`,
-   `.url`, `.scf`, `.ps1`, `.msi`, `.msp`, `.reg`, `.hta`, `.cpl`, `.jar`; on
-   macOS any `.app`, `.command`, `.tool`, `.terminal`, `.workflow`, `.pkg`,
-   `.mpkg` or a file with an execute bit; on Linux any `.desktop`, `.AppImage`
-   or file with an execute bit. Directories are always allowed. A refused path
-   returns `"opening executables is disabled"`.
+   executable or a launcher (extensions compared case-insensitively):
+   - Windows: any extension in `PATHEXT` (default
+     `.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC` when unset), plus
+     shortcuts, installers, scripts and file types whose shell handler runs or
+     installs code: `.lnk`, `.url`, `.website`, `.scf`, `.ps1`, `.exe`,
+     `.scr`, `.pif`, `.msi`, `.msp`, `.msix`, `.msixbundle`, `.appx`,
+     `.appxbundle`, `.appinstaller`, `.appref-ms`, `.application`, `.reg`,
+     `.hta`, `.cpl`, `.inf`, `.jar`, `.chm`, `.diagcab`,
+     `.settingcontent-ms`, `.library-ms`, `.search-ms`, `.xll`, and the
+     auto-mounting disk images `.iso`, `.img`, `.vhd`, `.vhdx`;
+   - macOS: `.app`, `.command`, `.tool`, `.terminal`, `.workflow`, `.pkg`,
+     `.mpkg`, `.prefpane`, `.saver`, `.scpt`, `.scptd`, `.applescript`,
+     `.jar`, `.dmg`, the Finder location files `.fileloc`, `.inetloc`,
+     `.webloc`, and any file with an execute bit;
+   - Linux: `.desktop`, `.AppImage`, `.jar`, and any file with an execute
+     bit.
+
+   Directories are allowed, except macOS bundles that launch something
+   (`.app`, `.prefpane`, `.saver`, `.workflow`, `.pkg`, `.mpkg`, `.scptd`).
+   A refused path returns `"opening executables is disabled"`.
 
 #### A.2.4 Main webview: packages (`overwolf:main`)
 
@@ -526,13 +583,18 @@ exactly ow-electron's error text.
 
 #### A.2.5 UI windows (`overwolf:renderer`)
 
+The caller must be the app webview of a window that `window_create` made
+(class `ui`, or `overlay` once a package runtime exists); any other webview
+gets `forbidden`, whatever its capability says.
+
 | Command | Arguments | Returns | Errors | Behaviour |
 |---|---|---|---|---|
 | `ipc_subscribe` | `{ onMessage: Channel<HostMessage[]> }` | `{ epoch: string }` | none | As in A.2.1; also flushes messages buffered for this window (C.5). Once per document load. |
 | `ipc_invoke` | `{ channel: string; args: OtjValue[]; epoch: string; seq: number }` | `{ id: number }` | `ipc-serialization`, `ipc-overloaded`, `not-ready` (stale `epoch`) | section C.2. Resolves as soon as the request is accepted; the result arrives later as an `ipc-result` host message. |
 | `ipc_send` | `{ channel: string; args: OtjValue[]; epoch: string; seq: number }` | `void` | `ipc-serialization`, `ipc-overloaded`, `not-ready` (stale `epoch`) | section C.3 |
-| `ipc_skip` | `{ epoch: string; seq: number }` | `void` | none | The runtime reports that the call carrying `seq` was rejected before it reached the plugin (C.3), so the reorder buffer does not wait for it. |
+| `ipc_skip` | `{ epoch: string; seq: number }` | `void` | none | The runtime reports that the call carrying `seq` was rejected, by Tauri before the command ran or by the plugin (C.3), so the reorder buffer does not wait for it. Numbers already used or skipped, and stale epochs, are ignored. |
 | `eval_result` | `{ id: number; ok: boolean; value?: OtjValue; error?: IpcErrorWire }` | `void` | `not-found` | Result of a `window_eval` with `wantResult` targeted at the calling window. |
+| `navigation_external` | `{ url: string }` | `void` | `invalid-argument` (the `shell_open_external` checks, or a URL on the app origin) | macOS and Linux: a top-level navigation the renderer bootstrap cancelled (A.2.3.1). Rust opens the URL in the system browser and sends `will-navigate { url }` for the calling window to `ow-main`, as the Windows navigation hook does. |
 | `adview_mount` | `AdviewMount` | `{ guestLabel: string }` | `invalid-argument`, `io` | Creates the guest for one `<owadview>` (B.3, D). Never waits for consent; the guest's first navigation is sequenced by D.6.5. Counts InsertStats Kind 400025 (E.2). |
 | `adview_update` | `{ elementId: string; rect?: AdviewRect; visible?: boolean; attributes?: Partial<AdviewAttributes> }` | `void` | `not-found` | Moves, resizes, shows or hides the guest; attribute changes per B.3.4. |
 | `adview_unmount` | `{ elementId: string }` | `void` | none (idempotent) | Closes the guest. |
@@ -601,29 +663,50 @@ is always an array, `HostMessage[]`, processed in order.
 | `ipc` | a `bw-*` webview | `{ kind: 'message', channel, args }` | `webContents.send` (C.5) |
 | `ipc-result` | a `bw-*` webview | `{ id: number, ok: boolean, value?: OtjValue, error?: IpcErrorWire }` | the reply to that webview's `ipc_invoke` `id` (C.2) |
 | `state` | `ow-main` | `{ seq: number, patches: { path: string, value: unknown }[] }` | sync-cache update (B.1.6) |
-| `window` | `ow-main` | `{ id: number, event: WindowEventName, requestId?: number, data?: unknown }` | window lifecycle (B.2); `close` carries `requestId` and waits for `window_close_reply` (5 s, then closes) |
+| `window` | `ow-main` | `{ id: number, event: WindowEventName, requestId?: number, data?: unknown }` | window lifecycle (B.2); `close` carries `requestId` and waits for `window_close_reply` (5 s, then closes). `id` is the plugin's window id. `data` per event below |
 | `lifecycle` | `ow-main` | `{ event: 'before-quit' \| 'will-quit', requestId: number }` or `{ event: 'quit', exitCode: number }` | the quit sequence (A.6) |
-| `packages` | `ow-main` | `{ type: 'loading' \| 'ready' \| 'failed-to-initialize' \| 'crashed' \| 'package-update-pending' \| 'updated', ... }` | reserved: never sent while no package runtime exists (H). The package messages of the deferred design are in Appendix P.7 |
+| `lifecycle` | `ow-main` | `{ event: 'second-instance', argv: string[], cwd: string, additionalData?: unknown }` | `Overwolf::emit_second_instance` (A.5); `additionalData` is absent today (the single-instance plugin carries none) |
+| `lifecycle` | `ow-main` | `{ event: 'activate', hasVisibleWindows: boolean }` | macOS: the dock icon was clicked (`RunEvent::Reopen`) |
+| `packages` | `ow-main` | `{ event: 'loading' \| 'ready' \| 'failed-to-initialize' \| 'crashed' \| 'package-update-pending' \| 'updated', ... }` | reserved: never sent while no package runtime exists (H). The package messages of the deferred design are in Appendix P.7 |
 | `adview-event` | the embedder webview | `{ elementId: string, name: string, data?: unknown, source: 'guest' \| 'host' }` | B.3.5 |
-| `updater` | `ow-main` | `{ type: 'checking-for-update' \| 'update-available' \| 'update-not-available' \| 'download-progress' \| 'update-downloaded' \| 'error', info?, progress?, error? }` | I.3 |
+| `updater` | `ow-main` | `{ event: 'checking-for-update' \| 'update-available' \| 'update-not-available' \| 'download-progress' \| 'update-downloaded' \| 'error', info?, progress?, error? }` | I.3 |
 | `global-shortcut` | `ow-main` | `{ id: number, accelerator: string, state: 'pressed' \| 'released' }` | registered accelerator |
 
+`type` is the message tag, so the `packages` and `updater` messages carry
+their own kind in `event`.
+
 Messages for a webview that has not subscribed yet are buffered (C.4, C.5).
-When a webview is destroyed (`WebviewEvent::Destroyed` or its window's
-`WindowEvent::Destroyed`), Rust drops its channel, its buffers, its reorder
+When a webview is gone, Rust drops its channel, its buffers, its reorder
 state, its pending invokes (rejected with `not-ready`) and every ad guest it
-embeds.
+embeds. Tauri has no event for a webview destroyed on its own, so this
+cleanup runs from the plugin's own close paths (a window switching to a
+remote page, a soft restart, a guest unmount) and from the window's
+`WindowEvent::Destroyed`.
 
 `IpcSender` is `{ windowId: number, label: string, url: string, frameId: 0 }`.
 `WindowEventName` is one of `created`, `close`, `closed`, `focus`, `blur`,
 `show`, `hide`, `minimize`, `maximize`, `unmaximize`, `restore`, `resize`,
 `move`, `enter-full-screen`, `leave-full-screen`, `ready-to-show`,
-`did-finish-load`, `dom-ready`, `did-fail-load`, `render-process-gone`.
-`created` is reserved for windows the JS side did not create itself (overlay
-windows made by a package runtime, Appendix P.1); it is not sent today. Tauri has no minimize event: Rust derives
-`minimize` and `restore` from `WindowEvent::Resized` plus `is_minimized()`,
-with a 2 s poll of `is_minimized()` as a fallback for platforms that do not
-report a resize on minimize.
+`did-finish-load`, `dom-ready`, `did-fail-load`, `render-process-gone`,
+`will-navigate`, `new-window`.
+
+| Event | `data` |
+|---|---|
+| `resize`, `move` | `{ bounds: { x, y, width, height } }`, outer bounds in logical pixels |
+| `created` | `{ options }` (the window's constructor options). Reserved for windows the JS side did not create itself (overlay windows made by a package runtime, Appendix P.1); not sent today |
+| `did-finish-load` | `{ url }` |
+| `did-fail-load` | `{ errorCode, errorDescription, validatedURL }` |
+| `render-process-gone` | `{ exitCode }` |
+| `will-navigate` | `{ url }`: a top-level navigation the A.2.3.1 policy cancelled |
+| `new-window` | `{ url, frameName?, features?, disposition? }`: a `window.open` / `target="_blank"` request, always denied natively (A.2.3.1). Rust sends `url` only today; the main runtime uses `''`, `''` and `'new-window'` for the others |
+| others | none |
+
+Tauri has no minimize event: Rust derives `minimize` and `restore` from
+`WindowEvent::Resized` plus `is_minimized()`, with a 2 s poll of
+`is_minimized()` as a fallback for platforms that do not report a resize on
+minimize. Tauri has no visibility event either, so Rust sends no `show` or
+`hide`; the `BrowserWindow` facade emits them itself (B.2.2). `ready-to-show`
+follows the first `did-finish-load` of a window.
 
 ### A.4 Errors
 
@@ -682,7 +765,7 @@ fn main() {
 | `Builder::host_label` | `(self, impl Into<String>, Option<String>) -> Self` | `analytics.hostLabel` and `analytics.hostVersion` (section 0) |
 | `Builder::test_ad` | `(self, bool) -> Self` | |
 | `Builder::analytics_transport` | `(self, Arc<dyn Transport>) -> Self` | tests: capture requests instead of sending |
-| `Builder::build` | `<R: Runtime>(self) -> TauriPlugin<R, Config>` | |
+| `Builder::build` | `<R: Runtime>(self) -> TauriPlugin<R, Option<Config>>` | `Option`, because Tauri passes a missing `plugins.overwolf` as `null` (A.1) |
 | `OverwolfExt::overwolf` | `(&self) -> &Overwolf<R>` | on `App`, `AppHandle`, `Window`, `Webview`, `WebviewWindow` |
 | `Overwolf::uid`, `cuid`, `muid`, `muid_v2`, `phase_percent`, `utm_params` | getters | |
 | `Overwolf::disable_anonymous_analytics`, `disable_ads_optimization`, `disable_ads_fpd` | `(&self)` | same semantics as A.2.2 |
@@ -693,17 +776,35 @@ fn main() {
 | `Overwolf::packages` | `(&self) -> &Packages<R>` | `snapshot`, `set_channel`, `get_available_channels`, `get_channel`, `relaunch`, with the results of H.1 |
 | `Overwolf::updater` | `(&self) -> &Updater<R>` | `configure`, `check`, `download`, `quit_and_install` |
 | `Overwolf::emit_second_instance` | `(&self, argv: Vec<String>, cwd: String)` | call from the app's `tauri-plugin-single-instance` callback; fires `app.on('second-instance')` in `ow-main` (B.2.1) |
+| `Overwolf::report_main_webview_crash` | `(&self)` | macOS: call from `tauri::Builder::on_web_content_process_terminate` for the webview labelled `ow-main`; Tauri offers that hook only on the app's builder (A.6) |
+| `Flags`, `LogLevel` | types at the crate root | the session switches (`HostSnapshot.flags`) and the `log` levels |
 | `build::embed_manifest` | `(path: impl AsRef<Path>) -> Result<(), BuildError>` | in the app's `build.rs` (G.3) |
 
+Internal modules are hidden from the rustdoc output and are not part of the
+stable API. The `test-util` feature adds hooks for tests on Tauri's mock
+runtime: `Builder::skip_os_queries` and hidden `Overwolf::test_*` methods
+that drive the window, navigation, page-load and exit-request handlers the
+mock runtime never fires. They are not a stable API either.
+
 `tauri-plugin-single-instance` must be the first plugin an app registers, so
-the app registers it, not ow-tauri:
+the app registers it, not ow-tauri. The order also matters for
+`app.relaunch()`: Tauri delivers `RunEvent::Exit` to plugins in registration
+order, so the single-instance lock is released before ow-tauri starts the new
+process (A.6). On macOS the app also forwards web-content process
+terminations of `ow-main`:
 
 ```rust
-tauri::Builder::default()
+let builder = tauri::Builder::default()
     .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
         app.overwolf().emit_second_instance(argv, cwd);
     }))
-    .plugin(tauri_plugin_overwolf::Builder::new() /* ... */ .build())
+    .plugin(tauri_plugin_overwolf::Builder::new() /* ... */ .build());
+#[cfg(target_os = "macos")]
+let builder = builder.on_web_content_process_terminate(|webview| {
+    if webview.label() == "ow-main" {
+        webview.overwolf().report_main_webview_crash();
+    }
+});
 ```
 
 ### A.6 Main webview liveness and lifecycle
@@ -719,7 +820,7 @@ Tauri's `background_throttling` setting works only on macOS 14 and newer.
 |---|---|
 | Windows (WebView2) | the shared browser arguments of A.1.1 (`--disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows`) |
 | macOS 14+ | `ow-main` is created hidden with `BackgroundThrottlingPolicy::Disabled` |
-| macOS 12 and 13, Linux | `ow-main` is a *technically visible* window: 1 x 1 logical pixel, fully transparent, ignores the cursor, skips the taskbar and window switcher, never focused, placed at the origin of the primary display (Wayland ignores positions; the window is still 1 x 1 and transparent) |
+| macOS 12 and 13, Linux | `ow-main` is a *technically visible* window: 1 x 1 logical pixel, fully transparent, ignores the cursor, skips the taskbar and window switcher, never focused, placed at the origin of the primary display (Wayland ignores positions; the window is still 1 x 1 and transparent). On macOS a transparent window needs Tauri's private-API switch (`app.macOSPrivateApi: true` and the `macos-private-api` feature); without it the 1 x 1 window is opaque (a known gap; timers still run) |
 
 The requirement is measurable: over a 10-minute run with every app window
 hidden or minimized, a 1 s `setInterval` in `ow-main` fires with a median
@@ -727,22 +828,40 @@ period under 1.5 s. The scheduled CI soak job checks it on all three
 platforms (`tests/liveness_soak.rs`, test ads only).
 
 **Navigation and reloads.** After its first load, `ow-main` may navigate only
-in debug builds. A reload in a debug build (manual or a dev-server hot
-reload) is a *soft restart*: Rust closes every `bw-*`, `bwr-*`, guest and
-consent window, rejects pending invokes with `not-ready`, clears the IPC,
-package-callback and handle registries, and lets the reloaded page run the
-app's main code again from a fresh snapshot. Package runtimes keep running;
-their state is replayed through the snapshot. In release builds every
-navigation of `ow-main` is cancelled.
+in debug builds, and only a navigation to its current document URL counts as
+a reload. A reload in a debug build (manual or a dev-server hot reload) is a
+*soft restart*: Rust closes every `bw-*`, `bwr-*`, guest and consent window,
+rejects pending invokes with `not-ready`, clears the IPC, package-callback
+and handle registries, and lets the reloaded page run the app's main code
+again from a fresh snapshot. Package runtimes keep running; their state is
+replayed through the snapshot. In release builds every top-level
+navigation of `ow-main` is cancelled. Where the engine reports frame navigations to the
+same hook (macOS, Linux; A.2.3.1), same-origin and in-page (`about:`,
+`blob:`, `data:`) frames inside `ow-main` are allowed; every other target is
+cancelled and logged.
 
-**Crashes.** When the `ow-main` render process dies (`render-process-gone`,
-WebView2 `ProcessFailed`, WKWebView web-content termination, WebKitGTK
-`web-process-terminated`), Rust logs it, drains analytics for at most 1.5 s
-and relaunches the app with its original arguments. If `ow-main` crashes
-`main.crashRestartLimit` times within 60 s, the app exits with code 1 instead
-and the log names the cause. There is no in-place rehydration: the JS-side
-registries (windows, `ipcMain` handlers, hotkeys, package listeners) cannot be
-rebuilt without the app's own code.
+**Crashes.** When the `ow-main` render process dies, Rust logs it, drains
+analytics for at most 1.5 s and relaunches the app with its original
+arguments. If `ow-main` crashes `main.crashRestartLimit` times within 60 s,
+the app exits with code 1 instead and the log names the cause. The crash
+times are kept in `ow-tauri.json` (`mainCrashes`, F.3), so the limit holds
+across the relaunches. A second report of the same crash is ignored. There
+is no in-place rehydration: the JS-side registries (windows, `ipcMain`
+handlers, hotkeys, package listeners) cannot be rebuilt without the app's
+own code.
+
+| Platform | Crash signal |
+|---|---|
+| Windows | WebView2 `ProcessFailed` on the `ow-main` webview |
+| macOS | WKWebView web-content termination; Tauri exposes it only on the app's builder, so the app forwards it to `Overwolf::report_main_webview_crash` (A.5) |
+| Linux | WebKitGTK `web-process-terminated` |
+| all | the `ow-main` window's `WindowEvent::Destroyed` while the app is not exiting |
+
+**Relaunch.** A relaunch, from `app.relaunch()` or a crash, starts the new
+process at `RunEvent::Exit`, after the plugins registered before ow-tauri
+have handled that event. `tauri-plugin-single-instance` is registered first
+(A.5), so its lock is already released and the new process is not turned
+away as a second instance.
 
 **Quitting.** Every exit path runs the same sequence: `app.quit()`, the last
 window closing with no `window-all-closed` listener, an OS request
@@ -763,6 +882,14 @@ window closing with no `window-all-closed` listener, an OS request
 A step that gets no answer within 5 s proceeds as if not prevented. `app.exit()`
 skips steps 1 to 4, as in Electron.
 
+Two cases differ:
+
+- With no main webview (it is disabled or gone), an exit request skips
+  steps 1 to 4 and goes straight to step 5 with code 0: nobody could answer
+  `before-quit`.
+- During a soft restart (debug builds), the request is held and the quit
+  sequence runs once the new `ow-main` document has loaded.
+
 ---
 
 ## B. JavaScript API
@@ -778,19 +905,43 @@ the `electron` module and the global namespaces resolve is in B.4.
 The plugin injects the runtime itself as an initialization script into
 `ow-main` and every `bw-*` webview: the *bootstrap*, built from
 `packages/ow-tauri/src/bootstrap/` and embedded in the crate. It installs
-`globalThis.__OW_TAURI_RUNTIME__`, a non-writable, non-configurable object
-`{ version, contract, ... }`, before any page script runs. The npm entry
-points that an app bundles (`ow-tauri/main`, `/electron`, `/renderer`) are thin
-facades: on first use they attach to that object and throw
-`OwTauriError('not-ready')` with "ow-tauri runtime <a> does not match package
-<b>" when its `contract` differs from their own. So there is exactly one
-`ipcRenderer`, one IPC sequence counter, one listener registry and one
-`<owadview>` observer per webview, however many bundles import the package.
-Errors are branded with `Symbol.for('ow-tauri.error.brands')`, so `instanceof
-OwTauriError` holds across copies.
+`globalThis.__OW_TAURI_RUNTIME__` before any page script runs:
+
+```ts
+interface RuntimeGlobal {              // frozen; the global is non-writable, non-configurable
+  readonly version: string;            // package version of the injected runtime
+  readonly contract: number;           // this document's contract version
+  readonly api: number;                // facade API version (FacadeKernel, below)
+  readonly context: 'main' | 'ui' | 'none';
+  evalBegin(id: number, fn: () => unknown): void;     // window_eval, expression form (A.2.3)
+  evalFallback(id: number, fn: () => unknown): void;  // window_eval, statement form
+}
+```
+
+The npm entry points that an app bundles (`ow-tauri/main`, `/electron`,
+`/renderer`, `/testing`) are thin facades. On first use they attach to the
+runtime's kernel through a documented interface, `FacadeKernel`
+(`packages/ow-tauri/src/bootstrap/facade-kernel.ts`), and are typed against
+that interface only. The bootstrap ships with the crate and the facades with
+npm, so the interface is versioned separately from the contract: adding an
+optional member keeps `api`; removing or changing a member, or its
+behaviour, increments it. A facade attaches only when **both** `contract`
+and `api` equal its own; otherwise every member throws
+`OwTauriError('not-ready')` with "ow-tauri runtime <version> (contract <c>,
+api <a>) does not match package <version> (contract <c>, api <a>)". When no
+runtime is installed at all (a page outside Tauri, a unit test, a dev page
+opened in a browser), the facade installs one itself.
+
+So there is exactly one `ipcRenderer`, one IPC sequence counter, one listener
+registry and one `<owadview>` observer per webview, however many bundles
+import the package. Errors are branded with
+`Symbol.for('ow-tauri.error.brands')`, so `instanceof OwTauriError` holds
+across copies.
 
 **Context check.** Each entry point decides where it runs with an injectable
-host detector (`__OW_TAURI_RUNTIME__.context`: `'main' | 'ui' | 'none'`).
+host detector (`__OW_TAURI_RUNTIME__.context`: `'main' | 'ui' | 'none'`),
+derived from the webview label: `ow-main` is `main`, `bw-*` is `ui`,
+anything else (or no Tauri) is `none`.
 Members that are wrong for the context throw `OwTauriError('forbidden')` when
 used, not at import, so unit tests can import every module; tests replace the
 detector through the `ow-tauri/testing` entry point (`setHostContext()`),
@@ -808,7 +959,7 @@ Exports:
 | `overwolf` | `overwolf.OverwolfApi` | the `app.overwolf` object; `ow-tauri/electron`'s `app.overwolf` is the same instance |
 | `autoUpdater` | `AppUpdater` subset | electron-updater compatible (I.5) |
 | `files` | `{ readText, writeText, exists, mkdir }` | scoped file access replacing Node `fs` in main-process code (A.2.3) |
-| `whenHostReady()` | `() => Promise<void>` | resolves after `ipc_main_ready` and `main_ready` were acknowledged |
+| `whenHostReady()` | `() => Promise<void>` | resolves after `ipc_main_ready` and `main_ready` were sent and settled; it also resolves when an acknowledgement fails, and the failure is logged, so app start-up never hangs on it |
 | `RecorderError` | class | runtime class for `instanceof RecorderError` checks (B.1.5); never raised while no package runtime exists |
 | `UpdateCheckResult`, `UpdateInfo`, `ProgressInfo`, `UpdaterConfig` | types | for `autoUpdater` code (I.5) |
 
@@ -960,17 +1111,18 @@ reading a property returns `undefined` and logs a warning once.
 | `whenReady()`, `isReady()`, `on('ready')` | S | ready after `main_ready` |
 | `on/once('window-all-closed')` | S | when the last UI window closes; with no listener the app quits (Electron default; the sample keeps macOS alive itself) |
 | `on('before-quit' \| 'will-quit' \| 'quit')` | S | the A.6 quit sequence; `before-quit` and `will-quit` support `preventDefault()` (answered within 5 s) |
-| `on('activate' \| 'browser-window-created' \| 'browser-window-focus' \| 'browser-window-blur')` | S | `activate` on macOS dock click |
-| `on('second-instance')`, `requestSingleInstanceLock()`, `hasSingleInstanceLock()`, `releaseSingleInstanceLock()` | P | lock always granted in JS; real single-instance behaviour comes from `tauri-plugin-single-instance`, registered by the app, whose callback calls `emit_second_instance` (A.5) |
-| `quit()`, `exit(code?)`, `relaunch(options?)`, `focus(options?)` | S | `relaunch({ execPath })` is U |
+| `on('activate' \| 'browser-window-created' \| 'browser-window-focus' \| 'browser-window-blur')` | S | `activate` on macOS dock click, with `(event, hasVisibleWindows)` |
+| `on('second-instance')`, `requestSingleInstanceLock()`, `hasSingleInstanceLock()`, `releaseSingleInstanceLock()` | P | lock always granted in JS; real single-instance behaviour comes from `tauri-plugin-single-instance`, registered by the app, whose callback calls `emit_second_instance` (A.5). Listeners get `(event, argv, workingDirectory, additionalData)`; `additionalData` is `undefined`, and the argument given to `requestSingleInstanceLock` is ignored |
+| `quit()`, `exit(code?)`, `relaunch(options?)` | S | `relaunch({ execPath })` is U |
+| `focus(options?)` | P | `{ steal }` is ignored (A.2.1 `app_focus`) |
 | `getAppPath()` | S | virtual app root; `getAppPath() + '/package.json'` is readable through `files` |
 | `getPath(name)` | S | `appData`, `userData`, `sessionData`, `temp`, `home`, `desktop`, `documents`, `downloads`, `music`, `pictures`, `videos`, `logs`, `exe`, `crashDumps`; `userData` is `<appData>/<PN>` like Electron and ow-electron (F.1), so migrated prefs files are found; `module` and `recent` are U |
 | `setPath(name, path)` | P | affects only ow-tauri lookups (`userData`, `logs`) |
 | `getName()`, `name`, `getVersion()`, `isPackaged`, `getLocale()`, `getSystemLocale()` | S | from the manifest and the OS |
 | `setName(name)` | P | changes `app.name` for the session only; never changes the uid |
-| `commandLine.hasSwitch()`, `getSwitchValue()` | S | process arguments |
-| `commandLine.appendSwitch()`, `appendArgument()` | P | recorded; `--disable-gpu` and `--remote-debugging-port` take effect from the next launch (A.1.1), because `ow-main` already exists when app code runs; other switches are ignored with a warning. For the current launch use `plugins.overwolf.webview` |
-| `disableHardwareAcceleration()` | P | Windows: `--disable-gpu` from the next launch (A.1.1); set `webview.disableGpu` for the first launch; other platforms no-op with a warning |
+| `commandLine.hasSwitch()`, `getSwitchValue()` | S | the process arguments plus the switches appended in this session, read as Chromium does: reading stops at a bare `--`, the last occurrence wins, and only `--name=value` carries a value (`--name value` gives `''`) |
+| `commandLine.appendSwitch()`, `appendArgument()`, `removeSwitch()` | P | recorded, so `hasSwitch()` sees them; `--disable-gpu` and `--remote-debugging-port` take effect from the next launch (A.1.1), because `ow-main` already exists when app code runs; other switches are ignored with a warning. The recorded set reaches Rust with `main_ready` and, on every change, with `app_record_browser_args` (A.2.1). For the current launch use `plugins.overwolf.webview` |
+| `disableHardwareAcceleration()` | P | records `--disable-gpu` as above. Windows: applies from the next launch (A.1.1); set `webview.disableGpu` for the first launch; other platforms no-op with a warning |
 | `setAppUserModelId(id)` | P | no-op; Tauri sets the AUMID from the bundle identifier |
 | `getGPUInfo`, `getAppMetrics`, `setLoginItemSettings`, `getLoginItemSettings`, `dock`, `setBadgeCount`, `setJumpList`, `setUserTasks`, `showAboutPanel`, `setAsDefaultProtocolClient`, `importCertificate`, `moveToApplicationsFolder` | U | |
 
@@ -980,7 +1132,8 @@ Constructor options:
 
 | Option | Status | Notes |
 |---|---|---|
-| `width`, `height`, `x`, `y`, `center`, `minWidth`, `minHeight`, `maxWidth`, `maxHeight`, `useContentSize` | S | logical pixels |
+| `width`, `height`, `x`, `y`, `center`, `minWidth`, `minHeight`, `maxWidth`, `maxHeight` | S | logical pixels |
+| `useContentSize` | P | ignored: sizes are always the window's inner size |
 | `show`, `title` (default `<PN>`; also the `title` field of `<label>_window_closed`, E.2), `resizable`, `movable`, `minimizable`, `maximizable`, `closable`, `focusable`, `alwaysOnTop`, `fullscreen`, `skipTaskbar`, `transparent`, `backgroundColor`, `parent` | S | |
 | `frame` | P | `false` = no decorations; on macOS mapped to an overlay title bar with a hidden title so native dragging works (ARCHITECTURE section 6) |
 | `fullscreenable` | P | `false` is honoured by the facade (ignores `setFullScreen(true)`); no native flag |
@@ -997,21 +1150,36 @@ Constructor options:
 Static members: `getAllWindows()`, `getFocusedWindow()`, `fromId(id)`,
 `fromWebContents(wc)` are S (from the JS registry).
 
+**Window ids.** Electron's `BrowserWindow.id` exists as soon as the
+constructor returns, but `window_create` is asynchronous. The main runtime
+therefore allocates the app-visible id itself, at construction, and maps it
+to the plugin's id once `window_create` returns. Every id that crosses the
+wire (`ipc_emit` targets, `IpcSender.windowId`, `window` messages,
+`parentId`) is translated, so app code only ever sees app-visible ids;
+`window` messages for a plugin id are held while a create is pending.
+Calls made before the native window exists are queued and run in order.
+If `window_create` fails, the error is logged, the window leaves the
+registry, its pending loads reject and `whenCreated()` rejects; no `closed`, `window-all-closed` or
+quit follows (Electron would have thrown from the constructor).
+
 Instance members:
 
 | Member | Status | Notes |
 |---|---|---|
 | `id`, `webContents`, `isDestroyed()` | S | |
-| `loadURL(url)`, `loadFile(path, { query, hash })` | S | returns a promise that resolves on `did-finish-load`; a remote URL switches the window to class `remote`: its content becomes a fresh `bwr-<id>` webview with no IPC, no preload and no init scripts (A.2.3.1) |
-| `show()`, `hide()`, `close()`, `destroy()`, `focus()`, `blur()`, `isVisible()`, `isFocused()` | S | |
+| `whenCreated()` | ow-tauri addition | `Promise<void>` that resolves once the native window exists and rejects when creation failed |
+| `loadURL(url)`, `loadFile(path, { query, hash })` | S | returns a promise that resolves on `did-finish-load`; a remote URL switches the window to class `remote`: its content becomes a fresh `bwr-<id>` webview with no IPC, no preload and no init scripts (A.2.3.1). The facade calls a URL remote when it is `http(s)` and its origin differs from the main webview's `location.origin` (the app origin), the same test Rust applies |
+| `show()`, `hide()`, `close()`, `destroy()`, `focus()`, `isVisible()`, `isFocused()` | S | Tauri reports no visibility change, so the facade emits `show` / `hide` itself when a call changes the cached visibility, after the native call (A.3) |
+| `blur()` | P | Tauri has no command for it; only the cached state changes (`isFocused()` returns `false`) |
 | `showInactive()` | P | shows without requesting focus; some platforms still activate the window |
 | `minimize()`, `maximize()`, `unmaximize()`, `restore()`, `isMinimized()`, `isMaximized()`, `setFullScreen()`, `isFullScreen()` | S | state reads use the cache, refreshed on every window event |
 | `setBounds()`, `getBounds()`, `getContentBounds()`, `setSize()`, `getSize()`, `setPosition()`, `getPosition()`, `setMinimumSize()`, `setMaximumSize()`, `center()` | S | getters are synchronous from the cache |
-| `setResizable()`, `setMovable()`, `setAlwaysOnTop()`, `setSkipTaskbar()`, `setFocusable()`, `setIgnoreMouseEvents(ignore, { forward })`, `setTitle()`, `getTitle()`, `setBackgroundColor()`, `setProgressBar()`, `flashFrame()`, `setVisibleOnAllWorkspaces()`, `setContentProtection()` | S | `forward` is ignored |
+| `setMovable()` | P | Tauri has no command for it; the flag is cached (`isMovable()`) and applied only through the constructor's `movable` option |
+| `setResizable()`, `setAlwaysOnTop()`, `setSkipTaskbar()`, `setFocusable()`, `setIgnoreMouseEvents(ignore, { forward })`, `setTitle()`, `getTitle()`, `setBackgroundColor()`, `setProgressBar()`, `flashFrame()`, `setVisibleOnAllWorkspaces()`, `setContentProtection()` | S | `forward` is ignored |
 | `moveTop()` | P | brings the window to the front by toggling always-on-top |
 | `setMenu()`, `removeMenu()`, `setMenuBarVisibility()`, `setAutoHideMenuBar()` | P | no-op (Tauri windows have no menu unless the app adds one in Rust) |
 | `setOpacity()`, `setVibrancy()`, `setShape()`, `capturePage()`, `setThumbarButtons()`, `setOverlayIcon()`, `previewFile()`, `setBrowserView()`, `addBrowserView()`, `setTouchBar()` | U | |
-| events `close` (preventable), `closed`, `focus`, `blur`, `show`, `hide`, `ready-to-show`, `minimize`, `maximize`, `unmaximize`, `restore`, `resize`, `move`, `enter-full-screen`, `leave-full-screen` | S | from `window` host messages |
+| events `close` (preventable), `closed`, `focus`, `blur`, `show`, `hide`, `ready-to-show`, `minimize`, `maximize`, `unmaximize`, `restore`, `resize`, `move`, `enter-full-screen`, `leave-full-screen` | S | from `window` host messages; `show` and `hide` from the facade's own calls (above) |
 
 `webContents` (per window):
 
@@ -1026,8 +1194,8 @@ Instance members:
 | `on('did-finish-load' \| 'dom-ready')` | S | |
 | `on('did-fail-load')` | P | Windows only (WebView2 navigation status) |
 | `on('render-process-gone')` | P | reason is always `'crashed'` |
-| `setWindowOpenHandler(handler)` | P | the handler is called; `{ action: 'allow' }` is treated as deny + open in the system browser (`http`, `https` only) |
-| `on('will-navigate')` | P | emitted for top-level navigations the A.2.3.1 policy cancels; `preventDefault()` has no further effect |
+| `setWindowOpenHandler(handler)` | P | the handler is called with `{ url, frameName, features, disposition }` from the `new-window` message (A.3); `{ action: 'allow' }` is treated as deny + open in the system browser (`http`, `https` only) |
+| `on('will-navigate')` | P | emitted for top-level navigations the A.2.3.1 policy cancels (Windows: the navigation hook; macOS and Linux: link clicks and form submissions the bootstrap intercepts); the navigation has already been cancelled and the URL opened in the system browser, so `preventDefault()` has no further effect |
 | `session`, `debugger`, `print()`, `printToPDF()`, `capturePage()`, `setAudioMuted()`, `startDrag()`, `insertCSS()`, `savePage()`, `sendInputEvent()`, `postMessage()` | U | |
 
 #### B.2.3 `ipcMain` (main) and `ipcRenderer` (preload and renderer)
@@ -1056,7 +1224,7 @@ Instance members:
 | Member | Status | Notes |
 |---|---|---|
 | `screen.getAllDisplays()`, `getPrimaryDisplay()`, `getDisplayNearestPoint()`, `getDisplayMatching()` | S | synchronous from the cache; `id` is a stable 32-bit hash of the monitor's OS name and position; `bounds`, `workArea` in DIP; `scaleFactor`; `label` is the OS monitor name |
-| `screen.getCursorScreenPoint()` | P | cached, refreshed at most every 100 ms |
+| `screen.getCursorScreenPoint()` | P | cached, refreshed at most every 100 ms; the first call returns the snapshot's `cursor` (`(0, 0)` when absent) and starts a refresh |
 | `screen.on('display-added' \| 'display-removed' \| 'display-metrics-changed')` | P | detected by a 2 s poll |
 | `screen.dipToScreenPoint()`, `screenToDipPoint()`, `dipToScreenRect()`, `screenToDipRect()` | P | computed from the cached display list |
 | `shell.openExternal(url)` | S | `http`, `https`, `mailto` only |
@@ -1065,12 +1233,12 @@ Instance members:
 | `dialog.showOpenDialog`, `showSaveDialog`, `showMessageBox`, `showErrorBox` | S / S / P / S | `showMessageBox`: up to three buttons |
 | `dialog.showOpenDialogSync`, `showSaveDialogSync`, `showMessageBoxSync`, `showCertificateTrustDialog` | U | |
 | `globalShortcut.register(accelerator, cb)` | P | returns `true` synchronously; a later registration failure is logged and `isRegistered` turns false |
-| `globalShortcut.unregister`, `unregisterAll`, `isRegistered`, `registerAll` | S | |
+| `globalShortcut.unregister`, `unregisterAll`, `isRegistered`, `registerAll` | S | an accelerator matches by the keys it names, not by spelling (A.2.3 `global_shortcut_unregister`) |
 | `crashReporter.start(options)` | P | no-op with a warning; use a Rust crash handler (see PORT-MAP) |
 | `crashReporter.*` (other members) | U | |
-| `nativeTheme.shouldUseDarkColors`, `on('updated')` | P | cached from the main window's theme |
+| `nativeTheme.shouldUseDarkColors`, `on('updated')` | P | follows the webview's `prefers-color-scheme` media query, which the webview takes from the OS or window theme; `updated` fires when it changes. Setting `themeSource` changes only what the object reports, not the windows |
 | `Menu`, `MenuItem`, `Tray`, `Notification`, `session`, `protocol`, `net`, `netLog`, `powerMonitor`, `powerSaveBlocker`, `autoUpdater` (Electron's), `clipboard`, `nativeImage`, `systemPreferences`, `desktopCapturer`, `webFrame`, `webFrameMain`, `utilityProcess`, `MessageChannelMain`, `BrowserView`, `WebContentsView`, `BaseWindow`, `TouchBar`, `inAppPurchase`, `pushNotifications`, `safeStorage`, `contentTracing` | U | module objects exist so imports compile; every member throws |
-| `process.platform`, `process.arch`, `process.argv`, `process.env`, `process.versions` | P | the bootstrap installs a frozen `globalThis.process` shim in `ow-main` and every `bw-*` webview before any app script runs, so code that uses the global `process` without importing it works (the sample's `index.ts` and preload); `ow-tauri/electron` also exports it. `platform` and `arch` Node-style (`win32`, `darwin`, `linux`; `x64`, `arm64`), `argv` the process arguments, `versions` has `owTauri`, `tauri`, `chrome` (WebView2 only) and no `electron`. `env` holds only `OVERWOLF_APP_UID`, set before any app script runs, as ow-electron sets it before the main module loads (B.1.1); `process.env.NODE_ENV` is a build-time constant the bundler defines (webpack 5 does it from `mode`; other bundlers: define it explicitly, see MIGRATION.md) |
+| `process.platform`, `process.arch`, `process.argv`, `process.env`, `process.versions` | P | the bootstrap installs a `globalThis.process` shim in `ow-main` and every `bw-*` webview before any app script runs (unless the document already has a `process`, from a bundler polyfill), so code that uses the global `process` without importing it works (the sample's `index.ts` and preload); `ow-tauri/electron` also exports it. `platform` and `arch` Node-style (`win32`, `darwin`, `linux`; `x64`, `arm64`), `argv` the process arguments, `versions` has `owTauri`, `tauri`, `chrome` (WebView2 only) and no `electron`. The shim object is frozen, but `env` is an ordinary object that libraries may assign to; it starts with only `OVERWOLF_APP_UID`, a read-only value set before any app script runs, as ow-electron sets it before the main module loads (B.1.1). Electron's `process.type` is `'browser'` in `ow-main` and `'renderer'` in UI windows, and `process.nextTick(cb, ...args)` runs `cb` as a microtask; `process.env.NODE_ENV` is a build-time constant the bundler defines (webpack 5 does it from `mode`; other bundlers: define it explicitly, see MIGRATION.md) |
 
 ### B.3 `ow-tauri/renderer`
 
@@ -1351,7 +1519,7 @@ send to, or listen to, another webview directly.
 
 Protocol commands: `ipc_subscribe`, `ipc_invoke`, `ipc_send`, `ipc_skip`
 (`overwolf:renderer`, A.2.5) and `ipc_subscribe`, `ipc_main_ready`,
-`ipc_reply`, `ipc_emit` (`overwolf:main`, A.2.1). `IpcErrorWire` is the
+`ipc_reply`, `ipc_emit`, `ipc_emit_skip` (`overwolf:main`, A.2.1). `IpcErrorWire` is the
 `OverwolfErrorWire` shape of A.4.
 
 ### C.2 `invoke`
@@ -1362,7 +1530,9 @@ Protocol commands: `ipc_subscribe`, `ipc_invoke`, `ipc_send`, `ipc_skip`
 2. Rust checks the caller class (`ui` or `overlay`), the epoch, the encoded
    size (`ipc.maxMessageBytes`), the sender's in-flight count
    (`ipc.maxInFlightInvokes`, else `ipc-overloaded`) and that `channel` is a
-   non-empty string of at most 256 UTF-16 code units. It allocates a request
+   non-empty string of at most 256 UTF-16 code units, and that `seq` is
+   neither used already (`invalid-argument`) nor too far ahead of the
+   sender's order (`ipc-overloaded`). It allocates a request
    `id` (a `u64` counter starting at 1, never reused in a process, always
    below 2^53), stamps `sender = { windowId, label, url, frameId: 0 }` from the
    calling webview, and returns `{ id }`. The runtime keys the pending entry by
@@ -1377,14 +1547,24 @@ Protocol commands: `ipc_subscribe`, `ipc_invoke`, `ipc_send`, `ipc_skip`
    a handler that returns nothing sends no `value`, which decodes to
    `undefined`. A throw or rejection is sent as `ipc_reply { id, ok: false,
    error, seq }` with `error = { code: 'ipc-remote-error', message, data: {
-   name, message } }`.
+   name, message, text } }`, where `text` is `String(thrown)`: the text
+   Electron puts after its prefix (`"<name>: <message>"` for an `Error`, just
+   the name when the message is empty, the value's own string for a
+   non-`Error` throw). A return value that cannot be encoded, or whose
+   encoding exceeds `ipc.maxMessageBytes`, is replaced by an
+   `ipc-serialization` error reply (C.5).
 6. Rust queues `ipc-result { id, ok, value | error }` on the sender's channel
    in the main runtime's per-target `seq` order (C.5), so every message the
    handler sent to that window before returning arrives first, as Electron's
    single pipe guarantees. The renderer runtime resolves or rejects the
    pending entry. A remote error rejects with `OwTauriError('ipc-remote-error',
-   "Error invoking remote method '<channel>': <name>: <message>")`, the same
-   text Electron produces, with `data.name` and `data.message` attached.
+   "Error invoking remote method '<channel>': <text>")`, the same text
+   Electron produces, with `data.name`, `data.message` and `data.text`
+   attached (`<name>: <message>` when `text` is missing). Every other error
+   in an `ipc-result` keeps its `code` and gets the same prefix in front of
+   its message. A result that arrives before the `ipc_invoke` acknowledgement
+   (possible, because the two travel on different paths) is held until the
+   acknowledgement names its `id`.
 
 Timeouts and failures:
 
@@ -1415,10 +1595,13 @@ concurrently, so Rust reorders by `seq`:
   rejected with `not-ready` and never reordered, so a reload never mixes with
   the previous document's sequence. Subscribing again discards the old
   epoch's reorder state.
-- **Gaps.** A call that Tauri rejects before the command runs (A.4) never
-  reaches the reorder buffer. When the runtime sees such a rejection it calls
-  `ipc_skip { epoch, seq }`. As a fallback, an out-of-order message waits for
-  a missing number for at most 1 s, after which the gap is skipped and a
+- **Gaps.** A rejected call never enters the reorder buffer, whether Tauri
+  rejected it before the command ran (A.4) or the plugin refused it with an
+  error. The rule is that **every rejected call reports its number**: the
+  renderer runtime calls `ipc_skip { epoch, seq }` for each rejection except
+  a stale epoch (the router ignores skips for old epochs, and for numbers it
+  has already used or skipped). As a fallback, an out-of-order message waits
+  for a missing number for at most 1 s, after which the gap is skipped and a
   warning logged.
 - No ordering is guaranteed between different senders.
 
@@ -1450,7 +1633,14 @@ target. Rust:
 - drops the message with a warning if the target is `remote`, destroyed or not
   a `bw-*` webview (Electron would deliver to a remote page; ow-tauri never
   gives remote pages IPC);
-- applies the target's `seq` order to `ipc_emit` and `ipc_reply` together;
+- applies the target's `seq` order to `ipc_emit` and `ipc_reply` together.
+  Every outbound number is accounted for: an `ipc_emit` the plugin rejects
+  uses up its `seq` on the Rust side, and the main runtime reports every
+  `ipc_emit` or `ipc_reply` that never reached the plugin (rejected by Tauri,
+  or failed in the runtime) with `ipc_emit_skip { target, seq }`. Skipping a
+  number that is already used is ignored, so both may happen for one call.
+  The 1 s gap timeout of C.3 also applies to the outbound order. A reply that
+  cannot be ordered settles its invoke with `ipc-overloaded` (A.2.1);
 - buffers messages until that webview has called `ipc_subscribe` (bounded by
   `ipc.maxQueuedMessages`); a reload empties the buffer, as Electron's
   renderer reload does;
@@ -1458,6 +1648,15 @@ target. Rust:
 
 The renderer runtime calls each `ipcRenderer` listener for `channel` with
 `(event, ...decodedArgs)`, where `event = { sender: ipcRenderer, senderId: 0, ports: [] }`.
+
+**Size.** Rust checks the size of `ipc_emit` but not of `ipc_reply`, so the
+main runtime checks both against `ipc.maxMessageBytes` (from
+`HostSnapshot.ipcLimits`, else the default 8 MiB) before it sends them. An
+oversized `webContents.send` throws `OwTauriError('ipc-serialization')`
+synchronously, as an unencodable argument does. An oversized handler result
+becomes the reply `{ ok: false, error: { code: 'ipc-serialization', message,
+data: { bytes, limit } } }`, so the renderer's `invoke` rejects with
+`ipc-serialization` instead of hanging.
 
 ### C.6 State sequence
 
@@ -1481,7 +1680,7 @@ values as opaque `serde_json::Value` and never decodes tags.
 | `bigint` | `{ "$otj": "bigint", "v": "<decimal>" }` | `bigint` |
 | `Date` | `{ "$otj": "date", "v": "<ISO 8601>" }` (invalid date: `"v": null`) | `Date` |
 | `RegExp` | `{ "$otj": "regexp", "source": "...", "flags": "..." }` | `RegExp` |
-| `Error` and subclasses | `{ "$otj": "error", "name", "message", "stack"? }` | `Error` with `name` set |
+| `Error` and subclasses | `{ "$otj": "error", "name", "message", "stack"? }` | the standard constructor of that name (`EvalError`, `RangeError`, `ReferenceError`, `SyntaxError`, `TypeError`, `URIError`), else `Error` with `name` set |
 | `ArrayBuffer`, typed arrays, `DataView`, Node-style `Buffer` | `{ "$otj": "bytes", "type": "<constructor name>", "b64": "..." }` | the same typed array type (`Buffer` decodes as `Uint8Array`, as Electron delivers it to renderers) |
 | `Map` | `{ "$otj": "map", "entries": [[k, v], ...] }` | `Map` |
 | `Set` | `{ "$otj": "set", "values": [...] }` | `Set` |
@@ -1500,9 +1699,10 @@ message larger than `ipc.maxMessageBytes` also throws `ipc-serialization`.
 | Situation | Renderer sees |
 |---|---|
 | no handler | `OwTauriError('ipc-no-handler', "Error invoking remote method '<ch>': Error: No handler registered for '<ch>'")` |
-| handler threw | `OwTauriError('ipc-remote-error', "Error invoking remote method '<ch>': <name>: <message>")` |
+| handler threw | `OwTauriError('ipc-remote-error', "Error invoking remote method '<ch>': <text>")`, where `<text>` is `String(thrown)` (C.2 step 5): `<name>: <message>` for an `Error` |
 | timeout | `OwTauriError('ipc-timeout', ...)` |
 | unencodable argument | `OwTauriError('ipc-serialization', ...)`, thrown synchronously by `invoke` and `send` |
+| handler result unencodable or larger than `ipc.maxMessageBytes` | `OwTauriError('ipc-serialization', "Error invoking remote method '<ch>': ...")` (C.5) |
 | main webview not ready or restarted, or a stale epoch | `OwTauriError('not-ready', ...)` |
 | too many invokes in flight or messages queued | `OwTauriError('ipc-overloaded', ...)` |
 | caller is not a `ui` / `overlay` window | `OwTauriError('forbidden', ...)` |
@@ -2291,12 +2491,17 @@ Rules:
   "pendingBrowserArgs": [],               // A.1.1
   "analyticsUserEnabled": true,           // only with analytics.userSwitch (ow-tauri option)
   "muid": "8C7E...-...",                  // only with analytics.muidStrategy "per-install" (ow-tauri option)
+  "mainCrashes": [1791302123456],         // ow-main crash times, Unix ms, within the last 60 s (A.6)
   "createdBy": "ow-tauri 0.1.0"
 }
 ```
 
-Unknown `schema` values newer than the running version are read best-effort
-and never downgraded on write. Package channel choices are not stored while
+The file is parsed field by field: a known field with an unexpected type is
+kept as it is (and written back unchanged) instead of failing the whole file,
+and unknown keys are preserved. A file that is not valid JSON is renamed to
+`ow-tauri.json.corrupt-<Unix ms>` and the state starts from defaults, with a
+warning. Unknown `schema` values newer than the running version are read
+best-effort and never downgraded on write. Package channel choices are not stored while
 no package runtime exists (H).
 
 ### F.4 Logs
@@ -2388,6 +2593,13 @@ uid    = for each byte b of d: chr(97 + (b & 15)) + chr(97 + (b >> 4))    // 40 
   override behaves the same way [DEC].
 - `process.env.OVERWOLF_APP_UID` is the uid from the moment the main module
   loads [OBS] (B.1.1).
+
+A uid from rule 1 or 2 must be 1 to 64 ASCII letters or digits after
+trimming whitespace, because it names the state directory (F.1) and must
+never contain a path separator or `..` [DEC]. Uids Overwolf assigns and
+computed uids satisfy this. A manifest `overwolf.uid` that does not is a
+build error (`embed_manifest`, G.3); at runtime an invalid uid from rule 1 or
+2 is skipped and the next rule applies.
 
 The `.electron` suffix is kept on purpose: the uid keys the developer console,
 the ad configuration and the state directory, so a Tauri build of the same
@@ -2697,7 +2909,8 @@ Overwolf's NSIS installer does Overwolf work at install and uninstall time
 > completely before it is implemented. A runtime would be registered with
 > `packagesBackend: "native"` (H.2).
 
-The guide for runtime authors would be `docs/PACKAGE-RUNTIME.md`.
+This appendix is the whole design; a separate guide for runtime authors
+would be written together with the implementation.
 
 ### P.1 Rust trait
 
@@ -2986,7 +3199,7 @@ resolve `SetChannelResult`; `packages_get_available_channels` and
 
 | Host message `type` | Fields | When |
 |---|---|---|
-| `packages` | `{ type: 'loading' \| 'ready' \| 'failed-to-initialize' \| 'crashed' \| 'package-update-pending' \| 'updated', name?, version?, info?, canRecover?, eventId? }` | package manager lifecycle |
+| `packages` | `{ event: 'loading' \| 'ready' \| 'failed-to-initialize' \| 'crashed' \| 'package-update-pending' \| 'updated', name?, version?, info?, canRecover?, eventId? }` | package manager lifecycle |
 | `package-event` | `{ package, event, args, eventId?, actions? }` | an event emitted by a package object |
 | `package-callback` | `{ cbId, args }` | the runtime invokes a callback reference (P.1.1) |
 | `package-callback-release` | `{ cbIds }` | the runtime will never invoke these callbacks again |
