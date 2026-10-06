@@ -16,6 +16,10 @@ module.exports = {
   },
   resolve: {
     extensions: ['.ts', '.tsx', '.json'],
+    // ow-tauri: Electron imports resolve to ow-tauri's Electron facade.
+    alias: {
+      electron: 'ow-tauri/electron',
+    },
   },
 
   output: {
@@ -23,10 +27,10 @@ module.exports = {
     filename: '[name]/[name].js',
   },
 
+  // ow-tauri: every config adds its own plugins (no shared array).
   plugins: [],
   externals: {
     bufferutil: 'bufferutil',
     'utf-8-validate': 'utf-8-validate',
   },
 };
-

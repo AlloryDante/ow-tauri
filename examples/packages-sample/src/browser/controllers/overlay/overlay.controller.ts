@@ -1,6 +1,4 @@
 import { app, ipcMain } from 'electron';
-import path from 'path';
-import fs from 'fs';
 import {
   GamesFilter,
   GameInfo,
@@ -190,6 +188,10 @@ export class OverlayController extends PackageControllerBase {
   private registerToIpc(): void {
     // Updates a hotkey configuration
     ipcMain.handle(OverlayChannels.UPDATE_HOTKEY, (event, hotkey) => {
+      if (!hotkey || typeof hotkey.name !== 'string' || hotkey.name.length === 0) {
+        throw new Error('update-hotkey: a hotkey with a name is required');
+      }
+
       const updateResult = this._hotkeysService.updateHotkey(hotkey);
 
       if (updateResult) {
@@ -200,10 +202,13 @@ export class OverlayController extends PackageControllerBase {
     });
 
     //------------------------------QA------------------------------------------
-    // Shows all currently open overlay windows
+    // Hides all open overlay windows when any is visible, else shows them all
     ipcMain.handle(OverlayChannels.TOGGLE_OSR_VISIBILITY, () => {
       const windows = this._overlayApi.getAllWindows();
-      windows.forEach((win) => win.window.show());
+      const anyVisible = windows.some((win) => win.window.isVisible());
+      windows.forEach((win) =>
+        anyVisible ? win.window.hide() : win.window.show(),
+      );
     });
 
     // Handle in-game window creation
@@ -318,7 +323,7 @@ export class OverlayController extends PackageControllerBase {
             const overlayOptions = w.overlayOptions;
             overlayOptions.passthrough = 'noPassThrough';
 
-            w.window.webContents.send('passthrough-reset');
+            w.window.webContents.send(OverlayChannels.PASSTHROUGH_RESET);
           });
         }
       },
@@ -341,7 +346,7 @@ export class OverlayController extends PackageControllerBase {
             const overlayOptions = w.overlayOptions;
             overlayOptions.zOrder = 'default';
 
-            w.window.webContents.send('zOrder-reset');
+            w.window.webContents.send(OverlayChannels.ZORDER_RESET);
           });
         }
       },

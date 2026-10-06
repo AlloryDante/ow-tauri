@@ -1,10 +1,12 @@
-import { autoUpdater, UpdateCheckResult } from 'electron-updater';
+import { app } from 'electron';
+import { autoUpdater, UpdateCheckResult } from 'ow-tauri/main';
 
 export class UpdaterService {
   constructor() {
     // Initialize the autoUpdater
     autoUpdater.logger = console;
-    autoUpdater.forceDevUpdateConfig = true; // Force dev update config
+    // Use the dev update config only in unpackaged (development) builds
+    autoUpdater.forceDevUpdateConfig = !app.isPackaged;
     autoUpdater.autoDownload = false; // Automatically download updates
     autoUpdater.autoInstallOnAppQuit = true; // Install updates on app quit
     autoUpdater.channel = 'testingChannelz'; // Set the channel for updates
@@ -17,7 +19,7 @@ export class UpdaterService {
   }
 
   async checkForUpdatesAndNotify() {
-    if (autoUpdater.forceDevUpdateConfig === false) {
+    if (!app.isPackaged) {
       console.log('Skipping update check: app is not packaged.');
       return;
     }

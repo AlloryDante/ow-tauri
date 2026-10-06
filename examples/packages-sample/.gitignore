@@ -10,6 +10,11 @@ lerna-debug.log*
 dist
 /build
 
+# ow-tauri: Tauri build output, generated schemas and the generated NSIS hooks
+src-tauri/target/
+src-tauri/gen/
+src-tauri/windows/hooks.nsh
+
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json

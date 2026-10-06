@@ -65,8 +65,7 @@ const CaptureAudio: FC = () => {
           id="lowLatencyAudioBuffering"
           labelText="Low latency audio buffering"
           checked={
-            captureSettings?.audioSettings?.lowLatencyAudioBuffering === true ??
-            false
+            captureSettings?.audioSettings?.lowLatencyAudioBuffering === true
           }
           name="lowLatencyAudioBuffering"
           onChange={onAudioSettingChanged}
@@ -77,9 +76,7 @@ const CaptureAudio: FC = () => {
         <ToggleSwitch
           id="separateAudioTracks"
           labelText="Separate audio tracks"
-          checked={
-            captureSettingsOptions?.separateAudioTracks === true ?? false
-          }
+          checked={captureSettingsOptions?.separateAudioTracks === true}
           name="separateAudioTracks"
           onChange={onSeparateAudioTracksChanged}
         />

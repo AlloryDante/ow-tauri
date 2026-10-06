@@ -94,7 +94,7 @@ export class GameEventsController extends PackageControllerBase {
     ipcMain.handle('gep-getInfo', async () => {
       const result = await this._gepService.getInfoForActiveGame();
       this.log('getInfo result:', result);
-      return;
+      return result;
     });
   }
   //------------------------------QA------------------------------------------

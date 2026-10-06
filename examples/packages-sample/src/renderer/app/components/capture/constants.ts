@@ -142,7 +142,7 @@ export const kNVENCEncoderRateControlArray: kNVENCEncoderRateControl[] = [
   'CBR',
   'CQP',
   'VBR',
-  'Lossless',
+  'lossless',
 ];
 
 export const kQuickSyncEncoderRateControlArray: kQuickSyncEncoderRateControl[] =

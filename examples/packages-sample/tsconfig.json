@@ -10,16 +10,25 @@
     "sourceMap": true,
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
-    "lib": ["es2015", "es2016", "es2017", "dom", "es2018"]
+    "lib": ["es2015", "es2016", "es2017", "dom", "es2018"],
+    "skipLibCheck": true,
+    "types": ["node", "ow-tauri/types"],
+    "paths": {
+      "electron": [
+        "./node_modules/ow-tauri/dist/types/electron.d.ts",
+        "../../packages/ow-tauri/dist/types/electron.d.ts"
+      ],
+      "@overwolf/ow-electron": [
+        "./node_modules/ow-tauri/dist/types/ow-electron.d.ts",
+        "../../packages/ow-tauri/dist/types/ow-electron.d.ts"
+      ]
+    }
   },
-  "typeRoots": [
-    "/node_modules/@overwolf/ow-electron-packages-types",
-    "/node_modules/@types"
-  ],
   "exclude": [
     "node_modules",
     "test",
     "dist",
+    "src-tauri",
     "**/*spec.ts"
   ]
 }

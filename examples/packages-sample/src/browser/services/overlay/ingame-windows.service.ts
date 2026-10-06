@@ -148,12 +148,11 @@ export class IngameWindowsService extends PackageServiceBase {
       return;
     }
   
-    const window = await this._overlayApi.createWindow(windowOptions);
-
-    // Re-inject on every load, since in-page navigations/redirects on the
-    // external site replace the DOM and wipe out the previous injection.
-    window.window.webContents.on('did-finish-load', () => {
-      this.injectDragHeader(window);
+    // The window shows a remote site, which gets no IPC: native window
+    // decorations replace the injected drag header and close button.
+    const window = await this._overlayApi.createWindow({
+      ...windowOptions,
+      frame: true,
     });
 
     try {
@@ -169,31 +168,5 @@ export class IngameWindowsService extends PackageServiceBase {
     window.window.show();
   }
 
-  /**
-   * Injects a minimal drag region + close button into a window that loads
-   * external content directly, since it won't have our own osr.html header.
-   */
-  private injectDragHeader(overlayWindow: OverlayBrowserWindow): void {
-    overlayWindow.window.webContents.executeJavaScript(`
-      (() => {
-        const header = document.createElement('div');
-        header.style.cssText = 'position:fixed;top:0;left:0;right:0;height:32px;' +
-          'background:rgba(20,20,20,0.85);z-index:2147483647;-webkit-app-region:drag;';
-
-        const closeBtn = document.createElement('button');
-        closeBtn.textContent = '\\u2715';
-        closeBtn.style.cssText = 'position:fixed;top:0;right:0;width:32px;height:32px;' +
-          'z-index:2147483647;-webkit-app-region:no-drag;background:transparent;' +
-          'color:#fff;border:none;cursor:pointer;font-size:14px;';
-        closeBtn.addEventListener('click', () => {
-          require('electron').ipcRenderer.send('closeWindow');
-        });
-
-        document.body.style.marginTop = '32px';
-        document.body.appendChild(header);
-        document.body.appendChild(closeBtn);
-      })();
-    `);
-  }
   //------------------------------QA--------------------------------------------
 }

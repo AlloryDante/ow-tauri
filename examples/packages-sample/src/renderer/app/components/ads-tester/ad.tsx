@@ -36,7 +36,8 @@ const Ad: FC<AdProps> = ({
 
     const tempAdView = document.createElement('owadview');
     const customTrackingJsonStr = JSON.stringify({"testQAKey": "testQAValue"});
-    tempAdView.setAttribute('id', 'mainAd');
+    // A unique DOM id per ad, derived from the container id
+    tempAdView.setAttribute('id', `${id}-adview`);
     tempAdView.setAttribute('cid', 'mainAd');
     tempAdView.setAttribute('slotsize', `${adSize[0]}x${adSize[1]}`);
     tempAdView.setAttribute('customTracking', customTrackingJsonStr);

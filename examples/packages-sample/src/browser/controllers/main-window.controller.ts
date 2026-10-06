@@ -4,18 +4,18 @@ import {
   BrowserWindow,
   dialog,
   screen,
+  shell,
 } from 'electron';
+import { files } from 'ow-tauri/main';
 import path from 'path';
 import { RecordingController } from './recorder/recording.controller';
 import { RecordingStatus } from '../../common/recorder/recording-status';
 import { GameInfo, RecorderStats } from '@overwolf/ow-electron-packages-types';
-import { exec } from 'child_process';
 import { UtilityService } from '../services/utility.service';
 import { UpdaterService } from '../services/updater.service';
 import { OverlayController } from './overlay/overlay.controller';
 import { GameEventsController } from './gep/game-events.controller';
 import { IRecorderInformation } from '../../common/recorder/recorder-information';
-import fs from 'fs';
 import { kGameIds } from '@overwolf/ow-electron-packages-types/game-list';
 import { OverlayChannels, PackageChannelIpcChannels } from '../../common/channels/channels';
 /**
@@ -44,10 +44,10 @@ export class MainWindowController {
   /**
    * Reads the package names this app is registered for from package.json (overwolf.packages).
    */
-  private getConfiguredPackages(): string[] {
+  private async getConfiguredPackages(): Promise<string[]> {
     try {
       const packageJsonPath = path.join(electronApp.getAppPath(), 'package.json');
-      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+      const packageJson = JSON.parse((await files.readText(packageJsonPath)) ?? '{}');
       return packageJson.overwolf?.packages || [];
     } catch (error) {
       console.error('Failed to read package.json:', error);
@@ -135,44 +135,44 @@ export class MainWindowController {
     return path.join(electronApp.getPath('userData'), 'screenshot-prefs.json');
   }
 
-  private loadScreenshotFormat(): 'jpg' | 'bmp' {
+  private async loadScreenshotFormat(): Promise<'jpg' | 'bmp'> {
     try {
-      const prefs = JSON.parse(fs.readFileSync(this.screenshotPrefsPath, 'utf-8'));
+      const prefs = JSON.parse((await files.readText(this.screenshotPrefsPath)) ?? '{}');
       return prefs.format === 'bmp' ? 'bmp' : 'jpg';
     } catch {
       return 'jpg';
     }
   }
 
-  private saveScreenshotFormat(format: 'jpg' | 'bmp') {
+  private async saveScreenshotFormat(format: 'jpg' | 'bmp') {
     try {
-      fs.writeFileSync(this.screenshotPrefsPath, JSON.stringify({ format }), 'utf-8');
+      await files.writeText(this.screenshotPrefsPath, JSON.stringify({ format }));
     } catch (e) {
       console.error('[MainWindow] Failed to save screenshot prefs', e);
     }
   }
 
-  private loadDisplayPrefs(): { preferredDisplayId?: number } {
+  private async loadDisplayPrefs(): Promise<{ preferredDisplayId?: number }> {
     try {
-      return JSON.parse(fs.readFileSync(this.displayPrefsPath, 'utf-8'));
+      return JSON.parse((await files.readText(this.displayPrefsPath)) ?? '{}');
     } catch {
       return {};
     }
   }
 
-  private saveDisplayPrefs(prefs: { preferredDisplayId?: number }) {
+  private async saveDisplayPrefs(prefs: { preferredDisplayId?: number }) {
     try {
-      fs.writeFileSync(this.displayPrefsPath, JSON.stringify(prefs), 'utf-8');
+      await files.writeText(this.displayPrefsPath, JSON.stringify(prefs));
     } catch (e) {
       console.error('[MainWindow] Failed to save display prefs', e);
     }
   }
 
-  private getTargetDisplay(): Electron.Display {
+  private async getTargetDisplay(): Promise<Electron.Display> {
     const displays = screen.getAllDisplays();
     if (displays.length === 1) return displays[0];
 
-    const prefs = this.loadDisplayPrefs();
+    const prefs = await this.loadDisplayPrefs();
     if (prefs.preferredDisplayId !== undefined) {
       const saved = displays.find(d => d.id === prefs.preferredDisplayId);
       if (saved) return saved;
@@ -186,11 +186,11 @@ export class MainWindowController {
   /**
    *
    */
-  public createAndShow(showDevTools: boolean) {
+  public async createAndShow(showDevTools: boolean) {
     const desiredWidth = 1280,
       desiredHeight = 800;
 
-    const targetDisplay = this.getTargetDisplay();
+    const targetDisplay = await this.getTargetDisplay();
     const { x, y, width } = targetDisplay.workArea;
     const shouldFullscreen = width < desiredWidth;
 
@@ -241,15 +241,10 @@ export class MainWindowController {
           return false;
         }
 
-        exec(`explorer.exe ${args[1]}`, (error, stdout, stderr) => {
+        // Opens the folder in the OS file manager without a shell
+        shell.openPath(String(args[1])).then((error) => {
           if (error) {
-            console.error(`Error: ${error.message}`);
-            return;
-          }
-
-          if (stderr) {
-            console.error(`Stderr: ${stderr}`);
-            return;
+            console.error(`Error: ${error}`);
           }
         });
         return true;
@@ -260,6 +255,10 @@ export class MainWindowController {
 
     ipcMain.handle('disable-ads-fpd', () => {
       electronApp.overwolf.disableAdsFPD();
+    });
+
+    ipcMain.handle('disable-ads-optimization', () => {
+      electronApp.overwolf.disableAdsOptimization();
     });
     
     ipcMain.handle('has-pending-updates', () => {
@@ -377,7 +376,7 @@ export class MainWindowController {
     });
 
     ipcMain.handle('set-screenshot-format', (_e, format: 'jpg' | 'bmp') => {
-      this.saveScreenshotFormat(format);
+      return this.saveScreenshotFormat(format);
     });
 
     ipcMain.handle('move-to-display', async (_e, displayId: number) => {
@@ -393,10 +392,7 @@ export class MainWindowController {
     // Get available packages from package.json for settings disabled state
     ipcMain.handle('get-utm-params', () => {
       try {
-        const uid = electronApp.overwolf?.uid;
-        const owJsonPath = path.join(electronApp.getPath('appData'), 'ow-electron', uid, 'ow-electron.json');
-        const owJson = JSON.parse(fs.readFileSync(owJsonPath, 'utf-8'));
-        return owJson.utmParams ?? null;
+        return electronApp.overwolf.utmParams ?? null;
       } catch (e) {
         this.printLogMessage('[get-utm-params] error: ' + e);
         return null;
@@ -410,9 +406,9 @@ export class MainWindowController {
 
     //----------------------------------------------------------------------------
     // Package dev channels
-    ipcMain.handle(PackageChannelIpcChannels.GET_VERSIONS, () => {
+    ipcMain.handle(PackageChannelIpcChannels.GET_VERSIONS, async () => {
       const versions: Record<string, string> = { ...this.packageVersions };
-      this.getConfiguredPackages().forEach(name => {
+      (await this.getConfiguredPackages()).forEach(name => {
         if (!versions[name]) {
           const v = (electronApp.overwolf.packages as any)[name]?.version;
           if (v) versions[name] = v;
@@ -523,7 +519,7 @@ export class MainWindowController {
       this.browserWindow?.webContents?.send('capture-output-started');
     });
 
-    this.getConfiguredPackages().forEach(pkgName => {
+    void this.getConfiguredPackages().then(packages => packages.forEach(pkgName => {
       const pkg = (electronApp.overwolf.packages as any)[pkgName];
       if (!pkg) return;
       if (pkg.version) {
@@ -532,7 +528,7 @@ export class MainWindowController {
       pkg.on?.('ready', (version: string) => {
         this.packageVersions[pkgName] = version ?? pkg.version;
       });
-    });
+    }));
 
     electronApp.overwolf.packages.on('crashed', (e: Event, canRecover: boolean) => {
       this.printLogMessage('package crashed', 'canRecover:', canRecover);
@@ -624,7 +620,7 @@ export class MainWindowController {
     );
 
     this.browserWindow.setBounds({ x: newX, y: newY, width: newW, height: newH });
-    this.saveDisplayPrefs({ preferredDisplayId: target.id });
+    await this.saveDisplayPrefs({ preferredDisplayId: target.id });
     return true;
   }
   //----------------------------------------------------------------------------
@@ -685,8 +681,8 @@ export class MainWindowController {
     );
 
     try {
-      await fs.promises.mkdir(outputFolder, { recursive: true });
-      const format = this.loadScreenshotFormat();
+      await files.mkdir(outputFolder, { recursive: true });
+      const format = await this.loadScreenshotFormat();
       const savedPath = await electronApp.overwolf.packages.overlay.takeScreenshot(filePath, format);
       this.printLogMessage('Screenshot saved', savedPath);
     } catch (error) {

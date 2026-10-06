@@ -1,5 +1,4 @@
 import { app, ipcMain } from 'electron';
-import { exec } from 'child_process';
 import { PackageControllerBase } from '../base.controller';
 import { RecordingService } from '../../services/recorder/recording.service';
 import {
@@ -227,6 +226,16 @@ export class RecordingController extends PackageControllerBase {
 
     ipcMain.handle('stop-replays', async () => {
       return this._recordingService?.stopReplays();
+    });
+
+    ipcMain.handle('enable-replays', async (_e, enabled: boolean) => {
+      return enabled
+        ? this._recordingService?.replaysTurnOn()
+        : this._recordingService?.stopReplays();
+    });
+
+    ipcMain.handle('recorder-ready', () => {
+      return !!this._recordingService;
     });
 
     ipcMain.handle('start-capture-replay', async () => {

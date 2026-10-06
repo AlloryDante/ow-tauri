@@ -58,6 +58,7 @@ export class RecordingService extends PackageServiceBase {
   constructor(recorderApi: IOverwolfRecordingApi) {
     super();
     this._recorderApi = recorderApi;
+    this._recorderApi.on('stats', (stats) => this.emit('stats', stats));
     this.initialize();
     this._replayGameEventsListener = new ReplayGameEventsListener(
       this,

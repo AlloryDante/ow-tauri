@@ -4,7 +4,10 @@ const HtmlWebpackPlugin = require('html-webpack-plugin');
 const path = require('path');
 
 const rendererConfig = { ...config };
-rendererConfig.target = 'electron-renderer';
+// ow-tauri: renderer, preload, OSR and exclusive pages run in Tauri webviews;
+// `electron` resolves to ow-tauri/electron through the base alias.
+rendererConfig.target = 'web';
+rendererConfig.plugins = [];
 rendererConfig.entry = {
   renderer: './src/renderer/app/index.tsx',
   preload: './src/preload/preload.ts',

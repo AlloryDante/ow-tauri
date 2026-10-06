@@ -1,56 +1,45 @@
 {
-  // Use IntelliSense to learn about possible attributes.
-  // Hover to view descriptions of existing attributes.
-  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  // ow-tauri port of the upstream launch configurations.
+  // Dev-mode credentials go in your environment or a local .env, never here.
   "version": "0.2.0",
   "configurations": [
     {
       "type": "node",
       "request": "launch",
-      "name": "OW-Electron: Main Process",
-      //"preLaunchTask": "npm: build",
-      "sourceMaps": true,
-      "outFiles": [
-        "${workspaceFolder}/dist/**/*.js"
-      ],
-      "runtimeArgs": [
-        ".",
-        "--test-ad",
-        // package DEV env
-        // "--owepm-packages-url=https://electronapi-qa.overwolf.com/v2/packages",
-        "--remote-debugging-port=9222",
-        "--remote-allow-origins=*",
-      ],
+      "name": "ow-tauri: App (test ads)",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start-ad"],
+      "cwd": "${workspaceFolder}",
       "outputCapture": "std",
-      "windows": {
-        "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/ow-electron.cmd"
-      },
-      "skipFiles": [
-        "<node_internals>/**/*.js"
-      ],
       "env": {
-        "ELECTRON_DISABLE_SECURITY_WARNINGS": "true",
-        "ELECTRON_IS_DEV": "1",
-        "OW_CLI_EMAIL" :"",
-        "OW_CLI_API_KEY":"", 
+        // Windows: WebView2 remote debugging for every app webview
+        // (added to the plugin's shared browser arguments, CONTRACT A.1.1).
+        "OW_TAURI_REMOTE_DEBUGGING_PORT": "9222"
       }
     },
     {
-      "name": "Electron: Renderer",
-      "type": "chrome",
+      "name": "ow-tauri: Webviews (Windows, WebView2)",
+      "type": "msedge",
       "request": "attach",
       "port": 9222,
-      "webRoot": "${workspaceFolder}",
+      "webRoot": "${workspaceFolder}/dist",
       "timeout": 30000
+    },
+    {
+      "name": "ow-tauri: Rust (CodeLLDB)",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "--manifest-path=./src-tauri/Cargo.toml"]
+      },
+      "args": ["--test-ad"],
+      "cwd": "${workspaceFolder}"
     }
   ],
   "compounds": [
     {
-      "name": "Electron: All",
-      "configurations": [
-        "OW-Electron: Main Process",
-        "Electron: Renderer"
-      ]
+      "name": "ow-tauri: All (Windows)",
+      "configurations": ["ow-tauri: App (test ads)", "ow-tauri: Webviews (Windows, WebView2)"]
     }
   ]
 }

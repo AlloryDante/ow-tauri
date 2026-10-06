@@ -15,7 +15,7 @@ console.log('** preload **');
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('app', {
-  version: `ow-electron v${process.versions.electron}`,
+  version: `ow-tauri v${process.versions.owTauri}`,
   getAvailablePackages: () => {
     return ipcRenderer.invoke('get-available-packages');
   },
@@ -33,12 +33,6 @@ contextBridge.exposeInMainWorld('app', {
   },
   scanGames: (...args) => {
     return ipcRenderer.invoke('scan-games', ...args);
-  },
-  onElevationHelperPrompt: (func: (gameName: string) => void) => {
-    ipcRenderer.on('elevation-helper-prompt', (_e, gameName: string) => func(gameName));
-  },
-  sendElevationHelperResponse: (install: boolean) => {
-    ipcRenderer.send('elevation-helper-response', install);
   },
   trackGames: (...args) => {
     return ipcRenderer.invoke('track-games', ...args);

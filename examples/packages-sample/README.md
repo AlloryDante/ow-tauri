@@ -1,3 +1,79 @@
+# Running on ow-tauri
+
+This folder is Overwolf's [ow-electron-packages-sample](https://github.com/overwolf/ow-electron-packages-sample)
+(commit `8a27053`, MIT, Overwolf Ltd.) ported to Tauri 2 with ow-tauri. The
+TypeScript app is the upstream code: the main process (`src/browser`) runs in
+a hidden webview, `electron` imports resolve to `ow-tauri/electron`, and
+`src-tauri/` is a thin native shell around `tauri-plugin-overwolf`. Every
+change against upstream is listed in [CHANGES-FROM-UPSTREAM.md](CHANGES-FROM-UPSTREAM.md);
+the design is in `docs/PORT-MAP.md` at the repository root.
+
+## Prerequisites
+
+- Node 22.12 or newer and the [Tauri 2 prerequisites](https://tauri.app/start/prerequisites/)
+  for your OS (Rust, WebView2 on Windows, WebKitGTK on Linux).
+- Install from the repository root, so `ow-tauri` links to `packages/ow-tauri`:
+
+```shell
+npm install
+npm run build --workspace ow-tauri
+```
+
+## Run
+
+| Script | What it does |
+|---|---|
+| `npm run build` | webpack: the main bundle (`dist/browser`), the renderer, the preload, the OSR and exclusive pages |
+| `npm run start` | `tauri dev` on the last build |
+| `npm run build:start` | `build`, then `tauri dev` |
+| `npm run start-ad` | `tauri dev` with `--test-ad`: test ad inventory (`OW_TAURI_TEST_AD=1` does the same) |
+| `npm run build:dev` | webpack in watch mode |
+| `npm run build:ow-tauri` | `ow-tauri sign` (Overwolf signing, CONTRACT G.4), then `tauri build` (NSIS installer on Windows) |
+
+`npm run build:ow-tauri` replaces `build:ow-electron`. Signing runs when
+`OW_CLI_EMAIL`, `OW_CLI_API_KEY` and `OW_BUILD_KEY` are set in the
+environment; [.env.example](.env.example) lists every optional variable. On
+Windows, set `OW_TAURI_REMOTE_DEBUGGING_PORT=9222` to attach a debugger to the
+webviews (see [.vscode/launch.json](.vscode/launch.json)).
+
+## What works where
+
+| Feature | Windows | macOS | Linux |
+|---|---|---|---|
+| App windows, IPC, dialogs, screen, shell | yes | yes | yes |
+| Ads (`<owadview>`), test ads, consent (CMP) | yes | yes, with the request-shaping and web-security gaps of `docs/ARCHITECTURE.md` section 6 | yes, same gaps as macOS |
+| Anonymous analytics, email hashes, `uid` / `muid` | yes | yes | yes |
+| Update check against Overwolf's feed | yes | self-hosted feed only (Overwolf serves Windows setups only) | self-hosted feed only |
+| NSIS installer with Overwolf's install and uninstall steps | yes | n/a | n/a |
+| GEP, overlay, recorder, utility | reported as unavailable | reported as unavailable | reported as unavailable |
+
+## What the packages report
+
+ow-tauri behaves as ow-electron does where packages are not available
+(CONTRACT H): `app.overwolf.packages.gep`, `.overlay`, `.recorder` and
+`.utility` are `undefined`, no `ready` or `failed-to-initialize` event fires,
+`getChannel()` resolves `{}`, `getAvailableChannels()` and `setChannel()`
+reject with "package '<name>' is not registered in this app", and
+`hasPendingUpdates()` returns `{ hasPendingUpdate: false, details: [] }`. The
+sample's package screens therefore stay in their waiting state, as they do on
+ow-electron without a package runtime.
+
+## Parity notes
+
+- The main process runs in a webview: `fs` and `child_process` are replaced
+  by `files` from `ow-tauri/main` and `shell.openPath`, `path` and `events`
+  by browser polyfills, `__dirname` is `/browser` (an app-asset path).
+- `electron-updater` is replaced by `autoUpdater` from `ow-tauri/main`, with
+  the same properties, methods and events.
+- `crashReporter.start` is a documented no-op; use a Rust crash handler.
+- `app.disableHardwareAcceleration()` (`--test-osr-app-level-disable-gpu`)
+  records `--disable-gpu` for the next launch on Windows (Tauri fixes the
+  browser arguments before app code runs) and is a no-op elsewhere.
+- Installer: Tauri names the setup `<productName>_<version>_x64-setup.exe`
+  (no `artifactName`) and has no `legalTrademarks` field.
+
+---
+
 # ow-electron-packages-sample
 
 A basic sample app, demonstrating how [@overwolf/ow-electron](https://npmjs.com/package/@overwolf/ow-electron) packages (Overlay, Game Events) work.
@@ -12,7 +88,7 @@ From there, you can easily run/interact with it.
 
 ## Quick start 
 
-To run the app in development mode, simply run the `build` script, followed by the `start` script from the package.json.  
+To run the app in development mode, simply run the `build` script, followed by the `start` script from the package.json (on ow-tauri, `start` runs `tauri dev`).  
 For example:
 
 ```shell
