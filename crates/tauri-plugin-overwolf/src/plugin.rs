@@ -54,6 +54,7 @@ impl Builder {
                 runtime_capabilities: true,
                 main_webview: true,
                 os_queries: true,
+                updater_os_steps: true,
                 ..SetupOptions::default()
             },
         }
@@ -212,6 +213,9 @@ impl Builder {
 
     /// Skips every OS display and cursor query, for Tauri's mock runtime,
     /// which implements none: displays are empty and the cursor is at 0, 0.
+    /// It also skips the machine-id and cookie-store queries of the mock
+    /// runtime's host; it does not touch the updater (see
+    /// [`Builder::skip_updater_os_steps`]).
     ///
     /// ```rust
     /// let builder = tauri_plugin_overwolf::Builder::new().skip_os_queries();
@@ -220,6 +224,23 @@ impl Builder {
     #[cfg(feature = "test-util")]
     pub fn skip_os_queries(mut self) -> Self {
         self.options.os_queries = false;
+        self
+    }
+
+    /// **Tests only.** Skips the update client's OS steps: the Windows
+    /// Authenticode and macOS code-signature checks, the macOS unpack and
+    /// the installer itself, which a mock runtime cannot run. Installs are
+    /// recorded for `Overwolf::test_updater_install_at_exit` instead. The
+    /// SHA-512 and minisign checks still run. Never enable `test-util` in a
+    /// shipped build: this turns a fail-closed check off.
+    ///
+    /// ```rust
+    /// let builder = tauri_plugin_overwolf::Builder::new().skip_updater_os_steps();
+    /// # let _ = builder;
+    /// ```
+    #[cfg(feature = "test-util")]
+    pub fn skip_updater_os_steps(mut self) -> Self {
+        self.options.updater_os_steps = false;
         self
     }
 

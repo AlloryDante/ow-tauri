@@ -97,6 +97,7 @@ fn app(name: &str) -> (App<MockRuntime>, Captured) {
                 .companion_plugins(false)
                 .main_webview(false)
                 .skip_os_queries()
+                .skip_updater_os_steps()
                 .argv(vec!["acl-fixture".into()])
                 .build(),
         )
@@ -836,6 +837,7 @@ fn app_with(name: &str, extra: Value) -> (App<MockRuntime>, Captured) {
                 .companion_plugins(false)
                 .main_webview(false)
                 .skip_os_queries()
+                .skip_updater_os_steps()
                 .argv(vec!["acl-fixture".into()])
                 .build(),
         )
@@ -1485,6 +1487,12 @@ fn updater_checks_downloads_verifies_and_installs_at_exit() {
         result["updateInfo"]["files"][0]["isAdminRightsRequired"],
         false
     );
+    // The key as the feed spells it reaches the app too (electron-updater
+    // hands over the parsed YAML).
+    assert_eq!(
+        result["updateInfo"]["files"][0]["IsAdminRightsRequired"],
+        false
+    );
     let feed_request = log
         .lock()
         .unwrap()
@@ -1534,8 +1542,15 @@ fn updater_checks_downloads_verifies_and_installs_at_exit() {
         .find(|e| e["event"] == "download-progress")
         .unwrap();
     assert_eq!(progress["progress"]["total"], 4);
+    assert_eq!(progress["progress"]["delta"], 4);
     assert_eq!(progress["progress"]["transferred"], 4);
     assert_eq!(progress["progress"]["percent"], 100.0);
+    // electron-updater's key order.
+    let keys: Vec<&String> = progress["progress"].as_object().unwrap().keys().collect();
+    assert_eq!(
+        keys,
+        ["total", "delta", "transferred", "percent", "bytesPerSecond"]
+    );
 
     invoke(
         &app,
@@ -1562,16 +1577,31 @@ fn updater_checks_downloads_verifies_and_installs_at_exit() {
     assert_eq!(installs[1]["silent"], true);
     assert_eq!(installs[1]["forceRunAfter"], false);
     assert_eq!(installs[1]["relaunch"], false);
+    // A non-silent quitAndInstall runs the app after the install
+    // (electron-updater's autoRunAppAfterInstall, default true).
+    invoke(
+        &app,
+        "ow-main",
+        "updater_quit_and_install",
+        json!({ "isSilent": false, "isForceRunAfter": false }),
+    )
+    .unwrap();
+    let installs = tauri::async_runtime::block_on(ow.test_updater_install_at_exit());
+    assert_eq!(installs[2]["forceRunAfter"], true);
+    if cfg!(windows) {
+        assert_eq!(installs[2]["args"], json!(["/UPDATE", "/R"]));
+    }
 
-    // The staging id is stored for the next launch (I.2 #5).
-    let state_file = std::fs::read_dir(temp_dir_path("updater").join("ow-electron"))
-        .unwrap()
-        .filter_map(Result::ok)
-        .map(|e| e.path().join("ow-tauri.json"))
-        .find(|p| p.is_file())
-        .unwrap();
-    let state: Value = serde_json::from_slice(&std::fs::read(state_file).unwrap()).unwrap();
-    assert_eq!(state["stagingId"].as_str().unwrap().len(), 36);
+    // No stagingPercentage: no staging id is created (electron-updater
+    // creates it lazily).
+    assert!(updater_id_file("updater").is_none());
+}
+
+/// `<userData>/.updaterId`, where electron-updater keeps the staging id.
+fn updater_id_file(name: &str) -> Option<PathBuf> {
+    walk(&temp_dir_path(name))
+        .into_iter()
+        .find(|p| p.file_name().is_some_and(|n| n == ".updaterId"))
 }
 
 /// The directory [`temp_dir`] made for `name`, without clearing it.
@@ -1607,12 +1637,12 @@ fn updater_fails_closed() {
     set_routes(vec![(feed_name().into(), 200, b"- [".to_vec())]);
     let r = invoke(&app, "ow-main", "updater_check", json!({}));
     assert_eq!(r.unwrap_err()["code"], "invalid-argument");
-    // The running version, an older one, a prerelease and a 0 % rollout
-    // are no update.
+    // The running version (build metadata ignored), an older one and a 0 %
+    // rollout are no update.
     for (version, extra) in [
         ("0.1.0", ""),
         ("0.0.9", ""),
-        ("0.2.0-beta.1", ""),
+        ("0.1.0+build.7", ""),
         ("0.2.0", "stagingPercentage: 0\n"),
     ] {
         set_routes(vec![(
@@ -1625,8 +1655,8 @@ fn updater_fails_closed() {
         let d = invoke(&app, "ow-main", "updater_download", json!({}));
         assert_eq!(d.unwrap_err()["code"], "not-found");
     }
-    // Downgrades and prereleases when allowed.
-    configure(json!({ "allowDowngrade": true, "allowPrerelease": true }));
+    // Downgrades when allowed.
+    configure(json!({ "allowDowngrade": true }));
     set_routes(vec![(
         feed_name().into(),
         200,
@@ -1684,6 +1714,60 @@ fn updater_fails_closed() {
         .filter(|e| e["event"] == "error" && e["error"]["code"] == "backend")
         .count();
     assert_eq!(backend, 4);
+}
+
+#[test]
+fn updater_follows_electron_updater_rules() {
+    let routes: Routes = Arc::default();
+    let (base, _) = feed_server(Arc::clone(&routes));
+    let (app, _) = app_with("updater-rules", json!({}));
+    main_and_window(&app);
+    invoke(
+        &app,
+        "ow-main",
+        "updater_configure",
+        json!({ "provider": "generic", "url": format!("{base}/feed"), "autoDownload": false }),
+    )
+    .unwrap();
+    let set_routes = |list: Vec<(String, u16, Vec<u8>)>| *routes.lock().unwrap() = list;
+    // A feed with a rollout creates the staging id.
+    set_routes(vec![(
+        feed_name().into(),
+        200,
+        feed("0.2.0", TEST_SHA512, "stagingPercentage: 0\n"),
+    )]);
+    let r = invoke(&app, "ow-main", "updater_check", json!({})).unwrap();
+    assert_eq!(r["isUpdateAvailable"], false);
+    // The rollout created the staging id where electron-updater keeps it;
+    // the bucket follows it (electron-updater's rule).
+    let id_file = updater_id_file("updater-rules").expect(".updaterId");
+    for (tail, pct, want) in [("ffffffff", 100, false), ("00000000", 1, true)] {
+        std::fs::write(&id_file, format!("12345678-1234-4234-8234-0000{tail}")).unwrap();
+        set_routes(vec![(
+            feed_name().into(),
+            200,
+            feed("0.2.0", TEST_SHA512, &format!("stagingPercentage: {pct}\n")),
+        )]);
+        let r = invoke(&app, "ow-main", "updater_check", json!({})).unwrap();
+        assert_eq!(r["isUpdateAvailable"], want, "{tail} {pct}");
+    }
+    // Prereleases are offered: the generic provider ignores allowPrerelease.
+    set_routes(vec![(
+        feed_name().into(),
+        200,
+        feed("0.2.0-beta.1", TEST_SHA512, ""),
+    )]);
+    let r = invoke(&app, "ow-main", "updater_check", json!({})).unwrap();
+    assert_eq!(r["isUpdateAvailable"], true);
+    // A minimumSystemVersion above every OS release: not supported.
+    set_routes(vec![(
+        feed_name().into(),
+        200,
+        feed("0.2.0", TEST_SHA512, "minimumSystemVersion: 999.0.0\n"),
+    )]);
+    let r = invoke(&app, "ow-main", "updater_check", json!({})).unwrap();
+    assert_eq!(r["isUpdateAvailable"], false);
+    assert_eq!(r["updateInfo"]["minimumSystemVersion"], "999.0.0");
 }
 
 fn walk(dir: &std::path::Path) -> Vec<PathBuf> {

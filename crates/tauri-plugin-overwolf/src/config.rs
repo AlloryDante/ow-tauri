@@ -283,7 +283,11 @@ pub struct UpdaterConfig {
     pub enabled: bool,
     /// Installer arguments override.
     pub installer_args: Option<Vec<String>>,
-    /// Windows Authenticode subjects; `None` = the running exe's signer.
+    /// Windows Authenticode publishers of the installer (a CN, or a DN
+    /// whose every attribute must match), always enforced when set, as
+    /// electron-updater enforces `publisherName`. `None`: the running exe's
+    /// signer, unless the app exe is signed with Overwolf's certificate
+    /// (`enableOWCertSigning`), which skips the check with a warning.
     pub publisher_names: Option<Vec<String>>,
     /// Minisign public key; required on Linux.
     pub pubkey: Option<String>,

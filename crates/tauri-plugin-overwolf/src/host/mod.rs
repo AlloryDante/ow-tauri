@@ -89,6 +89,9 @@ pub(crate) struct Info {
         )
     )]
     pub(crate) ads_data_dir: std::path::PathBuf,
+    /// `app.getPath('userData')`, `<appData>/<PN>`: electron-updater keeps
+    /// its staging id in `.updaterId` there (I.2 #5).
+    pub(crate) user_data_dir: std::path::PathBuf,
     pub(crate) debug: bool,
     pub(crate) os: TargetOs,
 }

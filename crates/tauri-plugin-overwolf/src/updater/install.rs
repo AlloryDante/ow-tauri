@@ -29,15 +29,19 @@ pub struct WindowsInstall {
 /// finishes (Tauri's template honours `/R` in silent and passive mode; an
 /// interactive installer shows its own "run" option instead).
 /// `installer_args` (`updater.installerArgs`) replaces these arguments.
-/// MSI: `msiexec /i "<file>" /quiet /norestart`.
+/// MSI: `<system32>\msiexec.exe /i "<file>" /quiet /norestart`, by its
+/// full path so a same-named file in the app folder is never started.
 ///
 /// ```
 /// use std::path::Path;
 /// use tauri_plugin_overwolf::updater::{install::windows_install, InstallerKind};
-/// let i = windows_install(InstallerKind::Nsis, Path::new("C:/c/setup.exe"), true, true, None, false);
+/// let sys = Path::new("C:/Windows/System32");
+/// let i = windows_install(InstallerKind::Nsis, Path::new("C:/c/setup.exe"), true, true, None, false, sys);
 /// assert_eq!(i.args, ["/S", "/UPDATE", "/R"]);
-/// let i = windows_install(InstallerKind::Nsis, Path::new("C:/c/setup.exe"), false, false, None, true);
+/// let i = windows_install(InstallerKind::Nsis, Path::new("C:/c/setup.exe"), false, false, None, true, sys);
 /// assert_eq!((i.args.as_slice(), i.elevate), (&["/UPDATE".to_owned()][..], true));
+/// let i = windows_install(InstallerKind::Msi, Path::new("C:/c/a.msi"), true, false, None, false, sys);
+/// assert_eq!(i.program, sys.join("msiexec.exe"));
 /// ```
 #[must_use]
 pub fn windows_install(
@@ -47,10 +51,11 @@ pub fn windows_install(
     force_run_after: bool,
     installer_args: Option<&[String]>,
     admin_rights_required: bool,
+    system32: &Path,
 ) -> WindowsInstall {
     if kind == InstallerKind::Msi {
         return WindowsInstall {
-            program: PathBuf::from("msiexec.exe"),
+            program: system32.join("msiexec.exe"),
             args: vec![
                 "/i".to_owned(),
                 file.to_string_lossy().into_owned(),
@@ -165,19 +170,37 @@ pub fn bundle_of(exe: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-/// The single `.app` bundle at the top of an unpacked update.
+/// The single `.app` bundle at the top of an unpacked update. A symbolic
+/// link named `.app` is refused, not followed.
 ///
 /// # Errors
 ///
-/// `backend` when the folder holds no `.app` or more than one.
+/// `backend` when the folder holds no `.app` folder, more than one, or a
+/// linked one.
 pub fn find_app_bundle(dir: &Path) -> Result<PathBuf, Error> {
     let entries = std::fs::read_dir(dir).map_err(|e| Error::from_io("Reading the update", &e))?;
-    let mut apps = entries
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("app")) && p.is_dir());
-    match (apps.next(), apps.next()) {
-        (Some(app), None) => Ok(app),
+    let mut apps = Vec::new();
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if !path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("app"))
+        {
+            continue;
+        }
+        // `symlink_metadata` does not follow a link, unlike `is_dir`.
+        match std::fs::symlink_metadata(&path) {
+            Ok(m) if m.file_type().is_symlink() => {
+                return Err(Error::backend(
+                    "The update archive holds a linked .app bundle.",
+                ));
+            }
+            Ok(m) if m.is_dir() => apps.push(path),
+            _ => {}
+        }
+    }
+    match apps.as_slice() {
+        [app] => Ok(app.clone()),
         _ => Err(Error::backend(
             "The update archive must hold exactly one .app bundle.",
         )),
@@ -264,10 +287,19 @@ mod tests {
     #[test]
     fn nsis_and_msi_commands() {
         let file = Path::new("C:/cache/setup.exe");
+        let sys = Path::new("C:/Windows/System32");
         let custom = ["/S".to_owned(), "/D=C:\\x".to_owned()];
-        let i = windows_install(InstallerKind::Nsis, file, false, true, Some(&custom), false);
+        let i = windows_install(
+            InstallerKind::Nsis,
+            file,
+            false,
+            true,
+            Some(&custom),
+            false,
+            sys,
+        );
         assert_eq!(i.args, custom);
-        let i = windows_install(InstallerKind::Nsis, file, true, false, None, false);
+        let i = windows_install(InstallerKind::Nsis, file, true, false, None, false, sys);
         assert_eq!(i.args, ["/S", "/UPDATE"]);
         let i = windows_install(
             InstallerKind::Msi,
@@ -276,8 +308,9 @@ mod tests {
             true,
             Some(&custom),
             true,
+            sys,
         );
-        assert_eq!(i.program, Path::new("msiexec.exe"));
+        assert_eq!(i.program, sys.join("msiexec.exe"));
         assert_eq!(i.args, ["/i", "C:/c/a.msi", "/quiet", "/norestart"]);
         assert!(i.elevate);
     }
@@ -314,6 +347,14 @@ mod tests {
         std::fs::create_dir_all(unpacked.join("Other.app")).unwrap();
         assert!(find_app_bundle(&unpacked).is_err());
         assert!(find_app_bundle(&unpacked.join("missing")).is_err());
+        // A link named .app is refused, not followed.
+        #[cfg(unix)]
+        {
+            let linked = dir("linked");
+            std::os::unix::fs::symlink(d.join("Demo.app"), linked.join("Evil.app")).unwrap();
+            let err = find_app_bundle(&linked).unwrap_err();
+            assert!(err.message().contains("linked"), "{}", err.message());
+        }
     }
 
     #[test]

@@ -50,6 +50,10 @@ pub(crate) struct SetupOptions {
     pub(crate) argv: Option<Vec<String>>,
     /// Query monitors and the cursor (off on a mock runtime, which has none).
     pub(crate) os_queries: bool,
+    /// Run the updater's OS steps: the Authenticode and code-signature
+    /// checks, the macOS unpack and the installer. Only
+    /// `Builder::skip_updater_os_steps` (feature `test-util`) turns it off.
+    pub(crate) updater_os_steps: bool,
     /// The embedded `dev-app-update.yml` (I.1 `forceDevUpdateConfig`).
     pub(crate) dev_app_update: Option<&'static str>,
 }
@@ -65,6 +69,7 @@ impl std::fmt::Debug for SetupOptions {
             .field("runtime_capabilities", &self.runtime_capabilities)
             .field("main_webview", &self.main_webview)
             .field("os_queries", &self.os_queries)
+            .field("updater_os_steps", &self.updater_os_steps)
             .finish_non_exhaustive()
     }
 }
@@ -413,6 +418,7 @@ pub(crate) fn setup<R: Runtime>(
             argv,
             switches,
             ads_data_dir,
+            user_data_dir: user_data.clone(),
             debug,
             os,
             muid,

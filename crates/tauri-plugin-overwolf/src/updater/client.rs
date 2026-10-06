@@ -18,7 +18,7 @@ use super::verify;
 use super::{
     Availability, DevUpdateConfig, InstallerKind, ProgressInfo, ResolvedConfig, UpdateCheckResult,
     UpdateInfo, UpdaterConfig, check_transport, choose_file, feed_file_name, is_update_available,
-    parse_version, resolve_file_url, staging_bucket,
+    is_uuid_text, os_supports, parse_version, resolve_file_url, staging_bucket,
 };
 use crate::error::{Error, ErrorCode};
 use crate::host::Host;
@@ -70,6 +70,11 @@ pub(crate) struct UpdaterCore {
         expect(dead_code, reason = "the Authenticode check runs on Windows only")
     )]
     warned_unsigned: bool,
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "the Authenticode check runs on Windows only")
+    )]
+    warned_no_publisher: bool,
     /// Serialises downloads: a second `updater_download` waits for the first
     /// and reuses its file.
     download_lock: Arc<tokio::sync::Mutex<()>>,
@@ -289,23 +294,50 @@ impl<R: Runtime> Host<R> {
         })
     }
 
-    /// The staged-rollout bucket of this install, creating `stagingId` in
-    /// `ow-tauri.json` when it is missing or not a UUID (I.2 #5).
+    /// The staged-rollout bucket of this install (I.2 #5). The id lives
+    /// where electron-updater keeps it, `<userData>/.updaterId`, so an
+    /// install that ran the ow-electron build stays in its bucket. It is
+    /// created on first use (only a feed with `stagingPercentage` asks);
+    /// a `stagingId` that an earlier ow-tauri stored in `ow-tauri.json` is
+    /// carried over.
     fn staging_bucket(&self) -> Option<u8> {
-        let stored = self.ow_tauri.get().staging_id;
-        if let Some(bucket) = stored.as_deref().and_then(staging_bucket) {
-            return Some(bucket);
+        let file = self.info.user_data_dir.join(".updaterId");
+        match std::fs::read_to_string(&file) {
+            Ok(id) if is_uuid_text(&id) => return staging_bucket(&id),
+            Ok(_) => self.log(
+                LogLevel::Warn,
+                "updater: the staging user id file exists, but its content is invalid",
+            ),
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => self.log(
+                LogLevel::Warn,
+                &format!(
+                    "updater: could not read the staging user id, creating a new one: {}",
+                    e.kind()
+                ),
+            ),
+            Err(_) => {}
         }
-        let id = uuid::Uuid::new_v4().hyphenated().to_string();
-        let bucket = staging_bucket(&id);
-        let value = id.clone();
-        if let Err(err) = self.ow_tauri.update(|s| s.staging_id = Some(value)) {
+        let id = self
+            .ow_tauri
+            .get()
+            .staging_id
+            .filter(|id| is_uuid_text(id))
+            .unwrap_or_else(|| uuid::Uuid::new_v4().hyphenated().to_string());
+        self.log(LogLevel::Info, &format!("updater: staging user id: {id}"));
+        let written = file
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&file, &id));
+        if let Err(err) = written {
             self.log(
                 LogLevel::Warn,
-                &format!("updater: could not store the staging id: {}", err.kind()),
+                &format!(
+                    "updater: could not store the staging user id: {}",
+                    err.kind()
+                ),
             );
         }
-        bucket
+        staging_bucket(&id)
     }
 
     /// `updater_check` (I.2).
@@ -356,17 +388,37 @@ impl<R: Runtime> Host<R> {
             .map_err(|_| Error::invalid_argument("The update feed is not UTF-8 text."))?;
         let info = parse_feed(&text)?;
         let current = parse_version(&self.info.manifest.version)?;
-        let availability = is_update_available(
-            &current,
-            &info,
-            config.allow_downgrade,
-            config.allow_prerelease,
-            self.staging_bucket(),
-        )?;
-        if availability == Availability::NotInRollout {
-            self.log(
+        let os_release = crate::platform::os_release();
+        let availability =
+            is_update_available(&current, &info, config.allow_downgrade, &os_release, || {
+                self.staging_bucket()
+            })?;
+        match availability {
+            Availability::NotInRollout => self.log(
                 LogLevel::Info,
                 "updater: this install is outside the staged rollout",
+            ),
+            Availability::Unsupported => self.log(
+                LogLevel::Info,
+                &format!(
+                    "updater: the OS version {os_release} is below the minimum OS version {} of version {}",
+                    info.minimum_system_version
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_default(),
+                    info.version
+                ),
+            ),
+            _ => {}
+        }
+        if availability != Availability::SameVersion
+            && os_supports(info.minimum_system_version.as_ref(), &os_release).is_none()
+        {
+            self.log(
+                LogLevel::Warn,
+                &format!(
+                    "updater: could not compare the OS version {os_release} with the minimum OS version; the update is treated as supported"
+                ),
             );
         }
         Ok((info, availability == Availability::Available))
@@ -445,7 +497,9 @@ impl<R: Runtime> Host<R> {
         std::fs::create_dir_all(&dir)
             .map_err(|e| Error::from_io("Creating the update folder", &e))?;
         let name = download_file_name(url.as_str(), extension(kind));
-        let part = dir.join(format!("{name}.part"));
+        // electron-updater's `temp-<name>`: the file keeps its extension,
+        // which the Authenticode check needs (an MSI is recognised by it).
+        let part = dir.join(format!("temp-{name}"));
         let target = dir.join(&name);
         let result = self
             .updater_stream(config, &url, file.size, &file.sha512, &part)
@@ -463,7 +517,7 @@ impl<R: Runtime> Host<R> {
             remove_quietly(&part);
             Error::from_io("Storing the update", &e)
         })?;
-        let app = if kind == InstallerKind::MacZip && self.options.os_queries {
+        let app = if kind == InstallerKind::MacZip && self.options.updater_os_steps {
             match self.updater_unpack_mac(&target, &dir).await {
                 Ok(app) => Some(app),
                 Err(err) => {
@@ -509,8 +563,11 @@ impl<R: Runtime> Host<R> {
         let mut hasher = Sha512::new();
         let mut transferred: u64 = 0;
         let started = Instant::now();
-        let mut last_emit: Option<Instant> = None;
-        let mut emitted: Option<u64> = None;
+        // As electron-updater's ProgressCallbackTransform: the first event
+        // a second after the start, then at most one a second, and a final
+        // one at the end.
+        let mut last_emit = started;
+        let mut emitted: u64 = 0;
         while let Some(chunk) = response.chunk().await.map_err(|e| network(&e))? {
             transferred += chunk.len() as u64;
             if transferred > cap {
@@ -521,18 +578,16 @@ impl<R: Runtime> Host<R> {
             hasher.update(&chunk);
             out.write_all(&chunk)
                 .map_err(|e| Error::from_io("Writing the update file", &e))?;
-            if last_emit.is_none_or(|t| t.elapsed() >= PROGRESS_INTERVAL) {
-                last_emit = Some(Instant::now());
-                emitted = Some(transferred);
-                self.updater_progress(transferred, total.max(transferred), started);
+            if last_emit.elapsed() >= PROGRESS_INTERVAL {
+                last_emit = Instant::now();
+                self.updater_progress(transferred, transferred - emitted, total, started);
+                emitted = transferred;
             }
         }
         out.sync_all()
             .map_err(|e| Error::from_io("Writing the update file", &e))?;
         drop(out);
-        if emitted != Some(transferred) {
-            self.updater_progress(transferred, total.max(transferred), started);
-        }
+        self.updater_progress(transferred, transferred - emitted, total, started);
         if size.is_some_and(|s| s != transferred) {
             return Err(Error::backend(
                 "The update file size does not match the feed.",
@@ -546,9 +601,15 @@ impl<R: Runtime> Host<R> {
         Ok(())
     }
 
-    fn updater_progress(self: &Arc<Self>, transferred: u64, total: u64, started: Instant) {
+    fn updater_progress(
+        self: &Arc<Self>,
+        transferred: u64,
+        delta: u64,
+        total: u64,
+        started: Instant,
+    ) {
         let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let progress = ProgressInfo::new(transferred, total, elapsed);
+        let progress = ProgressInfo::new(transferred, delta, total.max(transferred), elapsed);
         let wire = serde_json::to_value(progress).unwrap_or(Value::Null);
         self.updater_emit("download-progress", Some(("progress", wire)));
     }
@@ -579,8 +640,9 @@ impl<R: Runtime> Host<R> {
             .await
             .map_err(|_| Error::backend("The update signature check failed."))??;
         }
-        if !self.options.os_queries {
-            // Tauri's mock runtime: no OS signature tools.
+        if !self.options.updater_os_steps {
+            // `Builder::skip_updater_os_steps` (test-util): Tauri's mock
+            // runtime has no OS signature tools.
             return Ok(());
         }
         match kind {
@@ -601,6 +663,7 @@ impl<R: Runtime> Host<R> {
     async fn updater_authenticode(self: &Arc<Self>, file: &Path) -> Result<(), Error> {
         let file = file.to_path_buf();
         let names = self.info.config.updater.publisher_names.clone();
+        let ow_certificate = self.info.manifest.build_overwolf.enable_ow_cert_signing;
         let (decision, own_unsigned) = tauri::async_runtime::spawn_blocking(move || {
             let own = std::env::current_exe()
                 .map_err(|e| Error::from_io("Finding the running app", &e))
@@ -609,7 +672,8 @@ impl<R: Runtime> Host<R> {
             if !same_path(&installer.path, &file) {
                 return Err(Error::backend("The signature check read another file."));
             }
-            let decision = verify::decide_publisher(&own, &installer, names.as_deref());
+            let decision =
+                verify::decide_publisher(&own, &installer, names.as_deref(), ow_certificate);
             Ok((decision, !own.is_valid()))
         })
         .await
@@ -623,6 +687,17 @@ impl<R: Runtime> Host<R> {
                     self.log(
                         LogLevel::Warn,
                         "updater: the running app is not signed, so the installer's publisher is not checked; sign the app",
+                    );
+                }
+                Ok(())
+            }
+            verify::PublisherDecision::SkipNoPublisher => {
+                let first = self
+                    .with_core(|c| !std::mem::replace(&mut c.updater.warned_no_publisher, true));
+                if first {
+                    self.log(
+                        LogLevel::Warn,
+                        "updater: the app exe is signed with Overwolf's certificate and updater.publisherNames is not set, so the installer's publisher is not checked; set updater.publisherNames to your certificate's name",
                     );
                 }
                 Ok(())
@@ -663,6 +738,16 @@ impl<R: Runtime> Host<R> {
             )));
         }
         self.with_core(|c| {
+            // electron-updater: `isSilent ? isForceRunAfter :
+            // autoRunAppAfterInstall`.
+            let force_run_after = if silent {
+                force_run_after
+            } else {
+                c.updater
+                    .config
+                    .as_ref()
+                    .is_none_or(|cfg| cfg.auto_run_app_after_install)
+            };
             c.updater.request = Some(InstallRequest {
                 silent,
                 force_run_after,
@@ -708,7 +793,7 @@ impl<R: Runtime> Host<R> {
                 downloaded.kind,
                 InstallerKind::MacZip | InstallerKind::AppImage
             );
-        if !self.options.os_queries {
+        if !self.options.updater_os_steps {
             let record = json!({
                 "file": downloaded.file.to_string_lossy(),
                 "kind": format!("{:?}", downloaded.kind),
@@ -722,6 +807,7 @@ impl<R: Runtime> Host<R> {
                     force_run_after,
                     self.info.config.updater.installer_args.as_deref(),
                     downloaded.admin,
+                    &system32(),
                 ).args,
             });
             self.with_core(|c| c.updater.test_installs.push(record));
@@ -763,6 +849,7 @@ impl<R: Runtime> Host<R> {
                     force_run_after,
                     self.info.config.updater.installer_args.as_deref(),
                     job.admin,
+                    &system32(),
                 );
                 run_windows_install(&plan)
             }
@@ -810,7 +897,10 @@ fn run_tool(
     }
 }
 
-/// Unpacks a macOS update zip with `ditto` and checks the bundle (I.3).
+/// Unpacks a macOS update zip with `ditto` and checks the bundle (I.3),
+/// as Squirrel.Mac does: a valid signature that satisfies the running
+/// app's designated requirement (its bundle identifier and signer), and the
+/// running app's team id.
 fn mac_unpack_and_check(zip: &Path, out: &Path) -> Result<PathBuf, Error> {
     remove_quietly(out);
     std::fs::create_dir_all(out).map_err(|e| Error::from_io("Creating the unpack folder", &e))?;
@@ -822,39 +912,78 @@ fn mac_unpack_and_check(zip: &Path, out: &Path) -> Result<PathBuf, Error> {
         "Unpacking the update",
     )?;
     let app = install::find_app_bundle(out)?;
-    run_tool(
-        std::process::Command::new("/usr/bin/codesign")
-            .args(["--verify", "--deep", "--strict"])
-            .arg(&app),
-        "Checking the update's code signature",
-    )
-    .map_err(|_| Error::backend("The update bundle's code signature is not valid."))?;
-    let team_of = |path: &Path| -> Result<Option<String>, Error> {
+    let exe = std::env::current_exe().map_err(|e| Error::from_io("Finding the running app", &e))?;
+    let running = install::bundle_of(&exe)
+        .ok_or_else(|| Error::unsupported("The running app is not an .app bundle."))?;
+    let codesign_text = |args: &[&str], path: &Path| -> Result<String, Error> {
         let out = std::process::Command::new("/usr/bin/codesign")
-            .args(["-dv", "--verbose=2"])
+            .args(args)
             .arg(path)
             .stdin(std::process::Stdio::null())
             .output()
             .map_err(|e| Error::from_io("Reading a code signature", &e))?;
-        let text = format!(
+        Ok(format!(
             "{}\n{}",
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
-        );
-        Ok(verify::team_identifier(&text))
+        ))
     };
-    let exe = std::env::current_exe().map_err(|e| Error::from_io("Finding the running app", &e))?;
-    let running = install::bundle_of(&exe)
-        .ok_or_else(|| Error::unsupported("The running app is not an .app bundle."))?;
-    let own = team_of(&running)?.ok_or_else(|| {
-        Error::backend("The running app has no team id, so updates cannot be verified.")
+    let requirement = verify::designated_requirement(&codesign_text(&["-d", "-r-"], &running)?)
+        .ok_or_else(|| {
+            Error::backend(
+                "The running app has no designated requirement, so updates cannot be verified.",
+            )
+        })?;
+    run_tool(
+        std::process::Command::new("/usr/bin/codesign")
+            .args(["--verify", "--deep", "--strict"])
+            .arg(format!("-R={requirement}"))
+            .arg(&app),
+        "Checking the update's code signature",
+    )
+    .map_err(|_| {
+        Error::backend(
+            "The update bundle's code signature is not valid or does not satisfy the running app's designated requirement.",
+        )
     })?;
-    match team_of(&app)? {
+    let own = verify::team_identifier(&codesign_text(&["-dv", "--verbose=2"], &running)?)
+        .ok_or_else(|| {
+            Error::backend("The running app has no team id, so updates cannot be verified.")
+        })?;
+    match verify::team_identifier(&codesign_text(&["-dv", "--verbose=2"], &app)?) {
         Some(team) if team == own => Ok(app),
         _ => Err(Error::backend(
             "The update bundle is signed by another team.",
         )),
     }
+}
+
+/// The Windows system folder (`GetSystemDirectoryW`), where
+/// `powershell.exe`'s folder and `msiexec.exe` live. Programs are started
+/// by full path from it, never through the search order, which looks in
+/// the (user-writable) app folder first.
+#[cfg(windows)]
+fn system32() -> PathBuf {
+    use std::os::windows::ffi::OsStringExt as _;
+    let mut buf = vec![0_u16; 512];
+    // SAFETY: the buffer is valid for `len` UTF-16 units.
+    let n = unsafe {
+        windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW(
+            buf.as_mut_ptr(),
+            u32::try_from(buf.len()).unwrap_or(0),
+        )
+    };
+    let n = usize::try_from(n).unwrap_or(0);
+    if n == 0 || n >= buf.len() {
+        return PathBuf::from(r"C:\Windows\System32");
+    }
+    PathBuf::from(std::ffi::OsString::from_wide(&buf[..n]))
+}
+
+/// The system folder elsewhere: only recorded by tests, never started.
+#[cfg(not(windows))]
+fn system32() -> PathBuf {
+    PathBuf::from(r"C:\Windows\System32")
 }
 
 #[cfg(windows)]
@@ -863,24 +992,29 @@ fn same_path(reported: &str, file: &Path) -> bool {
     norm(reported) == norm(&file.to_string_lossy())
 }
 
-/// `Get-AuthenticodeSignature` through PowerShell, as electron-updater runs it.
+/// `Get-AuthenticodeSignature` through PowerShell, as electron-updater runs
+/// it. The path reaches the script through an environment variable, so no
+/// character of it (PowerShell also treats typographic quotes as quotes) is
+/// ever parsed as script.
 #[cfg(windows)]
 fn authenticode(file: &Path) -> Result<verify::Authenticode, Error> {
     use std::os::windows::process::CommandExt as _;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let literal = file.to_string_lossy().replace('\'', "''");
-    let script = format!(
-        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-AuthenticodeSignature -LiteralPath '{literal}' | ConvertTo-Json -Compress"
-    );
-    let out = std::process::Command::new("powershell.exe")
+    const SCRIPT: &str = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-AuthenticodeSignature -LiteralPath $env:OW_TAURI_UPDATE_FILE | ConvertTo-Json -Compress";
+    let powershell = system32()
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
+    let out = std::process::Command::new(powershell)
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-InputFormat",
             "None",
             "-Command",
-            &script,
+            SCRIPT,
         ])
+        .env("OW_TAURI_UPDATE_FILE", file)
         .env("PSModulePath", "")
         .creation_flags(CREATE_NO_WINDOW)
         .stdin(std::process::Stdio::null())

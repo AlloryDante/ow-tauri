@@ -5,6 +5,11 @@
 //! the fields electron-updater reads are then picked out. Field names
 //! inside `files[]` match case-insensitively, because Overwolf's feed
 //! spells `IsAdminRightsRequired` with a capital `I` (observed).
+//!
+//! electron-updater hands the app the parsed YAML objects themselves, so
+//! every other key, and every key spelled differently from the typed field
+//! (`IsAdminRightsRequired`), is kept as written in `extra` and serialised
+//! back next to the typed fields.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -34,6 +39,41 @@ pub struct UpdateFileInfo {
     /// `IsAdminRightsRequired`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_admin_rights_required: Option<bool>,
+    /// The entry's other keys as the feed wrote them, including
+    /// `IsAdminRightsRequired` in Overwolf's spelling.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// The `files[]` keys with a typed field, in their serialised spelling.
+const FILE_KEYS: [&str; 5] = [
+    "url",
+    "sha512",
+    "size",
+    "blockMapSize",
+    "isAdminRightsRequired",
+];
+
+/// The top-level keys with a typed field (and `downloadedFile`, which only
+/// the client sets).
+const INFO_KEYS: [&str; 10] = [
+    "version",
+    "files",
+    "path",
+    "sha512",
+    "releaseDate",
+    "releaseName",
+    "releaseNotes",
+    "stagingPercentage",
+    "minimumSystemVersion",
+    "downloadedFile",
+];
+
+fn extra_keys(map: &Map<String, Value>, typed: &[&str]) -> Map<String, Value> {
+    map.iter()
+        .filter(|(k, _)| !typed.contains(&k.as_str()))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
 }
 
 /// `UpdateInfo` (I.5): a parsed feed file.
@@ -62,10 +102,17 @@ pub struct UpdateInfo {
     /// Staged rollout share, as written in the feed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staging_percentage: Option<Value>,
+    /// The lowest OS release (Node's `os.release()`) the update supports,
+    /// as written in the feed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_system_version: Option<Value>,
     /// The downloaded installer, on `update-downloaded` (electron-updater's
     /// `downloadedFile`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub downloaded_file: Option<String>,
+    /// The feed's other top-level keys, as written.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 fn scalar_text(y: &Yaml) -> Option<String> {
@@ -212,6 +259,7 @@ fn file_entry(value: &Value) -> Result<UpdateFileInfo, Error> {
         size: non_negative(get("size")),
         block_map_size: non_negative(get("blockMapSize")),
         is_admin_rights_required: boolean(get("isAdminRightsRequired")),
+        extra: extra_keys(map, &FILE_KEYS),
     })
 }
 
@@ -277,7 +325,12 @@ pub fn parse_feed(text_in: &str) -> Result<UpdateInfo, Error> {
             .get("stagingPercentage")
             .filter(|v| !v.is_null())
             .cloned(),
+        minimum_system_version: map
+            .get("minimumSystemVersion")
+            .filter(|v| !v.is_null())
+            .cloned(),
         downloaded_file: None,
+        extra: extra_keys(&map, &INFO_KEYS),
     })
 }
 
@@ -310,7 +363,12 @@ releaseName: Autumn
         assert_eq!(f.is_admin_rights_required, Some(false));
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["files"][0]["isAdminRightsRequired"], false);
+        // The key as Overwolf spells it reaches the app too, as in
+        // electron-updater, which hands over the parsed YAML.
+        assert_eq!(json["files"][0]["IsAdminRightsRequired"], false);
         assert!(json.get("downloadedFile").is_none());
+        let back: UpdateInfo = serde_json::from_value(json).unwrap();
+        assert_eq!(back, info);
     }
 
     #[test]
@@ -323,6 +381,24 @@ releaseName: Autumn
         assert_eq!(info.files[0].is_admin_rights_required, Some(true));
         assert_eq!(info.staging_percentage, Some(serde_json::json!(40)));
         assert!(info.release_notes.unwrap().is_array());
+    }
+
+    #[test]
+    fn unknown_keys_are_kept() {
+        let info = parse_feed(
+            "version: 1.0.0\nfiles:\n  - url: a.exe\n    sha512: x\n    arch: x64\nminimumSystemVersion: 10.0.19041\ncustomField:\n  a: 1\ndownloadedFile: /etc/passwd\n",
+        )
+        .unwrap();
+        assert_eq!(
+            info.minimum_system_version,
+            Some(serde_json::json!("10.0.19041"))
+        );
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["files"][0]["arch"], "x64");
+        assert_eq!(json["customField"]["a"], 1);
+        assert_eq!(json["minimumSystemVersion"], "10.0.19041");
+        // Only the client sets downloadedFile.
+        assert!(json.get("downloadedFile").is_none());
     }
 
     #[test]

@@ -302,33 +302,57 @@ pub fn parse_authenticode(text: &str) -> Result<Authenticode, Error> {
 pub enum PublisherDecision {
     /// The installer is signed by an accepted publisher.
     Accept,
-    /// The running executable is unsigned: the check is skipped (warn once).
+    /// No `publisherNames` and the running executable is unsigned: the
+    /// check is skipped (warn once).
     SkipUnsigned,
+    /// No `publisherNames` and the app exe is signed with Overwolf's
+    /// certificate (`enableOWCertSigning`), so its subject is not the
+    /// installer's publisher: the check is skipped (warn once), as
+    /// electron-updater skips it without a `publisherName`.
+    SkipNoPublisher,
     /// The installer fails the check; the message says why.
     Reject(&'static str),
 }
 
 /// Applies the I.3 Windows rule to the reports of the running executable
-/// (`own`) and the downloaded installer, with the configured
-/// `updater.publisherNames` (`None`: the running executable's subject).
+/// (`own`) and the downloaded installer.
+///
+/// - Configured `updater.publisherNames` (`Some`) are always enforced, as
+///   electron-updater enforces `publisherName`.
+/// - Without them, an app exe signed with Overwolf's certificate
+///   (`ow_certificate`: `build.overwolf.enableOWCertSigning`) skips the
+///   check, since Overwolf's subject never signs the installer.
+/// - Otherwise the running executable's own subject is the publisher; an
+///   unsigned running executable skips the check.
 ///
 /// ```
 /// use tauri_plugin_overwolf::updater::verify::{decide_publisher, Authenticode, PublisherDecision};
 /// let signed = |s: &str| Authenticode { status: 0, status_message: String::new(), subject: Some(s.into()), path: String::new() };
 /// let unsigned = Authenticode { status: 2, status_message: String::new(), subject: None, path: String::new() };
-/// assert_eq!(decide_publisher(&signed("CN=A"), &signed("CN=A"), None), PublisherDecision::Accept);
-/// assert_eq!(decide_publisher(&unsigned, &unsigned, None), PublisherDecision::SkipUnsigned);
-/// assert!(matches!(decide_publisher(&signed("CN=A"), &signed("CN=B"), None), PublisherDecision::Reject(_)));
-/// assert!(matches!(decide_publisher(&signed("CN=A"), &unsigned, None), PublisherDecision::Reject(_)));
+/// assert_eq!(decide_publisher(&signed("CN=A"), &signed("CN=A"), None, false), PublisherDecision::Accept);
+/// assert_eq!(decide_publisher(&unsigned, &unsigned, None, false), PublisherDecision::SkipUnsigned);
+/// assert!(matches!(decide_publisher(&signed("CN=A"), &signed("CN=B"), None, false), PublisherDecision::Reject(_)));
+/// assert!(matches!(decide_publisher(&signed("CN=A"), &unsigned, None, false), PublisherDecision::Reject(_)));
+/// // Overwolf's certificate on the app exe, the developer's on the installer.
+/// let ow = signed("CN=Overwolf Ltd");
+/// assert_eq!(decide_publisher(&ow, &signed("CN=Studio"), None, true), PublisherDecision::SkipNoPublisher);
+/// let names = ["Studio".to_owned()];
+/// assert_eq!(decide_publisher(&ow, &signed("CN=Studio"), Some(&names), true), PublisherDecision::Accept);
 /// ```
 #[must_use]
 pub fn decide_publisher(
     own: &Authenticode,
     installer: &Authenticode,
     publisher_names: Option<&[String]>,
+    ow_certificate: bool,
 ) -> PublisherDecision {
-    if !own.is_valid() {
-        return PublisherDecision::SkipUnsigned;
+    if publisher_names.is_none() {
+        if ow_certificate {
+            return PublisherDecision::SkipNoPublisher;
+        }
+        if !own.is_valid() {
+            return PublisherDecision::SkipUnsigned;
+        }
     }
     if !installer.is_valid() {
         return PublisherDecision::Reject("The update installer has no valid signature.");
@@ -354,6 +378,37 @@ pub fn decide_publisher(
     } else {
         PublisherDecision::Reject("The update installer is signed by another publisher.")
     }
+}
+
+/// The designated requirement in the output of `codesign -d -r-` (macOS):
+/// the text after `designated =>`, also when `codesign` marks it implicit
+/// with a leading `#`. Squirrel.Mac requires an update to satisfy the
+/// running app's designated requirement, which names its bundle
+/// identifier and signer.
+///
+/// ```
+/// use tauri_plugin_overwolf::updater::verify::designated_requirement;
+/// let out = "designated => identifier \"com.example.app\" and anchor apple generic\n";
+/// assert_eq!(
+///     designated_requirement(out).as_deref(),
+///     Some("identifier \"com.example.app\" and anchor apple generic")
+/// );
+/// assert_eq!(designated_requirement("# designated => cdhash H\"00\"").as_deref(), Some("cdhash H\"00\""));
+/// assert_eq!(designated_requirement("Executable=/x\n"), None);
+/// ```
+#[must_use]
+pub fn designated_requirement(codesign_output: &str) -> Option<String> {
+    codesign_output
+        .lines()
+        .find_map(|l| {
+            l.trim()
+                .trim_start_matches('#')
+                .trim_start()
+                .strip_prefix("designated =>")
+        })
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(str::to_owned)
 }
 
 /// The `TeamIdentifier` in the output of `codesign -dv` (macOS); `None`
@@ -453,22 +508,37 @@ y/rUw2y8/hOUYjZU71eHp/Wo1KZ40fGy2VJEDl34XMJM+TX48Ss/17u3IvIfbVR1FkZZSNCisQbuQY+b
         let own = signed("CN=Studio Inc, O=Studio Inc, C=PT");
         // Default: the running executable's full subject.
         assert_eq!(
-            decide_publisher(&own, &signed("CN=Studio Inc, O=Studio Inc, C=PT"), None),
+            decide_publisher(
+                &own,
+                &signed("CN=Studio Inc, O=Studio Inc, C=PT"),
+                None,
+                false
+            ),
             PublisherDecision::Accept
         );
         assert!(matches!(
-            decide_publisher(&own, &signed("CN=Studio Inc, O=Other, C=PT"), None),
+            decide_publisher(&own, &signed("CN=Studio Inc, O=Other, C=PT"), None, false),
             PublisherDecision::Reject(_)
         ));
         // Configured names: CN or DN, as electron-updater.
         let names = ["Studio Inc".to_owned()];
         assert_eq!(
-            decide_publisher(&own, &signed("CN=Studio Inc, O=New Owner"), Some(&names)),
+            decide_publisher(
+                &own,
+                &signed("CN=Studio Inc, O=New Owner"),
+                Some(&names),
+                false
+            ),
             PublisherDecision::Accept
         );
         let dn_names = ["CN=Studio Inc, C=PT".to_owned()];
         assert_eq!(
-            decide_publisher(&own, &signed("CN=Studio Inc, O=X, C=PT"), Some(&dn_names)),
+            decide_publisher(
+                &own,
+                &signed("CN=Studio Inc, O=X, C=PT"),
+                Some(&dn_names),
+                false
+            ),
             PublisherDecision::Accept
         );
         let no_subject = Authenticode {
@@ -476,13 +546,33 @@ y/rUw2y8/hOUYjZU71eHp/Wo1KZ40fGy2VJEDl34XMJM+TX48Ss/17u3IvIfbVR1FkZZSNCisQbuQY+b
             ..own.clone()
         };
         assert!(matches!(
-            decide_publisher(&no_subject, &own, None),
+            decide_publisher(&no_subject, &own, None, false),
             PublisherDecision::Reject(_)
         ));
         assert!(matches!(
-            decide_publisher(&own, &no_subject, None),
+            decide_publisher(&own, &no_subject, None, false),
             PublisherDecision::Reject(_)
         ));
+        // Configured names are enforced also when the running app is
+        // unsigned (electron-updater reads publisherName, not the app).
+        let unsigned = Authenticode {
+            status: 2,
+            subject: None,
+            ..own.clone()
+        };
+        assert!(matches!(
+            decide_publisher(&unsigned, &unsigned, Some(&names), false),
+            PublisherDecision::Reject(_)
+        ));
+        assert_eq!(
+            decide_publisher(&unsigned, &own, Some(&names), true),
+            PublisherDecision::Accept
+        );
+        // Overwolf's certificate on the app exe: no default publisher.
+        assert_eq!(
+            decide_publisher(&signed("CN=Overwolf"), &unsigned, None, true),
+            PublisherDecision::SkipNoPublisher
+        );
         assert!(parse_authenticode("{}").is_err());
         assert!(parse_authenticode("").is_err());
         let r = parse_authenticode("\u{feff}{\"Status\":2,\"SignerCertificate\":null}").unwrap();
