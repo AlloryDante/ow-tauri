@@ -733,10 +733,11 @@ export class AdviewRuntime implements FacadeOwadview {
     const el = entry.el;
     const ratio = entry.ratio ?? this.#computedRatio(el);
     if (ratio < VISIBLE_RATIO) return false;
-    const check = (el as HTMLElement & { checkVisibility?: (o?: object) => boolean })
-      .checkVisibility;
-    if (typeof check === 'function')
-      return check.call(el, { opacityProperty: true, visibilityProperty: true });
+    const target = el as HTMLElement & {
+      checkVisibility?: (this: Element, options?: object) => boolean;
+    };
+    if (typeof target.checkVisibility === 'function')
+      return target.checkVisibility({ opacityProperty: true, visibilityProperty: true });
     if (el.getClientRects().length === 0) return false;
     const style = this.#env.window.getComputedStyle(el);
     return style.visibility !== 'hidden' && style.opacity !== '0';

@@ -492,7 +492,7 @@ describe('BrowserWindow (B.2.2)', () => {
         channel: 'scoped',
         args: [],
         sender: { windowId: 1, url: 'app://index.html' },
-      } as HostMessage,
+      } satisfies HostMessage,
       {
         type: 'ipc',
         kind: 'invoke',
@@ -500,7 +500,7 @@ describe('BrowserWindow (B.2.2)', () => {
         channel: 'global',
         args: [],
         sender: { windowId: 1, url: 'app://index.html' },
-      } as HostMessage,
+      } satisfies HostMessage,
     );
     await settle();
     const replies = host
