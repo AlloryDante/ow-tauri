@@ -1,0 +1,56 @@
+{
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "OW-Electron: Main Process",
+      //"preLaunchTask": "npm: build",
+      "sourceMaps": true,
+      "outFiles": [
+        "${workspaceFolder}/dist/**/*.js"
+      ],
+      "runtimeArgs": [
+        ".",
+        "--test-ad",
+        // package DEV env
+        // "--owepm-packages-url=https://electronapi-qa.overwolf.com/v2/packages",
+        "--remote-debugging-port=9222",
+        "--remote-allow-origins=*",
+      ],
+      "outputCapture": "std",
+      "windows": {
+        "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/ow-electron.cmd"
+      },
+      "skipFiles": [
+        "<node_internals>/**/*.js"
+      ],
+      "env": {
+        "ELECTRON_DISABLE_SECURITY_WARNINGS": "true",
+        "ELECTRON_IS_DEV": "1",
+        "OW_CLI_EMAIL" :"",
+        "OW_CLI_API_KEY":"", 
+      }
+    },
+    {
+      "name": "Electron: Renderer",
+      "type": "chrome",
+      "request": "attach",
+      "port": 9222,
+      "webRoot": "${workspaceFolder}",
+      "timeout": 30000
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Electron: All",
+      "configurations": [
+        "OW-Electron: Main Process",
+        "Electron: Renderer"
+      ]
+    }
+  ]
+}

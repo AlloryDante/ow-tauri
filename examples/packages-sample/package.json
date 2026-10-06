@@ -1,0 +1,79 @@
+{
+  "name": "overwolf-official-sample-app",
+  "version": "1.0.0",
+  "description": "overwolf-official-sample-app",
+  "main": "dist/browser/index.js",
+  "author": "Overwolf Ltd.",
+  "license": "MIT",
+  "overwolf": {
+    "packages": [
+      "gep",
+      "utility",
+      "overlay",
+      "recorder"
+    ]
+  },
+  "build": {
+    "nodeGypRebuild": false,
+    "asar": true,
+    "overwolf": {
+      "disableAdOptimization": false
+    },
+    "productName": "Overwolf Electron Official Sample App",
+    "directories": {
+      "output": "build"
+    },
+    "files": [
+      "node_modules/**/*",
+      "dist/**/*",
+      "*.js",
+      "*.html",
+      "*.exe"
+    ],
+    "copyright": "Copyright 2026 Overwolf Ltd.",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "legalTrademarks": "Copyright 2026 Overwolf Ltd."
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "scripts": {
+    "build:renderer": "webpack --config ./webpack.renderer.config.js",
+    "build:main": "webpack --config ./webpack.main.config.js",
+    "build": "yarn webpack --mode=development && yarn build:main && yarn build:renderer",
+    "build:dev": "yarn webpack --watch --mode=development",
+    "build:start": "yarn run build && ow-electron .",
+    "start-ad": "yarn run ow-electron --test-ad .",
+    "build:ow-electron": "dotenv --override --no-expand -- ow-electron-builder --publish=never"
+  },
+  "devDependencies": {
+    "@overwolf/ow-electron": "latest",
+    "@overwolf/ow-electron-builder": "latest",
+    "@overwolf/ow-electron-packages-types": "latest",
+    "@types/node": "^18.11.18",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "html-webpack-plugin": "^5.5.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "ts-loader": "^9.4.2",
+    "typescript": "^4.7.4",
+    "webpack": "^5.75.0",
+    "webpack-cli": "^5.0.1"
+  },
+  "dependencies": {
+    "electron-updater": "5.3.0",
+    "react-router-dom": "^7.5.0"
+  }
+}
