@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-window-load"
+description = "Enables the window_load command without any pre-configured scope."
+commands.allow = ["window_load"]
+
+[[permission]]
+identifier = "deny-window-load"
+description = "Denies the window_load command without any pre-configured scope."
+commands.deny = ["window_load"]

@@ -1,0 +1,14 @@
+"$schema" = "schemas/schema.json"
+
+# UI and overlay windows (`bw-*` webviews). The app grants this set in its own
+# capability file, matched by webview label only.
+[[set]]
+identifier = "renderer"
+description = "Commands of UI and overlay webviews (`bw-*`): the IPC router and `executeJavaScript` results."
+permissions = [
+  "allow-ipc-subscribe",
+  "allow-ipc-invoke",
+  "allow-ipc-send",
+  "allow-ipc-skip",
+  "allow-eval-result",
+]

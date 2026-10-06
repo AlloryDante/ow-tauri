@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-main-ready"
+description = "Enables the main_ready command without any pre-configured scope."
+commands.allow = ["main_ready"]
+
+[[permission]]
+identifier = "deny-main-ready"
+description = "Denies the main_ready command without any pre-configured scope."
+commands.deny = ["main_ready"]

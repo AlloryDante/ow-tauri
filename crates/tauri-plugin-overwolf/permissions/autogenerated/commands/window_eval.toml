@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-window-eval"
+description = "Enables the window_eval command without any pre-configured scope."
+commands.allow = ["window_eval"]
+
+[[permission]]
+identifier = "deny-window-eval"
+description = "Denies the window_eval command without any pre-configured scope."
+commands.deny = ["window_eval"]

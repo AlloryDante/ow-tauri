@@ -56,6 +56,12 @@ md5 = "0.8"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.23"
 log = "0.4"
+# Timers and one-shot replies inside the plugin; tauri already depends on
+# tokio, so this adds no new crate, only the `time` feature.
+tokio = { version = "1", default-features = false, features = ["sync", "time", "macros"] }
+sys-locale = "0.3"
+libc = "0.2"
+windows-sys = { version = "0.61", features = ["Wdk_System_SystemServices", "Win32_System_SystemInformation", "Win32_Foundation"] }
 
 [workspace.lints.rust]
 missing_docs = "deny"

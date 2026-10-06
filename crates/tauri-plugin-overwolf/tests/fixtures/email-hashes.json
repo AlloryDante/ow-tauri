@@ -1,0 +1,115 @@
+{
+  "description": "Shared email-hash test vectors (CONTRACT A.2.2). Normalisation: trim, lower-case; for gmail.com remove dots and any +suffix from the local part. Empty or whitespace input yields no hashes. Used by identity::email_hashes in Rust and generateUserEmailHashes in ow-tauri/main.",
+  "vectors": [
+    {
+      "email": "user@example.com",
+      "normalized": "user@example.com",
+      "hex": {
+        "sha1": "63a710569261a24b3766275b7000ce8d7b32e2f7",
+        "sha256": "b4c9a289323b21a01c3e940f150eb9b8c542587f1abfd8f0e1cc1ffc5e475514",
+        "md5": "b58996c504c5638798eb6b511e6f49af"
+      },
+      "base64": {
+        "sha1": "Y6cQVpJhoks3ZidbcADOjXsy4vc=",
+        "sha256": "tMmiiTI7IaAcPpQPFQ65uMVCWH8av9jw4cwf/F5HVRQ=",
+        "md5": "tYmWxQTFY4eY62tRHm9Jrw=="
+      }
+    },
+    {
+      "email": "  User.Name+Promo@Example.COM ",
+      "normalized": "user.name+promo@example.com",
+      "hex": {
+        "sha1": "57b6d5a442850796abdfaf5981244fc0640d5805",
+        "sha256": "824a8949cf66140e376061c1980be391c1987ca952f652414e97003e239416fa",
+        "md5": "343ee1a39b2088642e79303846c40630"
+      },
+      "base64": {
+        "sha1": "V7bVpEKFB5ar369ZgSRPwGQNWAU=",
+        "sha256": "gkqJSc9mFA43YGHBmAvjkcGYfKlS9lJBTpcAPiOUFvo=",
+        "md5": "ND7ho5sgiGQueTA4RsQGMA=="
+      }
+    },
+    {
+      "email": "jane.doe+ads@gmail.com",
+      "normalized": "janedoe@gmail.com",
+      "hex": {
+        "sha1": "3e12c6d13e5c00d46fee94de65239ce9c5e7bc25",
+        "sha256": "d6117306485ed0e50afab3ac871e98f81699151f30281527d63ff5f233656c69",
+        "md5": "a9601f3839e5d5da764c1861a5e1daf6"
+      },
+      "base64": {
+        "sha1": "PhLG0T5cANRv7pTeZSOc6cXnvCU=",
+        "sha256": "1hFzBkhe0OUK+rOshx6Y+BaZFR8wKBUn1j/18jNlbGk=",
+        "md5": "qWAfODnl1dp2TBhhpeHa9g=="
+      }
+    },
+    {
+      "email": "JaneDoe@GMAIL.com",
+      "normalized": "janedoe@gmail.com",
+      "hex": {
+        "sha1": "3e12c6d13e5c00d46fee94de65239ce9c5e7bc25",
+        "sha256": "d6117306485ed0e50afab3ac871e98f81699151f30281527d63ff5f233656c69",
+        "md5": "a9601f3839e5d5da764c1861a5e1daf6"
+      },
+      "base64": {
+        "sha1": "PhLG0T5cANRv7pTeZSOc6cXnvCU=",
+        "sha256": "1hFzBkhe0OUK+rOshx6Y+BaZFR8wKBUn1j/18jNlbGk=",
+        "md5": "qWAfODnl1dp2TBhhpeHa9g=="
+      }
+    },
+    {
+      "email": "j.a.n.e@googlemail.com",
+      "normalized": "j.a.n.e@googlemail.com",
+      "hex": {
+        "sha1": "6dc2a9066b7c447f95eefe4c0e4ea197399f4936",
+        "sha256": "71441b6ad830149397c2677e4d4eb9b5d6795a7832631ab2ae37fcb119da15d9",
+        "md5": "105a02b683001ed32372aa540aec9b28"
+      },
+      "base64": {
+        "sha1": "bcKpBmt8RH+V7v5MDk6hlzmfSTY=",
+        "sha256": "cUQbatgwFJOXwmd+TU65tdZ5WngyYxqyrjf8sRnaFdk=",
+        "md5": "EFoCtoMAHtMjcqpUCuybKA=="
+      }
+    },
+    {
+      "email": "user+tag@example.org",
+      "normalized": "user+tag@example.org",
+      "hex": {
+        "sha1": "ff424a47e452c829010b4143a2cdb74b7f32bf99",
+        "sha256": "dd874ac9579744e6e7f49041d11b1956c1f11cdeee73474f171e57de21f8df0f",
+        "md5": "d87892681f2bf3dde2d5e0e1f5174131"
+      },
+      "base64": {
+        "sha1": "/0JKR+RSyCkBC0FDos23S38yv5k=",
+        "sha256": "3YdKyVeXRObn9JBB0RsZVsHxHN7uc0dPFx5X3iH43w8=",
+        "md5": "2HiSaB8r893i1eDh9RdBMQ=="
+      }
+    },
+    {
+      "email": "",
+      "normalized": null,
+      "hex": {},
+      "base64": {}
+    },
+    {
+      "email": " \t ",
+      "normalized": null,
+      "hex": {},
+      "base64": {}
+    },
+    {
+      "email": "no-at-sign",
+      "normalized": "no-at-sign",
+      "hex": {
+        "sha1": "4ea63a841668e942fc7b6b05b20f7a6ce347726e",
+        "sha256": "ec2124034dd559ba7864a1dcf4e496fd60809e6c9692c8239fa106c7d7b1fd4b",
+        "md5": "c539c40ecee02ced338cbb63ef430b61"
+      },
+      "base64": {
+        "sha1": "TqY6hBZo6UL8e2sFsg96bONHcm4=",
+        "sha256": "7CEkA03VWbp4ZKHc9OSW/WCAnmyWksgjn6EGx9ex/Us=",
+        "md5": "xTnEDs7gLO0zjLtj70MLYQ=="
+      }
+    }
+  ]
+}

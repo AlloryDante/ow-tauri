@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-disable-ads-optimization"
+description = "Enables the disable_ads_optimization command without any pre-configured scope."
+commands.allow = ["disable_ads_optimization"]
+
+[[permission]]
+identifier = "deny-disable-ads-optimization"
+description = "Denies the disable_ads_optimization command without any pre-configured scope."
+commands.deny = ["disable_ads_optimization"]

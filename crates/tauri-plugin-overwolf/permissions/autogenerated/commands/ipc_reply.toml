@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-ipc-reply"
+description = "Enables the ipc_reply command without any pre-configured scope."
+commands.allow = ["ipc_reply"]
+
+[[permission]]
+identifier = "deny-ipc-reply"
+description = "Denies the ipc_reply command without any pre-configured scope."
+commands.deny = ["ipc_reply"]

@@ -1,0 +1,9 @@
+"$schema" = "schemas/schema.json"
+
+# Grants nothing. Every webview class gets exactly the set its capability names
+# (ARCHITECTURE section 5.2): `overwolf:main` through the plugin's runtime
+# capability for `ow-main`, `overwolf:renderer` through the app's capability
+# for its `bw-*` webviews.
+[default]
+description = "Grants nothing; capabilities name `overwolf:main` or `overwolf:renderer` per webview class."
+permissions = []

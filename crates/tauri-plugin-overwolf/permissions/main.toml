@@ -1,0 +1,45 @@
+"$schema" = "schemas/schema.json"
+
+# The main webview (`ow-main`). Added at runtime by the plugin's `ow-tauri-main`
+# capability, together with the core window and webview permissions the
+# `BrowserWindow` facade calls (see `capabilities.rs`).
+[[set]]
+identifier = "main"
+description = "Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, windows, screen, shell, dialogs, global shortcuts and scoped files."
+permissions = [
+  "allow-ipc-subscribe",
+  "allow-bootstrap",
+  "allow-main-ready",
+  "allow-ipc-main-ready",
+  "allow-app-quit-reply",
+  "allow-app-relaunch",
+  "allow-app-quit",
+  "allow-app-exit",
+  "allow-app-focus",
+  "allow-log",
+  "allow-ipc-reply",
+  "allow-ipc-emit",
+  "allow-disable-anonymous-analytics",
+  "allow-disable-ads-optimization",
+  "allow-disable-ads-fpd",
+  "allow-window-create",
+  "allow-window-load",
+  "allow-window-close-reply",
+  "allow-window-destroy",
+  "allow-window-eval",
+  "allow-window-devtools",
+  "allow-window-set-name",
+  "allow-screen-snapshot",
+  "allow-shell-open-external",
+  "allow-shell-open-path",
+  "allow-shell-show-item-in-folder",
+  "allow-dialog-open",
+  "allow-dialog-save",
+  "allow-dialog-message",
+  "allow-global-shortcut-register",
+  "allow-global-shortcut-unregister",
+  "allow-fs-read-text",
+  "allow-fs-write-text",
+  "allow-fs-exists",
+  "allow-fs-mkdir",
+]

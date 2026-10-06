@@ -9,10 +9,65 @@ license.workspace = true
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
+# Tauri plugins declare `links` so tauri-build can find the permission files
+# this crate's build script generates (DEP_TAURI_PLUGIN_OVERWOLF_*).
+links = "tauri-plugin-overwolf"
+exclude = ["/tests/acl-app/target"]
 
-# Dependencies are added by the implementation lanes from
-# [workspace.dependencies]; the scaffold compiles with none.
+[features]
+# `plugin` is the Tauri plugin itself. Without it the crate is only the
+# manifest parser, the identity functions and the `build` helper, which is
+# what an app's build script needs:
+#   [build-dependencies]
+#   tauri-plugin-overwolf = { version = "0.1", default-features = false }
+default = ["plugin"]
+plugin = [
+  "dep:tauri",
+  "dep:tauri-plugin-opener",
+  "dep:tauri-plugin-dialog",
+  "dep:tauri-plugin-global-shortcut",
+  "dep:tokio",
+  "dep:uuid",
+  "dep:sys-locale",
+  "dep:log",
+]
+# Lets `window_devtools` open devtools in release builds (Tauri `devtools`).
+devtools = ["plugin", "tauri/devtools"]
+# Test hooks for the plugin's own mock-runtime suite and for apps that test
+# their IPC wiring: attach an in-process host-message sink to a webview.
+test-util = ["plugin"]
+
 [dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true, features = ["preserve_order"] }
+thiserror = { workspace = true }
+sha1_smol = { workspace = true }
+sha2 = { workspace = true }
+md5 = { workspace = true }
+base64 = { workspace = true }
+# WHATWG URL parsing for `shell_open_external` checks (pure, also in tests).
+url = { workspace = true }
+
+tauri = { workspace = true, optional = true, features = ["unstable"] }
+tauri-plugin-opener = { workspace = true, optional = true }
+tauri-plugin-dialog = { workspace = true, optional = true }
+tauri-plugin-global-shortcut = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+sys-locale = { workspace = true, optional = true }
+log = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
+[build-dependencies]
+tauri-plugin = { workspace = true, features = ["build"] }
+
+[dev-dependencies]
+tauri = { workspace = true, features = ["unstable", "test"] }
 
 [lints]
 workspace = true

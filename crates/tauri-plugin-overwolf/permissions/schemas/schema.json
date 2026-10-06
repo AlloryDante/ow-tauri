@@ -1,0 +1,786 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PermissionFile",
+  "description": "Permission file that can define a default permission, a set of permissions or a list of inlined permissions.",
+  "type": "object",
+  "properties": {
+    "default": {
+      "description": "The default permission set for the plugin",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/DefaultPermission"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "set": {
+      "description": "A list of permissions sets defined",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/PermissionSet"
+      }
+    },
+    "permission": {
+      "description": "A list of inlined permissions",
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Permission"
+      }
+    }
+  },
+  "definitions": {
+    "DefaultPermission": {
+      "description": "The default permission set of the plugin.\n\nWorks similarly to a permission with the \"default\" identifier.",
+      "type": "object",
+      "required": [
+        "permissions"
+      ],
+      "properties": {
+        "version": {
+          "description": "The version of the permission.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 1.0
+        },
+        "description": {
+          "description": "Human-readable description of what the permission does. Tauri convention is to use `<h4>` headings in markdown content for Tauri documentation generation purposes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permissions": {
+          "description": "All permissions this set contains.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "PermissionSet": {
+      "description": "A set of direct permissions grouped together under a new name.",
+      "type": "object",
+      "required": [
+        "description",
+        "identifier",
+        "permissions"
+      ],
+      "properties": {
+        "identifier": {
+          "description": "A unique identifier for the permission.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Human-readable description of what the permission does.",
+          "type": "string"
+        },
+        "permissions": {
+          "description": "All permissions this set contains.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PermissionKind"
+          }
+        }
+      }
+    },
+    "Permission": {
+      "description": "Descriptions of explicit privileges of commands.\n\nIt can enable commands to be accessible in the frontend of the application.\n\nIf the scope is defined it can be used to fine grain control the access of individual or multiple commands.",
+      "type": "object",
+      "required": [
+        "identifier"
+      ],
+      "properties": {
+        "version": {
+          "description": "The version of the permission.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 1.0
+        },
+        "identifier": {
+          "description": "A unique identifier for the permission.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Human-readable description of what the permission does. Tauri internal convention is to use `<h4>` headings in markdown content for Tauri documentation generation purposes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commands": {
+          "description": "Allowed or denied commands when using this permission.",
+          "default": {
+            "allow": [],
+            "deny": []
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/Commands"
+            }
+          ]
+        },
+        "scope": {
+          "description": "Allowed or denied scoped when using this permission.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Scopes"
+            }
+          ]
+        },
+        "platforms": {
+          "description": "Target platforms this permission applies. By default all platforms are affected by this permission.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Target"
+          }
+        }
+      }
+    },
+    "Commands": {
+      "description": "Allowed and denied commands inside a permission.\n\nIf two commands clash inside of `allow` and `deny`, it should be denied by default.",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "Allowed command.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "deny": {
+          "description": "Denied command, which takes priority.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "Scopes": {
+      "description": "An argument for fine grained behavior control of Tauri commands.\n\nIt can be of any serde serializable type and is used to allow or prevent certain actions inside a Tauri command. The configured scope is passed to the command and will be enforced by the command implementation.\n\n## Example\n\n```json { \"allow\": [{ \"path\": \"$HOME/**\" }], \"deny\": [{ \"path\": \"$HOME/secret.txt\" }] } ```",
+      "type": "object",
+      "properties": {
+        "allow": {
+          "description": "Data that defines what is allowed by the scope.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Value"
+          }
+        },
+        "deny": {
+          "description": "Data that defines what is denied by the scope. This should be prioritized by validation logic.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Value"
+          }
+        }
+      }
+    },
+    "Value": {
+      "description": "All supported ACL values.",
+      "anyOf": [
+        {
+          "description": "Represents a null JSON value.",
+          "type": "null"
+        },
+        {
+          "description": "Represents a [`bool`].",
+          "type": "boolean"
+        },
+        {
+          "description": "Represents a valid ACL [`Number`].",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Number"
+            }
+          ]
+        },
+        {
+          "description": "Represents a [`String`].",
+          "type": "string"
+        },
+        {
+          "description": "Represents a list of other [`Value`]s.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Value"
+          }
+        },
+        {
+          "description": "Represents a map of [`String`] keys to [`Value`]s.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/Value"
+          }
+        }
+      ]
+    },
+    "Number": {
+      "description": "A valid ACL number.",
+      "anyOf": [
+        {
+          "description": "Represents an [`i64`].",
+          "type": "integer",
+          "format": "int64"
+        },
+        {
+          "description": "Represents a [`f64`].",
+          "type": "number",
+          "format": "double"
+        }
+      ]
+    },
+    "Target": {
+      "description": "Platform target.",
+      "oneOf": [
+        {
+          "description": "MacOS.",
+          "type": "string",
+          "enum": [
+            "macOS"
+          ]
+        },
+        {
+          "description": "Windows.",
+          "type": "string",
+          "enum": [
+            "windows"
+          ]
+        },
+        {
+          "description": "Linux.",
+          "type": "string",
+          "enum": [
+            "linux"
+          ]
+        },
+        {
+          "description": "Android.",
+          "type": "string",
+          "enum": [
+            "android"
+          ]
+        },
+        {
+          "description": "iOS.",
+          "type": "string",
+          "enum": [
+            "iOS"
+          ]
+        }
+      ]
+    },
+    "PermissionKind": {
+      "type": "string",
+      "oneOf": [
+        {
+          "description": "Enables the app_exit command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-exit",
+          "markdownDescription": "Enables the app_exit command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_exit command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-exit",
+          "markdownDescription": "Denies the app_exit command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_focus command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-focus",
+          "markdownDescription": "Enables the app_focus command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_focus command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-focus",
+          "markdownDescription": "Denies the app_focus command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_quit command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-quit",
+          "markdownDescription": "Enables the app_quit command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_quit command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-quit",
+          "markdownDescription": "Denies the app_quit command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_quit_reply command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-quit-reply",
+          "markdownDescription": "Enables the app_quit_reply command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_quit_reply command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-quit-reply",
+          "markdownDescription": "Denies the app_quit_reply command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_relaunch command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-relaunch",
+          "markdownDescription": "Enables the app_relaunch command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_relaunch command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-relaunch",
+          "markdownDescription": "Denies the app_relaunch command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the bootstrap command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-bootstrap",
+          "markdownDescription": "Enables the bootstrap command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the bootstrap command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-bootstrap",
+          "markdownDescription": "Denies the bootstrap command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the dialog_message command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-dialog-message",
+          "markdownDescription": "Enables the dialog_message command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the dialog_message command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-dialog-message",
+          "markdownDescription": "Denies the dialog_message command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the dialog_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-dialog-open",
+          "markdownDescription": "Enables the dialog_open command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the dialog_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-dialog-open",
+          "markdownDescription": "Denies the dialog_open command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the dialog_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-dialog-save",
+          "markdownDescription": "Enables the dialog_save command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the dialog_save command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-dialog-save",
+          "markdownDescription": "Denies the dialog_save command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the disable_ads_fpd command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-disable-ads-fpd",
+          "markdownDescription": "Enables the disable_ads_fpd command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the disable_ads_fpd command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-disable-ads-fpd",
+          "markdownDescription": "Denies the disable_ads_fpd command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the disable_ads_optimization command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-disable-ads-optimization",
+          "markdownDescription": "Enables the disable_ads_optimization command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the disable_ads_optimization command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-disable-ads-optimization",
+          "markdownDescription": "Denies the disable_ads_optimization command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the disable_anonymous_analytics command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-disable-anonymous-analytics",
+          "markdownDescription": "Enables the disable_anonymous_analytics command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the disable_anonymous_analytics command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-disable-anonymous-analytics",
+          "markdownDescription": "Denies the disable_anonymous_analytics command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the eval_result command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-eval-result",
+          "markdownDescription": "Enables the eval_result command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the eval_result command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-eval-result",
+          "markdownDescription": "Denies the eval_result command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the fs_exists command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-fs-exists",
+          "markdownDescription": "Enables the fs_exists command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the fs_exists command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-fs-exists",
+          "markdownDescription": "Denies the fs_exists command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the fs_mkdir command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-fs-mkdir",
+          "markdownDescription": "Enables the fs_mkdir command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the fs_mkdir command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-fs-mkdir",
+          "markdownDescription": "Denies the fs_mkdir command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the fs_read_text command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-fs-read-text",
+          "markdownDescription": "Enables the fs_read_text command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the fs_read_text command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-fs-read-text",
+          "markdownDescription": "Denies the fs_read_text command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the fs_write_text command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-fs-write-text",
+          "markdownDescription": "Enables the fs_write_text command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the fs_write_text command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-fs-write-text",
+          "markdownDescription": "Denies the fs_write_text command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the global_shortcut_register command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-global-shortcut-register",
+          "markdownDescription": "Enables the global_shortcut_register command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the global_shortcut_register command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-global-shortcut-register",
+          "markdownDescription": "Denies the global_shortcut_register command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the global_shortcut_unregister command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-global-shortcut-unregister",
+          "markdownDescription": "Enables the global_shortcut_unregister command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the global_shortcut_unregister command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-global-shortcut-unregister",
+          "markdownDescription": "Denies the global_shortcut_unregister command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ipc_emit command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ipc-emit",
+          "markdownDescription": "Enables the ipc_emit command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ipc_emit command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ipc-emit",
+          "markdownDescription": "Denies the ipc_emit command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ipc_invoke command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ipc-invoke",
+          "markdownDescription": "Enables the ipc_invoke command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ipc_invoke command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ipc-invoke",
+          "markdownDescription": "Denies the ipc_invoke command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ipc_main_ready command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ipc-main-ready",
+          "markdownDescription": "Enables the ipc_main_ready command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ipc_main_ready command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ipc-main-ready",
+          "markdownDescription": "Denies the ipc_main_ready command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ipc_reply command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ipc-reply",
+          "markdownDescription": "Enables the ipc_reply command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ipc_reply command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ipc-reply",
+          "markdownDescription": "Denies the ipc_reply command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ipc_send command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ipc-send",
+          "markdownDescription": "Enables the ipc_send command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ipc_send command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ipc-send",
+          "markdownDescription": "Denies the ipc_send command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ipc_skip command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ipc-skip",
+          "markdownDescription": "Enables the ipc_skip command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ipc_skip command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ipc-skip",
+          "markdownDescription": "Denies the ipc_skip command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ipc_subscribe command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ipc-subscribe",
+          "markdownDescription": "Enables the ipc_subscribe command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ipc_subscribe command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ipc-subscribe",
+          "markdownDescription": "Denies the ipc_subscribe command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the log command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-log",
+          "markdownDescription": "Enables the log command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the log command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-log",
+          "markdownDescription": "Denies the log command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the main_ready command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-main-ready",
+          "markdownDescription": "Enables the main_ready command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the main_ready command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-main-ready",
+          "markdownDescription": "Denies the main_ready command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the screen_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-screen-snapshot",
+          "markdownDescription": "Enables the screen_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the screen_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-screen-snapshot",
+          "markdownDescription": "Denies the screen_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the shell_open_external command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-shell-open-external",
+          "markdownDescription": "Enables the shell_open_external command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the shell_open_external command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-shell-open-external",
+          "markdownDescription": "Denies the shell_open_external command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the shell_open_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-shell-open-path",
+          "markdownDescription": "Enables the shell_open_path command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the shell_open_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-shell-open-path",
+          "markdownDescription": "Denies the shell_open_path command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the shell_show_item_in_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-shell-show-item-in-folder",
+          "markdownDescription": "Enables the shell_show_item_in_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the shell_show_item_in_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-shell-show-item-in-folder",
+          "markdownDescription": "Denies the shell_show_item_in_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the window_close_reply command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-window-close-reply",
+          "markdownDescription": "Enables the window_close_reply command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the window_close_reply command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-window-close-reply",
+          "markdownDescription": "Denies the window_close_reply command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the window_create command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-window-create",
+          "markdownDescription": "Enables the window_create command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the window_create command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-window-create",
+          "markdownDescription": "Denies the window_create command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the window_destroy command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-window-destroy",
+          "markdownDescription": "Enables the window_destroy command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the window_destroy command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-window-destroy",
+          "markdownDescription": "Denies the window_destroy command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the window_devtools command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-window-devtools",
+          "markdownDescription": "Enables the window_devtools command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the window_devtools command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-window-devtools",
+          "markdownDescription": "Denies the window_devtools command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the window_eval command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-window-eval",
+          "markdownDescription": "Enables the window_eval command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the window_eval command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-window-eval",
+          "markdownDescription": "Denies the window_eval command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the window_load command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-window-load",
+          "markdownDescription": "Enables the window_load command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the window_load command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-window-load",
+          "markdownDescription": "Denies the window_load command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the window_set_name command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-window-set-name",
+          "markdownDescription": "Enables the window_set_name command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the window_set_name command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-window-set-name",
+          "markdownDescription": "Denies the window_set_name command without any pre-configured scope."
+        },
+        {
+          "description": "Grants nothing; capabilities name `overwolf:main` or `overwolf:renderer` per webview class.",
+          "type": "string",
+          "const": "default",
+          "markdownDescription": "Grants nothing; capabilities name `overwolf:main` or `overwolf:renderer` per webview class."
+        },
+        {
+          "description": "Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, windows, screen, shell, dialogs, global shortcuts and scoped files.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-bootstrap`\n- `allow-main-ready`\n- `allow-ipc-main-ready`\n- `allow-app-quit-reply`\n- `allow-app-relaunch`\n- `allow-app-quit`\n- `allow-app-exit`\n- `allow-app-focus`\n- `allow-log`\n- `allow-ipc-reply`\n- `allow-ipc-emit`\n- `allow-disable-anonymous-analytics`\n- `allow-disable-ads-optimization`\n- `allow-disable-ads-fpd`\n- `allow-window-create`\n- `allow-window-load`\n- `allow-window-close-reply`\n- `allow-window-destroy`\n- `allow-window-eval`\n- `allow-window-devtools`\n- `allow-window-set-name`\n- `allow-screen-snapshot`\n- `allow-shell-open-external`\n- `allow-shell-open-path`\n- `allow-shell-show-item-in-folder`\n- `allow-dialog-open`\n- `allow-dialog-save`\n- `allow-dialog-message`\n- `allow-global-shortcut-register`\n- `allow-global-shortcut-unregister`\n- `allow-fs-read-text`\n- `allow-fs-write-text`\n- `allow-fs-exists`\n- `allow-fs-mkdir`",
+          "type": "string",
+          "const": "main",
+          "markdownDescription": "Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, windows, screen, shell, dialogs, global shortcuts and scoped files.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-bootstrap`\n- `allow-main-ready`\n- `allow-ipc-main-ready`\n- `allow-app-quit-reply`\n- `allow-app-relaunch`\n- `allow-app-quit`\n- `allow-app-exit`\n- `allow-app-focus`\n- `allow-log`\n- `allow-ipc-reply`\n- `allow-ipc-emit`\n- `allow-disable-anonymous-analytics`\n- `allow-disable-ads-optimization`\n- `allow-disable-ads-fpd`\n- `allow-window-create`\n- `allow-window-load`\n- `allow-window-close-reply`\n- `allow-window-destroy`\n- `allow-window-eval`\n- `allow-window-devtools`\n- `allow-window-set-name`\n- `allow-screen-snapshot`\n- `allow-shell-open-external`\n- `allow-shell-open-path`\n- `allow-shell-show-item-in-folder`\n- `allow-dialog-open`\n- `allow-dialog-save`\n- `allow-dialog-message`\n- `allow-global-shortcut-register`\n- `allow-global-shortcut-unregister`\n- `allow-fs-read-text`\n- `allow-fs-write-text`\n- `allow-fs-exists`\n- `allow-fs-mkdir`"
+        },
+        {
+          "description": "Commands of UI and overlay webviews (`bw-*`): the IPC router and `executeJavaScript` results.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-ipc-invoke`\n- `allow-ipc-send`\n- `allow-ipc-skip`\n- `allow-eval-result`",
+          "type": "string",
+          "const": "renderer",
+          "markdownDescription": "Commands of UI and overlay webviews (`bw-*`): the IPC router and `executeJavaScript` results.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-ipc-invoke`\n- `allow-ipc-send`\n- `allow-ipc-skip`\n- `allow-eval-result`"
+        }
+      ]
+    }
+  }
+}

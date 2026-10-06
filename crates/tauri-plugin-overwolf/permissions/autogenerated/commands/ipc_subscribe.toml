@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-ipc-subscribe"
+description = "Enables the ipc_subscribe command without any pre-configured scope."
+commands.allow = ["ipc_subscribe"]
+
+[[permission]]
+identifier = "deny-ipc-subscribe"
+description = "Denies the ipc_subscribe command without any pre-configured scope."
+commands.deny = ["ipc_subscribe"]
