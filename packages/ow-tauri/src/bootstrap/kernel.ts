@@ -17,16 +17,20 @@ import {
   CONTRACT_VERSION,
   PACKAGE_VERSION,
   PLUGIN,
+  RUNTIME_API_VERSION,
   type HostContext,
   type HostMessage,
   type IpcResultMessage,
   type IpcSender,
+  type LifecycleMessage,
   type StateMessage,
+  type WindowMessage,
 } from '../shared/protocol.js';
 import { fromWireError } from '../shared/wire-error.js';
+import type { FacadeKernel, HostMessageHandler } from './facade-kernel.js';
 import { IpcServer, remoteError } from './ipc-main.js';
 import { IpcClient, IpcRenderer } from './ipc-renderer.js';
-import type { KernelServices, LogLevel } from './services.js';
+import type { LogLevel } from './services.js';
 import { StateCache } from './state-cache.js';
 import { tauriTransport, type Transport } from './transport.js';
 import { WindowIdMap } from './window-ids.js';
@@ -36,8 +40,7 @@ export const RUNTIME_GLOBAL = '__OW_TAURI_RUNTIME__';
 /** Name of the snapshot global Rust injects. */
 export const BOOTSTRAP_GLOBAL = '__OW_TAURI_BOOTSTRAP__';
 
-/** Called for each host message of one `type`. */
-export type HostMessageHandler = (message: HostMessage) => void;
+export type { HostMessageHandler } from './facade-kernel.js';
 
 /** Options for {@link Kernel}. */
 export interface KernelOptions {
@@ -76,11 +79,13 @@ function deferred(): Deferred {
 }
 
 /** The per-document runtime. */
-export class Kernel implements KernelServices {
+export class Kernel implements FacadeKernel {
   /** Version of the code that created this kernel. */
   readonly version = PACKAGE_VERSION;
   /** Contract version of the code that created this kernel. */
   readonly contract = CONTRACT_VERSION;
+  /** Facade API version of the code that created this kernel ({@link FacadeKernel}). */
+  readonly api = RUNTIME_API_VERSION;
   /** The state cache (main webview). */
   readonly state = new StateCache();
   /** App-visible window ids. */
@@ -96,6 +101,8 @@ export class Kernel implements KernelServices {
   readonly #mismatch: OwTauriError | undefined;
   readonly #readBootstrap: () => unknown;
   #contextOverride: HostContext | null = null;
+  /** The context detected from the label, captured once (see {@link Kernel.context}). */
+  #detected: HostContext | null = null;
   #generation = 0;
   #subscription: Promise<string> | null = null;
   #inbox: HostMessage[] = [];
@@ -123,9 +130,19 @@ export class Kernel implements KernelServices {
     this.#loadSnapshot();
   }
 
-  /** Where this runtime runs: `'main'`, `'ui'` or `'none'`. */
+  /**
+   * Where this runtime runs: `'main'`, `'ui'` or `'none'`. Detected from the
+   * webview label the first time the label is known and kept for the life of
+   * the document, so page script that edits Tauri's metadata later cannot
+   * change it (the privilege boundary itself is the plugin's ACL).
+   */
   get context(): HostContext {
-    return this.#contextOverride ?? contextOfLabel(this.#transport.label());
+    if (this.#contextOverride) return this.#contextOverride;
+    if (this.#detected) return this.#detected;
+    const label = this.#transport.label();
+    const context = contextOfLabel(label);
+    if (label !== undefined) this.#detected = context;
+    return context;
   }
 
   /** Whether `main_ready` has been acknowledged (main webview). */
@@ -366,6 +383,7 @@ export class Kernel implements KernelServices {
     this.#ready = deferred();
     this.#evalBegun.clear();
     this.#warned.clear();
+    this.#detected = null;
     for (const hook of [...this.#resetHooks]) safeCall(hook);
     this.#loadSnapshot();
   }
@@ -394,7 +412,7 @@ export class Kernel implements KernelServices {
   #dispatch(message: HostMessage): void {
     switch (message.type) {
       case 'ipc':
-        this.#dispatchIpc(message);
+        this.#dispatchIpc(message as unknown as Record<string, unknown>);
         return;
       case 'ipc-result':
         this.client.onResult(message as IpcResultMessage);
@@ -407,7 +425,7 @@ export class Kernel implements KernelServices {
     }
     const handlers = this.#handlers.get(message.type);
     if (!handlers || handlers.size === 0) {
-      this.log('debug', `no handler for host message '${message.type}'`);
+      this.#unclaimed(message);
       return;
     }
     for (const handler of [...handlers])
@@ -436,6 +454,35 @@ export class Kernel implements KernelServices {
       default:
         this.log('debug', `unknown ipc message kind '${String(message['kind'])}'`);
     }
+  }
+
+  /**
+   * Answers requests nobody subscribed to, so the A.6 quit and close
+   * sequences never wait for their 5 s timeouts when the module that would
+   * answer them (`app`, `BrowserWindow`) is not loaded: a quit or close
+   * proceeds, as in Electron when no listener calls `preventDefault()`.
+   */
+  #unclaimed(message: HostMessage): void {
+    if (message.type === 'lifecycle') {
+      const { event, requestId } = message as LifecycleMessage;
+      if ((event === 'before-quit' || event === 'will-quit') && typeof requestId === 'number') {
+        this.#answer('app_quit_reply', { requestId, prevent: false });
+        return;
+      }
+    } else if (message.type === 'window') {
+      const { event, id, requestId } = message as WindowMessage;
+      if (event === 'close' && typeof requestId === 'number' && typeof id === 'number') {
+        this.#answer('window_close_reply', { id, requestId, prevent: false });
+        return;
+      }
+    }
+    this.log('debug', `no handler for host message '${message.type}'`);
+  }
+
+  #answer(command: string, args: Record<string, unknown>): void {
+    this.command(command, args).catch((error: unknown) => {
+      this.log('warn', `${command} failed: ${(error as Error).message}`);
+    });
   }
 
   #applyState(message: StateMessage): void {
@@ -484,11 +531,15 @@ export class Kernel implements KernelServices {
   }
 
   async #announceMainReady(generation: number): Promise<void> {
-    try {
-      await this.command('ipc_main_ready');
-      await this.command('main_ready');
-    } catch (error) {
-      this.log('error', `main webview readiness was not acknowledged: ${(error as Error).message}`);
+    // Each step is sent even when the other failed: analytics and packages
+    // wait for main_ready, IPC for ipc_main_ready.
+    for (const command of ['ipc_main_ready', 'main_ready']) {
+      try {
+        await this.command(command);
+      } catch (error) {
+        this.log('error', `${command} was not acknowledged: ${(error as Error).message}`);
+      }
+      if (generation !== this.#generation) return;
     }
     if (generation !== this.#generation) return;
     this.#isReady = true;

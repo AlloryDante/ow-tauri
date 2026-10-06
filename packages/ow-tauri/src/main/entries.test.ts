@@ -93,12 +93,27 @@ describe('entry points share one runtime (B, ADR 0012)', () => {
     const kernel = attachTo({
       version: '9.9.9',
       contract: CONTRACT_VERSION + 1,
+      api: 1,
       context: 'main',
       evalBegin: () => undefined,
       evalFallback: () => undefined,
     });
     expect(() => {
       kernel.require('main', 'app.quit');
-    }).toThrow(/ow-tauri runtime 9\.9\.9 \(contract 2\) does not match package/);
+    }).toThrow(/ow-tauri runtime 9\.9\.9 \(contract 2, api 1\) does not match package/);
+  });
+
+  it('refuses a runtime whose facade API differs, even with the same contract', () => {
+    const kernel = attachTo({
+      version: '0.1.1',
+      contract: CONTRACT_VERSION,
+      api: 99,
+      context: 'main',
+      evalBegin: () => undefined,
+      evalFallback: () => undefined,
+    });
+    expect(() => {
+      kernel.require('main', 'app.quit');
+    }).toThrow(/\(contract 1, api 99\) does not match package .* api 1\)/);
   });
 });

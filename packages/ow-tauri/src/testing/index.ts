@@ -24,6 +24,7 @@
  */
 import { clearMocks, mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 
+import type { FacadeKernel } from '../bootstrap/facade-kernel.js';
 import { attachRuntime } from '../bootstrap/install.js';
 import { BOOTSTRAP_GLOBAL } from '../bootstrap/kernel.js';
 import {
@@ -34,7 +35,31 @@ import {
   type HostSnapshot,
 } from '../shared/protocol.js';
 
-export type { HostContext, HostMessage, HostSnapshot } from '../shared/protocol.js';
+export type {
+  Display,
+  ElectronPathName,
+  EmbeddedManifest,
+  GlobalShortcutMessage,
+  HostContext,
+  HostMessage,
+  HostSnapshot,
+  IpcHostMessage,
+  IpcHostMessageBase,
+  IpcInvokeMessage,
+  IpcMessageMessage,
+  IpcResultMessage,
+  IpcSendMessage,
+  IpcSender,
+  LifecycleMessage,
+  Point,
+  Rectangle,
+  StateMessage,
+  StatePatch,
+  WindowEventName,
+  WindowMessage,
+} from '../shared/protocol.js';
+export type { OtjValue } from '../shared/otj.js';
+export type { OverwolfErrorWire } from '../shared/wire-error.js';
 
 /**
  * Overrides the detected context of the current document's runtime.
@@ -239,7 +264,7 @@ export function mockHost(options: MockHostOptions = {}): MockHost {
     return implementation ? implementation(args) : null;
   });
 
-  const kernel = attachRuntime();
+  const kernel: FacadeKernel = attachRuntime();
   kernel.setContextOverride(null);
   kernel.reset();
   void kernel.start();

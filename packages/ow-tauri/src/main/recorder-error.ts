@@ -15,6 +15,17 @@ interface ErrorLike {
  * The recorder package's error (upstream
  * `class RecorderError extends Error`). `instanceof RecorderError` and
  * `instanceof Error` both hold.
+ *
+ * @example
+ * ```ts
+ * import { RecorderError } from 'ow-tauri/main';
+ *
+ * try {
+ *   await recorder.startRecording(options);
+ * } catch (error) {
+ *   if (error instanceof RecorderError) console.warn(error.codeStr, error.code);
+ * }
+ * ```
  */
 export class RecorderError extends Error {
   /** Numeric error code reported by the recorder. */

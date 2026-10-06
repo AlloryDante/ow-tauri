@@ -5,7 +5,7 @@
  *
  * @packageDocumentation
  */
-import type { Kernel } from '../bootstrap/kernel.js';
+import type { FacadeKernel } from '../bootstrap/facade-kernel.js';
 
 /** Options of {@link Files.mkdir}. */
 export interface MkdirOptions {
@@ -52,7 +52,7 @@ export interface Files {
  * @returns the `files` object
  * @internal
  */
-export function createFiles(kernel: Kernel): Files {
+export function createFiles(kernel: FacadeKernel): Files {
   return Object.freeze({
     async readText(path: string): Promise<string | null> {
       kernel.require('main', 'files.readText');

@@ -5,7 +5,12 @@
  * @packageDocumentation
  */
 import { OwTauriError } from '../shared/errors.js';
-import { CONTRACT_VERSION, PACKAGE_VERSION, type HostContext } from '../shared/protocol.js';
+import {
+  CONTRACT_VERSION,
+  PACKAGE_VERSION,
+  RUNTIME_API_VERSION,
+  type HostContext,
+} from '../shared/protocol.js';
 import { Kernel, RUNTIME_GLOBAL } from './kernel.js';
 import { createProcessShim } from './process-shim.js';
 
@@ -21,6 +26,8 @@ export interface RuntimeGlobal {
   readonly version: string;
   /** Contract version of the injected runtime. */
   readonly contract: number;
+  /** Facade API version of the injected runtime (`FacadeKernel`). */
+  readonly api: number;
   /** Where the runtime runs. */
   readonly context: HostContext;
   /**
@@ -59,6 +66,7 @@ export function installRuntime(): Kernel {
   const runtime = Object.freeze({
     version: kernel.version,
     contract: kernel.contract,
+    api: kernel.api,
     get context(): HostContext {
       return kernel.context;
     },
@@ -83,8 +91,8 @@ export function installRuntime(): Kernel {
 
 /**
  * Returns the document's kernel for an npm entry point: the installed one
- * when its contract matches, a fresh installation when none exists, and
- * otherwise a private kernel on which every member throws
+ * when its contract and facade API versions match, a fresh installation when
+ * none exists, and otherwise a private kernel on which every member throws
  * `OwTauriError('not-ready')` ("ow-tauri runtime a does not match package b").
  *
  * @returns the kernel
@@ -103,17 +111,25 @@ export function attachRuntime(): Kernel {
  */
 export function attachTo(found: RuntimeGlobal & { [KERNEL]?: Kernel }): Kernel {
   const kernel = found[KERNEL];
-  if (found.contract === CONTRACT_VERSION && kernel instanceof Object) return kernel;
+  if (
+    found.contract === CONTRACT_VERSION &&
+    found.api === RUNTIME_API_VERSION &&
+    kernel instanceof Object
+  )
+    return kernel;
+  const api = typeof found.api === 'number' ? found.api : 'none';
   return new Kernel({
     mismatch: new OwTauriError(
       'not-ready',
-      `ow-tauri runtime ${found.version} (contract ${String(found.contract)}) does not match package ${PACKAGE_VERSION} (contract ${String(CONTRACT_VERSION)})`,
+      `ow-tauri runtime ${found.version} (contract ${String(found.contract)}, api ${String(api)}) does not match package ${PACKAGE_VERSION} (contract ${String(CONTRACT_VERSION)}, api ${String(RUNTIME_API_VERSION)})`,
       {
         data: {
           runtime: found.version,
           runtimeContract: found.contract,
+          runtimeApi: found.api,
           package: PACKAGE_VERSION,
           contract: CONTRACT_VERSION,
+          api: RUNTIME_API_VERSION,
         },
       },
     ),

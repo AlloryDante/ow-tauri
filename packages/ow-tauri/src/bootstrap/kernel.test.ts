@@ -97,6 +97,42 @@ describe('subscription and main readiness (A.2.1)', () => {
     expect(kernel.isReady).toBe(true);
   });
 
+  it('sends main_ready even when ipc_main_ready fails', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    host = mockHost({
+      label: 'ow-main',
+      commands: {
+        ipc_main_ready: () => {
+          throw { code: 'backend', message: 'router down' };
+        },
+      },
+    });
+    await kernel.whenHostReady();
+    expect(host.calls.map((c) => c.command)).toEqual([
+      'ipc_subscribe',
+      'ipc_main_ready',
+      'log',
+      'main_ready',
+    ]);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('ipc_main_ready was not acknowledged'),
+    );
+  });
+
+  it('keeps the context detected from the label for the life of the document', () => {
+    host = mockHost({ label: 'bw-1' });
+    expect(kernel.context).toBe('ui');
+    const internals = (
+      globalThis as unknown as {
+        __TAURI_INTERNALS__: { metadata: { currentWebview: { label: string } } };
+      }
+    ).__TAURI_INTERNALS__;
+    internals.metadata.currentWebview.label = 'ow-main';
+    expect(kernel.context).toBe('ui');
+    kernel.reset();
+    expect(kernel.context).toBe('main');
+  });
+
   it('waits for DOMContentLoaded when the document is still loading', async () => {
     const state = vi.spyOn(document, 'readyState', 'get').mockReturnValue('loading');
     host = mockHost({ label: 'ow-main' });
@@ -154,7 +190,7 @@ describe('host message bus', () => {
     vi.stubGlobal('reportError', report);
     const seen: string[] = [];
     const off = kernel.on('window', (m) => seen.push(`w${String((m as { id: number }).id)}`));
-    kernel.on('lifecycle', () => {
+    const offLifecycle = kernel.on('lifecycle', () => {
       throw new Error('handler');
     });
     host.push(
@@ -167,6 +203,7 @@ describe('host message bus', () => {
     off();
     host.push({ type: 'window', id: 3, event: 'focus' });
     expect(seen).toEqual(['w1', 'w2']);
+    offLifecycle();
     vi.unstubAllGlobals();
   });
 
@@ -179,6 +216,43 @@ describe('host message bus', () => {
     expect(debug).toHaveBeenCalledWith(
       expect.stringContaining("no handler for host message 'mystery'"),
     );
+  });
+});
+
+describe('default answers (A.6)', () => {
+  it('lets quit and close requests proceed when no module claims them', async () => {
+    host = mockHost({ label: 'ow-main' });
+    await settle();
+    host.clearCalls();
+    host.push(
+      { type: 'lifecycle', event: 'before-quit', requestId: 4 },
+      { type: 'lifecycle', event: 'will-quit', requestId: 5 },
+      { type: 'lifecycle', event: 'quit', exitCode: 0 },
+      { type: 'window', id: 3, event: 'close', requestId: 6 },
+      { type: 'window', id: 3, event: 'show' },
+    );
+    await settle();
+    expect(host.callsOf('app_quit_reply')).toEqual([
+      { requestId: 4, prevent: false },
+      { requestId: 5, prevent: false },
+    ]);
+    expect(host.callsOf('window_close_reply')).toEqual([{ id: 3, requestId: 6, prevent: false }]);
+  });
+
+  it('logs a failed default answer', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    host = mockHost({
+      label: 'ow-main',
+      commands: {
+        app_quit_reply: () => {
+          throw { code: 'not-found', message: 'gone' };
+        },
+      },
+    });
+    await settle();
+    host.push({ type: 'lifecycle', event: 'before-quit', requestId: 1 });
+    await settle();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('app_quit_reply failed'));
   });
 });
 
@@ -327,7 +401,7 @@ describe('webContents.executeJavaScript support (A.2.3 window_eval)', () => {
         error: {
           code: 'ipc-remote-error',
           message: 't',
-          data: { name: 'TypeError', message: 't' },
+          data: { name: 'TypeError', message: 't', text: 'TypeError: t' },
         },
       },
       expect.objectContaining({
@@ -342,7 +416,7 @@ describe('webContents.executeJavaScript support (A.2.3 window_eval)', () => {
         error: {
           code: 'ipc-remote-error',
           message: 'r',
-          data: { name: 'RangeError', message: 'r' },
+          data: { name: 'RangeError', message: 'r', text: 'RangeError: r' },
         },
       },
     ]);
@@ -469,6 +543,25 @@ describe('process shim (B.2.5)', () => {
     expect(shim.env['OVERWOLF_APP_UID']).toBeUndefined();
     await kernel.whenHostReady();
     expect(shim.env['OVERWOLF_APP_UID']).toBe('testuid');
+  });
+
+  it("has Electron's type, a microtask nextTick and an assignable env", async () => {
+    host = mockHost({ label: 'bw-1' });
+    const shim = createProcessShim(kernel);
+    expect(shim.type).toBe('renderer');
+    setHostContext('main');
+    expect(shim.type).toBe('browser');
+    setHostContext(null);
+    const tick = vi.fn();
+    shim.nextTick(tick, 1, 2);
+    expect(tick).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(tick).toHaveBeenCalledWith(1, 2);
+    shim.env['NODE_DEBUG'] = 'x';
+    expect(shim.env['NODE_DEBUG']).toBe('x');
+    expect(() => {
+      shim.env['OVERWOLF_APP_UID'] = 'spoofed';
+    }).toThrow(TypeError);
   });
 
   it('falls back without a snapshot', () => {

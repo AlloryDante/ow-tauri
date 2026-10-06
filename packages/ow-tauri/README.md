@@ -16,6 +16,22 @@ Status: the IPC core (section C), the state cache, `ow-tauri/electron`
 `whenHostReady` in `ow-tauri/main`, `ow-tauri/testing` and the typings (B.4)
 are implemented. `app.overwolf`, `autoUpdater` and `<owadview>` are not yet.
 
+## Runtime and facades
+
+The plugin injects the runtime (built from `src/bootstrap/`) into every app
+webview; the entry points above attach to it, so every bundle in a webview
+shares one IPC channel and one set of registries
+([ADR 0012](../../docs/adr/0012-js-runtime-singleton.md)). The entry points may
+use only the `FacadeKernel` interface (`src/bootstrap/facade-kernel.ts`). The
+injected runtime and the npm package are released separately, so an entry
+point attaches only when the runtime reports the same contract version and
+`RUNTIME_API_VERSION`; otherwise every member throws `OwTauriError('not-ready')`.
+Any incompatible change to `FacadeKernel` must increment `RUNTIME_API_VERSION`.
+
+Every module under `dist/bootstrap`, `dist/electron`, `dist/main` and
+`dist/renderer` is listed in `sideEffects`: they register host-message
+handlers and window hooks when imported, so bundlers must not drop them.
+
 ## TypeScript setup
 
 After removing `@overwolf/ow-electron`, point TypeScript at the declarations
@@ -36,6 +52,11 @@ this package ships. The bundler alias `electron -> ow-tauri/electron` and the
 
 `ow-tauri/types` alone (without `paths`) also declares both modules, plus the
 global `Electron` and `overwolf` namespaces.
+
+Unsupported Electron members and modules (`Menu`, `Tray`, `clipboard`,
+`BrowserWindow#setVibrancy`, `dialog.showMessageBoxSync`, ...) are declared
+and marked `@deprecated`, so ported code still compiles and editors flag each
+use; at run time they throw `OwTauriUnsupportedError`.
 
 ## Tests
 

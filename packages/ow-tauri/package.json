@@ -6,7 +6,10 @@
   "author": "ow-tauri contributors",
   "type": "module",
   "sideEffects": [
-    "./dist/renderer/index.js"
+    "./dist/bootstrap/*.js",
+    "./dist/electron/*.js",
+    "./dist/main/*.js",
+    "./dist/renderer/*.js"
   ],
   "exports": {
     "./main": {
