@@ -28,7 +28,7 @@ export function owElectronVersion() {
  */
 export function makeAppDir(appDir, packageJson) {
   mkdirSync(appDir, { recursive: true });
-  for (const file of ['main.cjs', 'index.html', 'page.js']) {
+  for (const file of ['main.cjs', 'scenario.cjs', 'index.html', 'page.js']) {
     copyFileSync(join(harnessDir, 'app', file), join(appDir, file));
   }
   writeFileSync(
@@ -39,10 +39,10 @@ export function makeAppDir(appDir, packageJson) {
 
 /**
  * Launches ow-electron on `appDir` and resolves with its exit status.
- * @param {{appDir: string, switches: string[], env: Record<string, string>, logDir: string, timeoutMs: number}} options
+ * @param {{appDir: string, switches: string[], env: Record<string, string>, logDir: string, timeoutMs: number, onSpawn?: (child: import('node:child_process').ChildProcess) => void}} options
  * @returns {Promise<{code: number | null, signal: string | null, timedOut: boolean, ms: number}>}
  */
-export function launch({ appDir, switches, env, logDir, timeoutMs }) {
+export function launch({ appDir, switches, env, logDir, timeoutMs, onSpawn }) {
   mkdirSync(logDir, { recursive: true });
   const childEnv = { ...process.env, ...env };
   delete childEnv.ELECTRON_RUN_AS_NODE;
@@ -51,6 +51,7 @@ export function launch({ appDir, switches, env, logDir, timeoutMs }) {
     env: childEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  onSpawn?.(child);
   child.stdout.pipe(createWriteStream(join(logDir, 'stdout.log')));
   child.stderr.pipe(createWriteStream(join(logDir, 'stderr.log')));
   return new Promise((resolve) => {

@@ -61,7 +61,10 @@
   };
 
   const params = new URLSearchParams(location.search);
-  const layouts = (params.get('layouts') || '400x600').split(',').filter(Boolean);
+  const layouts = (params.get('layouts') || '400x600').split(',').filter((l) => l && l !== 'none');
+  // Extra attributes: an object for every element, or an array (one per element).
+  const attrs = params.get('attrs') ? JSON.parse(params.get('attrs')) : null;
+  const attrsFor = (index) => (Array.isArray(attrs) ? attrs[index] || {} : attrs || {});
 
   layouts.forEach((layout, index) => {
     const [width, height] = layout.split('x').map(Number);
@@ -77,6 +80,7 @@
     ad.setAttribute('cid', cid);
     ad.setAttribute('slotsize', layout);
     ad.setAttribute('customTracking', JSON.stringify({ parityHarness: layout }));
+    for (const [name, value] of Object.entries(attrsFor(index))) ad.setAttribute(name, value);
     for (const name of EVENTS) {
       ad.addEventListener(name, (event) =>
         report({ kind: 'owadview-event', event: name, cid, layout, info: describeEvent(event) }),
@@ -102,6 +106,38 @@
         attributes: Array.from(ad.attributes, (a) => [a.name, a.value]),
         shadowChildren: root ? Array.from(root.children, (c) => c.tagName.toLowerCase()) : null,
         rect: ad.getBoundingClientRect().toJSON(),
+      });
+    }
+    // Element API surface after attach: own names and the prototype chain up to HTMLElement.
+    for (const ad of document.querySelectorAll('owadview')) {
+      const chain = [];
+      for (
+        let o = Object.getPrototypeOf(ad);
+        o && o !== HTMLElement.prototype;
+        o = Object.getPrototypeOf(o)
+      ) {
+        chain.push({
+          constructor: o.constructor && o.constructor.name,
+          names: Object.getOwnPropertyNames(o),
+        });
+      }
+      report({
+        kind: 'owadview-api',
+        cid: ad.getAttribute('cid'),
+        own: Object.getOwnPropertyNames(ad),
+        chain,
+        types: Object.fromEntries(
+          [
+            'setPageUrl',
+            'sendCommand',
+            'reload',
+            'getWebContentsId',
+            'send',
+            'refreshAd',
+            'setAttribute',
+          ].map((n) => [n, typeof ad[n]]),
+        ),
+        customElement: Boolean(customElements.get('owadview')),
       });
     }
     report({

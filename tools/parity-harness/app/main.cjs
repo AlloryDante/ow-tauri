@@ -27,6 +27,8 @@ const CONFIG_ENV = 'PARITY_HARNESS_CONFIG';
 const config = JSON.parse(fs.readFileSync(process.env[CONFIG_ENV], 'utf8'));
 const runDir = config.runDir;
 const t0 = Date.now();
+/** Round-2 instrumentation (scenario.cjs); set once its dependencies exist. */
+let scenario = null;
 
 /** Append one JSON line to `<runDir>/<file>`. */
 function record(file, entry) {
@@ -80,6 +82,9 @@ const visibilityMethods = [
 ];
 
 const originalShowInactive = BrowserWindow.prototype.showInactive;
+const originalSetOpacity = BrowserWindow.prototype.setOpacity;
+const originalSetIgnoreMouseEvents = BrowserWindow.prototype.setIgnoreMouseEvents;
+const originalSetFocusable = BrowserWindow.prototype.setFocusable;
 for (const method of visibilityMethods) {
   const original = BrowserWindow.prototype[method];
   if (typeof original !== 'function') continue;
@@ -100,12 +105,26 @@ for (const method of visibilityMethods) {
   };
 }
 
-/** Transparent presentation: the window exists on screen for the OS but cannot be seen or hit. */
+// Calls that could make a window visible, hit-testable or focusable again are
+// pinned: opacity stays 0, the mouse is ignored, the window is not focusable.
+const pinned = [
+  ['setOpacity', originalSetOpacity, 0],
+  ['setIgnoreMouseEvents', originalSetIgnoreMouseEvents, true],
+  ['setFocusable', originalSetFocusable, false],
+];
+for (const [method, original, value] of pinned) {
+  BrowserWindow.prototype[method] = function pinnedCall(...args) {
+    record('windows.jsonl', { kind: 'pinned-call', method, windowId: this.id, args: safe(args) });
+    return original.call(this, value);
+  };
+}
+
+/** The window exists for the OS but cannot be seen, hit or focused. */
 function makeInvisible(win) {
   try {
-    win.setOpacity(0);
-    win.setIgnoreMouseEvents(true);
-    win.setFocusable(false);
+    originalSetOpacity.call(win, 0);
+    originalSetIgnoreMouseEvents.call(win, true);
+    originalSetFocusable.call(win, false);
     win.setSkipTaskbar(true);
   } catch (error) {
     log('makeInvisible failed', { error: String(error) });
@@ -120,7 +139,10 @@ function enforceHidden(win) {
     visible: win.isVisible(),
   });
   record('windows.jsonl', { kind: 'created', ...info() });
-  if (config.present === 'transparent') makeInvisible(win);
+  // This handler runs before the constructor applies its options (title,
+  // position, opacity, show; see the calibration in scenario.cjs), so even a
+  // window built with show:true is shown at opacity 0, then hidden below.
+  makeInvisible(win);
   if (config.present === 'hidden' && win.isVisible()) win.hide();
   win.on('show', () => {
     record('windows.jsonl', { kind: 'show-event', ...info() });
@@ -146,6 +168,11 @@ function hookMainProcessNetwork() {
   if (net && typeof net.request === 'function') {
     const originalRequest = net.request.bind(net);
     net.request = function request(options) {
+      if (scenario) {
+        if (typeof options === 'string') options = scenario.rewriteUrl(options);
+        else if (options && typeof options.url === 'string')
+          options = { ...options, url: scenario.rewriteUrl(options.url) };
+      }
       const req = originalRequest(options);
       const entry = { api: 'net.request', options: safe(options), headers: {}, body: [] };
       const setHeader = req.setHeader.bind(req);
@@ -458,6 +485,8 @@ async function dumpCookies(label) {
 app.on('session-created', (ses) => trackSession(ses, 'session-created'));
 
 // --- 6. webContents: CDP network capture, guest inspection -------------------
+// Prefix of the harness's own executeJavaScript code (ipc.jsonl skips it).
+const OWN_MARKER = '/*parity-harness*/';
 const MESSAGE_HOOK = `(() => {
   if (window.__owParityHarnessHooked) return;
   Object.defineProperty(window, '__owParityHarnessHooked', { value: true });
@@ -476,6 +505,21 @@ const MESSAGE_HOOK = `(() => {
         fromSelf: e.source === window, data: summarize(e.data) }));
     } catch (err) {}
   }, true);
+  // Page state changes the host can cause (visibility, focus, size).
+  const state = (reason) => {
+    try {
+      const ow = window.__overwolf__;
+      emit(JSON.stringify({ kind: 'page-state', reason, href: location.href,
+        visibilityState: document.visibilityState, hidden: document.hidden, hasFocus: document.hasFocus(),
+        inner: [innerWidth, innerHeight], dpr: devicePixelRatio,
+        owWindowFocused: ow ? ow.windowFocused : null, owWindowTitle: ow ? ow.windowTitle : null }));
+    } catch (err) {}
+  };
+  for (const name of ['visibilitychange', 'focus', 'blur', 'resize', 'pagehide', 'pageshow', 'freeze', 'resume']) {
+    (name === 'visibilitychange' || name === 'freeze' || name === 'resume' ? document : window)
+      .addEventListener(name, () => state(name), true);
+  }
+  state('hooked');
 })();`;
 
 const GUEST_PROBE = `(() => {
@@ -737,7 +781,7 @@ function safeHost(url) {
 
 async function probeGuest(wc, label) {
   try {
-    const result = await wc.executeJavaScript(GUEST_PROBE, false);
+    const result = await wc.executeJavaScript(OWN_MARKER + GUEST_PROBE, false);
     const index = contentsInfo.get(wc.id).guestIndex;
     writeJson(`guest-${index}-${label}.json`, result);
     record('events.jsonl', { kind: 'guest-probe', webContentsId: wc.id, label, href: result.href });
@@ -809,7 +853,7 @@ function observeContents(wc, via) {
     ev('dom-ready');
     if (isAdGuest(wc)) onGuestDomReady(wc, info);
     else if (/overwolf\.com\/.*\/cmp\//.test(safeUrl(wc) || '')) {
-      wc.executeJavaScript(CMP_PROBE, false)
+      wc.executeJavaScript(OWN_MARKER + CMP_PROBE, false)
         .then((result) =>
           record('cmp-pages.jsonl', { webContentsId: wc.id, type: wc.getType(), ...result }),
         )
@@ -880,7 +924,7 @@ function countLiveLoad(reason, detail) {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents
         .executeJavaScript(
-          `document.querySelectorAll('owadview').forEach((el) => el.remove()); 'removed'`,
+          `${OWN_MARKER}document.querySelectorAll('owadview').forEach((el) => el.remove()); 'removed'`,
         )
         .catch(() => {});
     }
@@ -900,6 +944,25 @@ function handlePageEvent(evt) {
     countLiveLoad(`event:${evt.event}`, { cid: evt.cid });
   }
 }
+
+// --- 7b. Round-2 instrumentation ---------------------------------------------------
+config.appEntry = __filename;
+scenario = require('./scenario.cjs')({
+  config,
+  record,
+  safe,
+  log,
+  t0,
+  makeInvisible,
+  originalShowInactive,
+  callOverwolf,
+  snapshotOverwolf,
+  getMainWindow: () => mainWindow,
+  probeGuest,
+  contentsInfo,
+  ownMarker: OWN_MARKER,
+});
+const featureServerReady = scenario.startFeatureServer();
 
 // --- 8. Lifecycle ---------------------------------------------------------------
 for (const name of [
@@ -926,6 +989,17 @@ async function probeOnly() {
 async function fullRun() {
   snapshotOverwolf('ready');
   trackSession(session.defaultSession, 'defaultSession');
+  scenario.startTicks();
+  if (config.calibrate && !scenario.calibrate()) {
+    // The guard could not be shown to act before a constructor show: drop
+    // every action that opens a window Overwolf builds.
+    config.actions = (config.actions || []).filter((a) => a.do !== 'cmp-open');
+    record('events.jsonl', { kind: 'calibration-failed', note: 'cmp-open actions dropped' });
+  }
+  if (config.skipStartupCalls) {
+    snapshotOverwolf('after-calls');
+    return startWindowAndActions();
+  }
   await callOverwolf('isCMPRequired', () => app.overwolf.isCMPRequired());
   await callOverwolf('packages.hasPendingUpdates', () => app.overwolf.packages.hasPendingUpdates());
   if ((config.packages || []).length > 0) {
@@ -937,15 +1011,26 @@ async function fullRun() {
     );
   }
   snapshotOverwolf('after-calls');
+  return startWindowAndActions();
+}
+
+async function startWindowAndActions() {
   await dumpCookies('startup');
+  setInterval(pollContents, 500).unref();
+  if (config.noWindow) {
+    scenario.runActions();
+    setTimeout(quitFlow, config.durationMs);
+    return;
+  }
 
   const { width, height } = config.window;
+  const [x, y] = config.windowPosition ?? [0, 0];
   mainWindow = new BrowserWindow({
     show: false,
     width,
     height,
-    x: 0,
-    y: 0,
+    x,
+    y,
     title: config.windowTitle,
     ...(config.windowName ? { name: config.windowName } : {}),
     skipTaskbar: true,
@@ -955,10 +1040,23 @@ async function fullRun() {
   if (config.present === 'transparent') {
     makeInvisible(mainWindow);
     BrowserWindow.prototype.showInactive.call(mainWindow);
+    if (config.windowPosition) {
+      // Some window managers move a window on show; put it back and record where it is.
+      mainWindow.setPosition(x, y);
+      record('windows.jsonl', {
+        kind: 'positioned',
+        requested: [x, y],
+        bounds: mainWindow.getBounds(),
+      });
+    }
   }
-  setInterval(pollContents, 500).unref();
-  const query = new URLSearchParams({ layouts: config.layouts.join(','), mode: config.mode });
+  const query = new URLSearchParams({
+    layouts: config.layouts.length ? config.layouts.join(',') : 'none',
+    mode: config.mode,
+    ...(config.elementAttrs ? { attrs: JSON.stringify(config.elementAttrs) } : {}),
+  });
   await mainWindow.loadFile(path.join(__dirname, 'index.html'), { search: query.toString() });
+  scenario.runActions();
 
   for (const at of [30_000, 120_000, 300_000]) {
     if (at < config.durationMs) setTimeout(() => snapshotOverwolf(`t+${at / 1000}s`), at);
@@ -984,9 +1082,10 @@ async function quitFlow() {
   setTimeout(() => app.quit(), config.closeToQuitMs ?? 2000);
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (process.platform === 'darwin' && typeof app.setActivationPolicy === 'function') {
     app.setActivationPolicy('accessory');
   }
+  await featureServerReady;
   return config.probeOnly ? probeOnly() : fullRun();
 });

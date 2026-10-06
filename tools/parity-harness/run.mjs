@@ -7,6 +7,7 @@
 //
 // Output: captures/<run-id>/ (git-ignored).
 
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -19,6 +20,7 @@ import { launch, makeAppDir, owElectronVersion } from './lib/launch.mjs';
 import { waitForQuietMachine } from './lib/load-guard.mjs';
 import { parseNetlog, summarize } from './lib/netlog-parse.mjs';
 import { appDataDir, isolationEnv } from './lib/paths.mjs';
+import { FEATURE_PRESETS, SCENARIOS } from './lib/scenarios.mjs';
 import { electronUid } from './lib/uid.mjs';
 
 const harnessDir = dirname(fileURLToPath(import.meta.url));
@@ -26,6 +28,18 @@ const harnessDir = dirname(fileURLToPath(import.meta.url));
 /** Slot sizes used by Overwolf's official sample. */
 const DEFAULT_LAYOUTS = ['400x600', '400x60', '160x600', '300x250', '728x90', '400x300'];
 const MAX_DURATION_S = 1800;
+const MAX_LONG_DURATION_S = 14 * 3600;
+
+/** Built-in defaults; a --scenario preset overrides them, explicit options override both. */
+const DEFAULTS = {
+  mode: 'test',
+  duration: '90',
+  'max-live-loads': '10',
+  present: 'hidden',
+  home: 'isolated',
+  packages: '',
+  'quit-style': 'close-then-quit',
+};
 
 const USAGE = `Usage: node run.mjs [options]
 
@@ -51,6 +65,23 @@ const USAGE = `Usage: node run.mjs [options]
   --disable-analytics     call app.overwolf.disableAnonymousAnalytics() at startup
   --window-name NAME      BrowserWindow 'name' option for the ad window
   --identity FILE         identity JSON (default: local.identity.json, else neutral example)
+  --scenario NAME         round-2 preset with a timed action script (see README):
+                          ${Object.keys(SCENARIOS).join(', ')}
+  --features PRESET|JSON  answer the consent feature-flag request from a local stand-in:
+                          ${Object.keys(FEATURE_PRESETS).join(', ')},
+                          or a JSON array of {status, body, delayMs}
+  --offline               send nothing to the internet (--proxy-server=127.0.0.1:9;
+                          loopback, used by --features, stays reachable)
+  --offline-allow H1,H2   with --offline: hosts that still go direct (for example
+                          content.overwolf.com so the consent page loads)
+  --position X,Y          move the ad window there after it is shown
+  --overwolf-uid UID      set package.json overwolf.uid
+  --window-monitor        macOS: record this app's windows (CGWindowList) in
+                          window-monitor.jsonl to prove none became visible
+  --allow-long            allow --duration up to ${MAX_LONG_DURATION_S} s (long scenario)
+  --caffeinate            macOS: hold an idle-sleep assertion while the app runs
+  --screencapture         macOS: let 'screencapture' actions capture the main display
+                          (may raise a system screen-recording prompt)
   --run-id ID             capture folder name (default: timestamp + mode)
   --no-wait               do not wait for a quiet machine before launching
   --help`;
@@ -58,17 +89,27 @@ const USAGE = `Usage: node run.mjs [options]
 function parseCli() {
   const { values } = parseArgs({
     options: {
-      mode: { type: 'string', default: 'test' },
+      mode: { type: 'string' },
       'live-ok': { type: 'boolean', default: false },
       layout: { type: 'string' },
-      duration: { type: 'string', default: '90' },
-      'max-live-loads': { type: 'string', default: '10' },
-      present: { type: 'string', default: 'hidden' },
-      home: { type: 'string', default: 'isolated' },
-      packages: { type: 'string', default: '' },
+      duration: { type: 'string' },
+      'max-live-loads': { type: 'string' },
+      present: { type: 'string' },
+      home: { type: 'string' },
+      packages: { type: 'string' },
       webrequest: { type: 'boolean', default: false },
       'no-cdp': { type: 'boolean', default: false },
-      'quit-style': { type: 'string', default: 'close-then-quit' },
+      'quit-style': { type: 'string' },
+      scenario: { type: 'string' },
+      features: { type: 'string' },
+      offline: { type: 'boolean' },
+      'offline-allow': { type: 'string' },
+      position: { type: 'string' },
+      'overwolf-uid': { type: 'string' },
+      'window-monitor': { type: 'boolean', default: false },
+      'allow-long': { type: 'boolean', default: false },
+      caffeinate: { type: 'boolean', default: false },
+      screencapture: { type: 'boolean', default: false },
       'disable-analytics': { type: 'boolean', default: false },
       'window-name': { type: 'string' },
       identity: { type: 'string' },
@@ -85,19 +126,51 @@ function parseCli() {
     console.error(`${message}\n\n${USAGE}`);
     process.exit(2);
   };
+  let scenario = null;
+  if (values.scenario) {
+    scenario = SCENARIOS[values.scenario];
+    if (!scenario) fail(`unknown --scenario ${values.scenario}`);
+    const preset = { ...scenario.defaults };
+    if (preset.quitStyle) preset['quit-style'] = preset.quitStyle;
+    delete preset.quitStyle;
+    for (const [key, value] of Object.entries(preset)) {
+      if (values[key] === undefined)
+        values[key] = typeof value === 'number' ? String(value) : value;
+    }
+  }
+  for (const [key, value] of Object.entries(DEFAULTS)) {
+    if (values[key] === undefined) values[key] = value;
+  }
   if (!['test', 'live'].includes(values.mode)) fail(`--mode must be test or live`);
   if (values.mode === 'live' && !values['live-ok']) fail('--mode live needs --live-ok');
   if (!['hidden', 'transparent'].includes(values.present))
     fail('--present must be hidden or transparent');
   if (!['close-then-quit', 'quit'].includes(values['quit-style'])) fail('bad --quit-style');
   const duration = Number(values.duration);
-  if (!(duration > 0 && duration <= MAX_DURATION_S))
-    fail(`--duration must be 1..${MAX_DURATION_S}`);
-  const layouts = values.layout ? values.layout.split(',') : DEFAULT_LAYOUTS;
+  const maxDuration = values['allow-long'] ? MAX_LONG_DURATION_S : MAX_DURATION_S;
+  if (!(duration > 0 && duration <= maxDuration)) fail(`--duration must be 1..${maxDuration}`);
+  const layouts =
+    values.layout === 'none' ? [] : values.layout ? values.layout.split(',') : DEFAULT_LAYOUTS;
   for (const layout of layouts) if (!/^\d+x\d+$/.test(layout)) fail(`bad layout ${layout}`);
+  let features = null;
+  if (values.features) {
+    features = FEATURE_PRESETS[values.features] ?? null;
+    if (!features) {
+      try {
+        features = JSON.parse(values.features);
+      } catch {
+        fail(`--features must be a preset or a JSON array`);
+      }
+    }
+  }
+  let position = null;
+  if (values.position) {
+    position = values.position.split(',').map(Number);
+    if (position.length !== 2 || position.some((n) => !Number.isFinite(n))) fail('bad --position');
+  }
   const maxLiveLoads = Number(values['max-live-loads']);
   if (!(maxLiveLoads >= 1 && maxLiveLoads <= 50)) fail('--max-live-loads must be 1..50');
-  return { ...values, duration, layouts, maxLiveLoads };
+  return { ...values, duration, layouts, maxLiveLoads, scenarioDef: scenario, features, position };
 }
 
 function windowSize(layouts) {
@@ -150,13 +223,21 @@ async function main() {
     version: identity.version,
     ...(identity.author !== undefined ? { author: identity.author } : {}),
     ...(identity.build ? { build: identity.build } : {}),
-    ...(opts.packages ? { overwolf: { packages: opts.packages.split(',') } } : {}),
+    ...(opts.packages || opts['overwolf-uid']
+      ? {
+          overwolf: {
+            ...(opts.packages ? { packages: opts.packages.split(',') } : {}),
+            ...(opts['overwolf-uid'] ? { uid: opts['overwolf-uid'] } : {}),
+          },
+        }
+      : {}),
   };
   const appDir = join(runDir, 'app');
   makeAppDir(appDir, pkg);
 
   const authorName = typeof pkg.author === 'object' ? pkg.author.name : pkg.author;
-  const expectedUid = identity.uid ?? electronUid(authorName ?? '', displayName(pkg));
+  const expectedUid =
+    opts['overwolf-uid'] ?? identity.uid ?? electronUid(authorName ?? '', displayName(pkg));
   const appData = appDataDir(home);
   const watched = {
     'ow-electron': join(appData, 'ow-electron', expectedUid),
@@ -170,7 +251,20 @@ async function main() {
   );
 
   const netlog = join(runDir, 'netlog.json');
+  const scenarioConfig = opts.scenarioDef?.config ?? {};
+  const wantMonitor = opts['window-monitor'] || scenarioConfig.windowMonitorRequired;
+  const windowMonitor = wantMonitor ? buildWindowMonitor() : null;
+  if (scenarioConfig.windowMonitorRequired && !windowMonitor) {
+    console.error('this scenario needs the window monitor (macOS + swiftc); not running it');
+    process.exit(3);
+  }
   const config = {
+    ...scenarioConfig,
+    scenario: opts.scenario ?? null,
+    features: opts.features ? { match: 'experiments/cmp-eu-only', responses: opts.features } : null,
+    windowPosition: opts.position ?? scenarioConfig.windowPosition ?? null,
+    windowMonitor,
+    screencapture: opts.screencapture,
     runDir,
     mode: opts.mode,
     layouts: opts.layouts,
@@ -193,6 +287,10 @@ async function main() {
     '--net-log-capture-mode=Everything',
     '--use-mock-keychain',
     ...(opts.mode === 'test' ? ['--test-ad'] : []),
+    ...(opts.offline ? ['--proxy-server=127.0.0.1:9'] : []),
+    ...(opts.offline && opts['offline-allow']
+      ? [`--proxy-bypass-list=${opts['offline-allow'].split(',').join(';')}`]
+      : []),
   ];
   const meta = {
     runId,
@@ -217,6 +315,22 @@ async function main() {
     env: { ...homeEnv, PARITY_HARNESS_CONFIG: configPath },
     logDir: runDir,
     timeoutMs: opts.duration * 1000 + 60_000,
+    onSpawn: (child) => {
+      writeFileSync(join(runDir, 'app.pid'), `${child.pid}\n`);
+      if (windowMonitor) {
+        // Started with the app so the very first window is covered.
+        spawn(windowMonitor, [String(child.pid), join(runDir, 'window-monitor.jsonl'), '25'], {
+          stdio: 'ignore',
+        }).unref();
+      }
+      if (opts.caffeinate && process.platform === 'darwin') {
+        // Idle-sleep assertion that ends with the app (-w).
+        spawn('/usr/bin/caffeinate', ['-i', '-w', String(child.pid)], {
+          stdio: 'ignore',
+          detached: true,
+        }).unref();
+      }
+    },
   });
 
   const after = Object.fromEntries(
@@ -239,6 +353,20 @@ async function main() {
   const result = { ...meta, finishedAt: new Date().toISOString(), exit, fileDiff, netlogSummary };
   writeJson(join(runDir, 'meta.json'), result);
   console.log(JSON.stringify({ runDir, exit, netlogSummary }, null, 2));
+}
+
+/**
+ * Compiles lib/window-monitor.swift once (macOS) and returns the binary path,
+ * or null when it cannot be built.
+ */
+function buildWindowMonitor() {
+  if (process.platform !== 'darwin') return null;
+  const source = join(harnessDir, 'lib', 'window-monitor.swift');
+  const binary = join(harnessDir, 'captures', '.tools', 'window-monitor');
+  if (existsSync(binary)) return binary;
+  mkdirSync(dirname(binary), { recursive: true });
+  const result = spawnSync('swiftc', ['-O', source, '-o', binary], { stdio: 'inherit' });
+  return result.status === 0 && existsSync(binary) ? binary : null;
 }
 
 function writeJson(path, value) {
