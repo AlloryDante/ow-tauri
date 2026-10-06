@@ -13,12 +13,36 @@
   WriteRegStr SHCTX "Software\OverwolfElectron\@UID@" "ShortcutName" "${MAINBINARYNAME}.exe"
 !macroend
 
+; SHCTX and $APPDATA as the install mode sets them. Tauri's uninstaller may
+; have switched to the per-user context before the hook (when it deletes the
+; app data), so the install record's context is set again here.
+!macro OW_TAURI_INSTALL_CONTEXT
+  !if "${INSTALLMODE}" == "perMachine"
+    SetShellVarContext all
+  !else if "${INSTALLMODE}" == "both"
+    ${If} $MultiUser.InstallMode == "AllUsers"
+      SetShellVarContext all
+    ${Else}
+      SetShellVarContext current
+    ${EndIf}
+  !else
+    SetShellVarContext current
+  !endif
+!macroend
+
 !macro NSIS_HOOK_POSTUNINSTALL
   ; A real uninstall only: Tauri's updater runs the uninstaller with /UPDATE,
-  ; which sets $UpdateMode, and an update must keep consent and app state.
+  ; which sets $UpdateMode (Tauri's NSIS template), and an update must keep
+  ; consent and app state.
   ${If} $UpdateMode <> 1
-    RMDir /r "$APPDATA\ow-electron\@UID@"
+    !insertmacro OW_TAURI_INSTALL_CONTEXT
     DeleteRegKey SHCTX "Software\OverwolfElectron\@UID@"
+    ; The state folder is per user (%APPDATA% of the user who ran the app),
+    ; also for a per-machine install, whose context would point $APPDATA at
+    ; ProgramData.
+    SetShellVarContext current
+    RMDir /r "$APPDATA\ow-electron\@UID@"
+    !insertmacro OW_TAURI_INSTALL_CONTEXT
 
     ; The machine ids the runtime writes (E.4); empty when it never ran.
     ReadRegStr $R0 HKCU "Software\OverwolfElectron" "MUID"

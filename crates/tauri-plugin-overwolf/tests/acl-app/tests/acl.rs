@@ -883,7 +883,18 @@ fn adview_guest_lifecycle_crash_and_recovery_cap() {
         .unwrap()
         .navigate(page.clone())
         .unwrap();
+    ow.test_page_load(&guest, &page, false);
     ow.test_page_load(&guest, &page, true);
+    // did-finish-load waits for the shim's dom-ready (ow-electron's order).
+    invoke_from(
+        &app,
+        &guest,
+        ADVIEW_PAGE,
+        "adview_event",
+        json!({ "name": "__host:domReady" }),
+    )
+    .unwrap();
+    assert_eq!(ow.test_guest(&guest).unwrap()["domReady"], true);
     // Guest messages reach the embedder; internal ones do not.
     invoke_from(
         &app,
@@ -917,8 +928,9 @@ fn adview_guest_lifecycle_crash_and_recovery_cap() {
         events.contains(&("host".into(), "did-attach".into())),
         "{events:?}"
     );
+    let pos = |name: &str| events.iter().position(|(s, n)| s == "host" && n == name);
     assert!(
-        events.contains(&("host".into(), "did-finish-load".into())),
+        pos("dom-ready").unwrap() < pos("did-finish-load").unwrap(),
         "{events:?}"
     );
     assert!(
@@ -1089,6 +1101,9 @@ fn consent_sequencing() {
     let state: Value =
         serde_json::from_slice(&std::fs::read(ow.state_dir().join("ow-electron.json")).unwrap())
             .unwrap();
+    // F.2: `firstLaunch` (written at Ready) comes before `cmp`.
+    let keys: Vec<&String> = state.as_object().unwrap().keys().collect();
+    assert_eq!(keys, ["firstLaunch", "cmp"]);
     assert_eq!(state["cmp"]["cmpString"], "CQTESTSTRING");
     assert_eq!(
         state["cmp"]["unifiedConsentString"],
@@ -1100,4 +1115,134 @@ fn consent_sequencing() {
     assert!(tauri::async_runtime::block_on(
         handle.overwolf().test_is_cmp_required()
     ));
+}
+
+#[test]
+fn guest_visibility_follows_the_window_and_the_element() {
+    let (app, _) = app("guest-visibility");
+    main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
+    let ow = app.overwolf();
+    let guest = invoke(&app, "bw-1", "adview_mount", mount_body("e1")).unwrap()["guestLabel"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let state = |key: &str| ow.test_guest(&guest).unwrap()[key].clone();
+    assert_eq!(state("visibilityState"), "visible");
+    // Hidden window: hidden document.
+    ow.test_ads_window_visible(1, false);
+    assert_eq!(state("embedderHidden"), true);
+    assert_eq!(state("visibilityState"), "hidden");
+    // An element update while the window is hidden keeps it hidden.
+    invoke(
+        &app,
+        "bw-1",
+        "adview_update",
+        json!({ "elementId": "e1", "visible": true }),
+    )
+    .unwrap();
+    assert_eq!(state("visibilityState"), "hidden");
+    // Shown again: visible again.
+    ow.test_ads_window_visible(1, true);
+    assert_eq!(state("visibilityState"), "visible");
+    // A hidden element stays hidden across a window hide and show.
+    invoke(
+        &app,
+        "bw-1",
+        "adview_update",
+        json!({ "elementId": "e1", "visible": false }),
+    )
+    .unwrap();
+    assert_eq!(state("visibilityState"), "hidden");
+    ow.test_ads_window_visible(1, false);
+    ow.test_ads_window_visible(1, true);
+    assert_eq!(state("visibilityState"), "hidden");
+    invoke(
+        &app,
+        "bw-1",
+        "adview_update",
+        json!({ "elementId": "e1", "visible": true }),
+    )
+    .unwrap();
+    assert_eq!(state("visibilityState"), "visible");
+}
+
+#[test]
+fn page_reload_runs_on_its_own_timer() {
+    let (app, _) = app("guest-reload");
+    main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
+    let ow = app.overwolf();
+    let guest = invoke(&app, "bw-1", "adview_mount", mount_body("e1")).unwrap()["guestLabel"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ow.test_ads_tick(ow.test_now() + 3_100);
+    let page = tauri::Url::parse(ADVIEW_PAGE).unwrap();
+    app.get_webview(&guest)
+        .unwrap()
+        .navigate(page.clone())
+        .unwrap();
+    ow.test_page_load(&guest, &page, true);
+    invoke_from(
+        &app,
+        &guest,
+        ADVIEW_PAGE,
+        "adview_event",
+        json!({ "name": "__host:ready", "data": {} }),
+    )
+    .unwrap();
+    assert_eq!(ow.test_guest(&guest).unwrap()["ready"], true);
+    invoke_from(
+        &app,
+        &guest,
+        ADVIEW_PAGE,
+        "adview_event",
+        json!({ "name": "__host:reload" }),
+    )
+    .unwrap();
+    assert_eq!(ow.test_guest(&guest).unwrap()["reloadScheduled"], true);
+    // About 70 ms later, without a host tick: a new load has started.
+    let start = Instant::now();
+    while ow.test_guest(&guest).unwrap()["reloadScheduled"] == true {
+        assert!(start.elapsed() < Duration::from_secs(2), "reload never ran");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(ow.test_guest(&guest).unwrap()["ready"], false);
+    // A navigation off Overwolf bounces back as a new, watched load.
+    invoke_from(
+        &app,
+        &guest,
+        ADVIEW_PAGE,
+        "adview_event",
+        json!({ "name": "__host:domReady" }),
+    )
+    .unwrap();
+    let off = tauri::Url::parse("https://advertiser.example/landing").unwrap();
+    ow.test_page_load(&guest, &off, false);
+    assert_eq!(ow.test_guest(&guest).unwrap()["domReady"], false);
+}
+
+#[test]
+fn a_custom_cmp_url_may_load_in_the_settings_window_only() {
+    let (app, _) = app("cmp-custom");
+    main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
+    let ow = app.overwolf();
+    // The mock runtime cannot build the window (its preloader is a data:
+    // URL); the navigation policy is set before the window is built.
+    let _ = invoke(
+        &app,
+        "ow-main",
+        "open_cmp_window",
+        json!({ "options": { "cmpURL": "https://cmp.example.test/privacy/settings.html" } }),
+    );
+    let custom = tauri::Url::parse("https://cmp.example.test/privacy/settings.html?tab=x").unwrap();
+    let other = tauri::Url::parse("https://other.example.test/").unwrap();
+    assert!(ow.test_navigation("ow-cmp", &custom));
+    assert!(!ow.test_navigation("ow-cmp", &other));
+    assert!(!ow.test_navigation("ow-cmp-startup", &custom));
+    // Overwolf's own pages stay allowed.
+    let overwolf = tauri::Url::parse(CMP_PAGE).unwrap();
+    assert!(ow.test_navigation("ow-cmp", &overwolf));
 }

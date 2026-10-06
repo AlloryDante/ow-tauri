@@ -37,6 +37,11 @@ const READY_TIMEOUT_MS: u64 = 20_000;
 /// (D.3).
 const RELOAD_DELAY_MS: u64 = 70;
 
+/// A guest's `did-finish-load` waits this long for the shim's `dom-ready`
+/// (ow-electron reports `dom-ready` first); after that it goes alone (a
+/// document without the shim).
+const FINISH_WAIT_MS: u64 = 1_000;
+
 /// One ad guest.
 #[derive(Debug)]
 #[expect(clippy::struct_excessive_bools, reason = "independent per-guest flags")]
@@ -54,6 +59,17 @@ pub(crate) struct Guest {
     pub(crate) nav_started_ms: Option<u64>,
     /// `__host:ready` arrived for the current document.
     pub(crate) ready: bool,
+    /// `__host:domReady` arrived for the current document.
+    pub(crate) dom_ready: bool,
+    /// The platform reported the current document loaded before
+    /// `dom-ready` (when): `did-finish-load` waits for it.
+    pub(crate) finish_pending: Option<u64>,
+    /// The random window property of the shim's host API (D.5).
+    pub(crate) host_key: String,
+    /// The embedder window is hidden.
+    pub(crate) embedder_hidden: bool,
+    /// The visibility the shim reports to the page (`visible` when true).
+    pub(crate) sent_visible: bool,
     /// Last load or recovery (`sessionTS`, E.2 #8).
     pub(crate) last_load_ms: u64,
     pub(crate) loads: u32,
@@ -69,6 +85,16 @@ pub(crate) struct Guest {
     pub(crate) retry_at: Option<u64>,
     pub(crate) send_command_logged: bool,
     pub(crate) apply_setting_logged: bool,
+}
+
+impl Guest {
+    /// A new document load starts: readiness and `dom-ready` start over.
+    pub(crate) fn begin_load(&mut self, now: u64) {
+        self.ready = false;
+        self.dom_ready = false;
+        self.finish_pending = None;
+        self.nav_started_ms = Some(now);
+    }
 }
 
 /// The ads service state, inside the host's core lock.
@@ -105,9 +131,11 @@ enum Next {
     Close,
     Crash,
     Mute(bool),
-    DomReady(String, String),
+    /// `dom-ready`, then `did-finish-load` when the load already finished.
+    DomReady(String, String, bool),
     Ready(Option<String>),
     Log(&'static str),
+    ScheduleReload,
 }
 
 /// Platform reports for guests and consent windows, routed to the host.
@@ -225,10 +253,13 @@ impl<R: Runtime> Host<R> {
         clippy::too_many_lines,
         reason = "one linear setup sequence (D.1, D.2, D.8.1)"
     )]
+    /// `document_title` is the embedder document's `document.title`
+    /// (`windowTitle`, D.2); the native window title stands in without it.
     pub(crate) fn mount_guest(
         self: &Arc<Self>,
         embedder: &Webview<R>,
         mount: AdviewMount,
+        document_title: Option<String>,
     ) -> Result<String, Error> {
         if !valid_element_id(&mount.element_id) || !valid_rect(&mount.rect) {
             return Err(Error::invalid_argument("Invalid element id or rectangle."));
@@ -249,8 +280,11 @@ impl<R: Runtime> Host<R> {
             guest_label(&embedder_label, c.ads.next)
         });
         let window_name = self.embedder_window_name(&embedder_label);
-        let window_title = window.title().unwrap_or_default();
+        let window_title = document_title.unwrap_or_else(|| window.title().unwrap_or_default());
         let focused = window.is_focused().unwrap_or(false);
+        let embedder_hidden = !window.is_visible().unwrap_or(true);
+        let sent_visible = mount.visible && !embedder_hidden;
+        let host_key = format!("_{}", uuid::Uuid::new_v4().simple());
         let flags = self.with_core(|c| c.flags);
         let system_info = self.system_info();
         let facts = GuestFacts {
@@ -271,7 +305,10 @@ impl<R: Runtime> Host<R> {
             attributes: &mount.attributes,
             slot_id: &label,
         };
-        let config = guest_config(&facts, mount.visible);
+        let mut config = guest_config(&facts, sent_visible);
+        if let Value::Object(m) = &mut config {
+            m.insert("hostKey".into(), Value::from(host_key.as_str()));
+        }
         let script =
             splice_config(ADVIEW_HOST_JS, ADVIEW_CONFIG_TOKEN, &config).unwrap_or_else(|| {
                 self.log(
@@ -327,6 +364,11 @@ impl<R: Runtime> Host<R> {
             navigated: false,
             nav_started_ms: None,
             ready: false,
+            dom_ready: false,
+            finish_pending: None,
+            host_key,
+            embedder_hidden,
+            sent_visible,
             last_load_ms: now,
             loads: 0,
             recoveries: 0,
@@ -402,10 +444,7 @@ impl<R: Runtime> Host<R> {
                     );
                     return;
                 }
-                self.guest_eval(
-                    label,
-                    &deliver_script("ad-clicked", Some(&Value::from(url.as_str()))),
-                );
+                self.guest_deliver(label, "ad-clicked", Some(&Value::from(url.as_str())));
                 self.host_event(
                     &embedder,
                     &element_id,
@@ -440,18 +479,47 @@ impl<R: Runtime> Host<R> {
         self.with_core(|c| c.router.push(embedder, message));
     }
 
-    fn guest_eval(&self, label: &str, script: &str) {
-        if let Some(w) = self.app.get_webview(label) {
-            let _ = w.eval(script);
+    /// Calls the shim's host function `function` in the guest `label`.
+    fn guest_call(self: &Arc<Self>, label: &str, function: &str, arg: &Value) {
+        let key = self.with_core(|c| c.ads.guests.get(label).map(|g| g.host_key.clone()));
+        if let (Some(key), Some(w)) = (key, self.app.get_webview(label)) {
+            let _ = w.eval(host_call_script(&key, function, arg));
+        }
+    }
+
+    /// Delivers one host message to the guest `label` (D.5).
+    fn guest_deliver(self: &Arc<Self>, label: &str, kind: &str, data: Option<&Value>) {
+        let key = self.with_core(|c| c.ads.guests.get(label).map(|g| g.host_key.clone()));
+        if let (Some(key), Some(w)) = (key, self.app.get_webview(label)) {
+            let _ = w.eval(deliver_script(&key, kind, data));
         }
     }
 
     /// Delivers a host message to every guest (D.5).
     pub(crate) fn deliver_to_guests(self: &Arc<Self>, kind: &str, data: Option<&Value>) {
         let labels: Vec<String> = self.with_core(|c| c.ads.guests.keys().cloned().collect());
-        let script = deliver_script(kind, data);
         for l in labels {
-            self.guest_eval(&l, &script);
+            self.guest_deliver(&l, kind, data);
+        }
+    }
+
+    /// Tells the shim of `label` its visibility (`document.visibilityState`,
+    /// D.5): visible when the element is visible and its window is shown.
+    /// Sends only a change, unless `force` (a new document).
+    fn sync_visibility(self: &Arc<Self>, label: &str, force: bool) {
+        let send = self.with_core(|c| {
+            c.ads.guests.get_mut(label).and_then(|g| {
+                let visible = g.visible && !g.embedder_hidden;
+                let changed = std::mem::replace(&mut g.sent_visible, visible) != visible;
+                (changed || force).then_some(visible)
+            })
+        });
+        if let Some(visible) = send {
+            self.guest_call(
+                label,
+                "setVisibility",
+                &Value::from(if visible { "visible" } else { "hidden" }),
+            );
         }
     }
 
@@ -497,11 +565,8 @@ impl<R: Runtime> Host<R> {
             });
             if changed && let Some(wv) = &webview {
                 let _ = if visible { wv.show() } else { wv.hide() };
-                let _ = wv.eval(host_call_script(
-                    "setVisibility",
-                    &Value::from(if visible { "visible" } else { "hidden" }),
-                ));
             }
+            self.sync_visibility(&label, false);
         }
         if let Some(patch) = update.attributes {
             self.apply_attribute_patch(&label, patch);
@@ -525,10 +590,10 @@ impl<R: Runtime> Host<R> {
             }
         });
         if let Some(t) = tracking {
-            self.guest_eval(label, &deliver_script("customTracking", Some(&t)));
+            self.guest_deliver(label, "customTracking", Some(&t));
         }
         if let Some(p) = patch.pageurl {
-            self.guest_eval(label, &host_call_script("setNextPageUrl", &Value::from(p)));
+            self.guest_call(label, "setNextPageUrl", &Value::from(p));
         }
     }
 
@@ -607,6 +672,10 @@ impl<R: Runtime> Host<R> {
     }
 
     /// Reloads a guest's ad document (a new load, `sessionTS` restarts).
+    /// On Windows a native reload, which the request handler shapes again;
+    /// on macOS and Linux a new shaped load of the ad document, because a
+    /// native reload may not repeat the `Referer` and `Origin` that only
+    /// the shaped load request carries (D.8.3).
     pub(crate) fn reload_guest(self: &Arc<Self>, label: &str) {
         let now = self.now();
         let started = self.with_core(|c| {
@@ -614,14 +683,33 @@ impl<R: Runtime> Host<R> {
                 if !g.navigated {
                     return false;
                 }
-                g.ready = false;
-                g.nav_started_ms = Some(now);
+                g.begin_load(now);
                 g.reload_at = None;
                 true
             })
         });
-        if started && let Some(w) = self.app.get_webview(label) {
-            let _ = w.reload();
+        if !started {
+            return;
+        }
+        if cfg!(windows) {
+            if let Some(w) = self.app.get_webview(label) {
+                let _ = w.reload();
+            }
+        } else {
+            self.navigate_guest(label);
+        }
+    }
+
+    /// Runs a reload `__overwolf__.reload()` scheduled, once it is due.
+    fn run_due_reload(self: &Arc<Self>, label: &str) {
+        let now = self.now();
+        let due = self.with_core(|c| {
+            c.ads.guests.get_mut(label).is_some_and(|g| {
+                g.reload_at.is_some_and(|t| now >= t) && g.reload_at.take().is_some()
+            })
+        });
+        if due {
+            self.reload_guest(label);
         }
     }
 
@@ -648,19 +736,26 @@ impl<R: Runtime> Host<R> {
     pub(crate) fn ads_tick(self: &Arc<Self>, now: u64) {
         let gate = self.consent_gate_open();
         let retry_ms = self.info.config.ads.load_error_retry_ms;
-        let (navigate, reload, failed, logs) = self.with_core(|c| {
+        let (navigate, reload, failed, finished, logs) = self.with_core(|c| {
             let mut navigate = Vec::new();
             let mut reload = Vec::new();
             let mut failed = Vec::new();
+            let mut finished = Vec::new();
             let mut logs = Vec::new();
             for (label, g) in &mut c.ads.guests {
                 if !g.navigated {
                     if gate || now.saturating_sub(g.mounted_ms) >= CONSENT_WAIT_MS {
                         g.navigated = true;
-                        g.nav_started_ms = Some(now);
+                        g.begin_load(now);
                         navigate.push(label.clone());
                     }
                     continue;
+                }
+                if g.finish_pending
+                    .is_some_and(|t| now.saturating_sub(t) >= FINISH_WAIT_MS)
+                {
+                    g.finish_pending = None;
+                    finished.push((g.embedder.clone(), g.element_id.clone()));
                 }
                 if g.reload_at.is_some_and(|t| now >= t) || g.retry_at.is_some_and(|t| now >= t) {
                     g.reload_at = None;
@@ -679,7 +774,7 @@ impl<R: Runtime> Host<R> {
                     logs.push((label.clone(), n));
                 }
             }
-            (navigate, reload, failed, logs)
+            (navigate, reload, failed, finished, logs)
         });
         for l in navigate {
             self.navigate_guest(&l);
@@ -694,6 +789,9 @@ impl<R: Runtime> Host<R> {
                 "did-fail-load",
                 Some(fail_load_data(-7, "ERR_TIMED_OUT", ADVIEW_URL, true)),
             );
+        }
+        for (embedder, element_id) in finished {
+            self.host_event(&embedder, &element_id, "did-finish-load", None);
         }
         for (l, n) in logs {
             self.log(
@@ -725,6 +823,7 @@ impl<R: Runtime> Host<R> {
             c.ads.guests.get_mut(label).map(|g| {
                 g.ready = false;
                 g.nav_started_ms = None;
+                g.finish_pending = None;
                 g.retry_at = Some(now + retry);
                 (g.embedder.clone(), g.element_id.clone())
             })
@@ -802,56 +901,72 @@ impl<R: Runtime> Host<R> {
         true
     }
 
-    /// A page load of a guest (B.3.5, D.5).
+    /// A page load of a guest (B.3.5, D.5). `did-finish-load` follows the
+    /// shim's `dom-ready`, as in ow-electron.
     pub(crate) fn guest_page_load(self: &Arc<Self>, label: &str, event: PageLoadEvent, url: &Url) {
         let known = self.with_core(|c| c.ads.guests.contains_key(label));
         if !known || url.scheme() == "about" {
             return;
         }
+        let now = self.now();
         if !is_overwolf_url(url) {
             if event == PageLoadEvent::Started {
                 // A top-level navigation off Overwolf (D.7): a click with a
-                // gesture opens externally; the guest goes back to the ad page.
+                // gesture opens externally; the guest goes back to the ad
+                // page, a new load the readiness timeout watches.
                 self.guest_open_external(label, url, "navigation");
+                self.with_core(|c| {
+                    if let Some(g) = c.ads.guests.get_mut(label) {
+                        g.begin_load(now);
+                    }
+                });
                 self.navigate_guest(label);
             }
             return;
         }
-        if event != PageLoadEvent::Finished {
+        if event == PageLoadEvent::Started {
+            self.with_core(|c| {
+                if let Some(g) = c.ads.guests.get_mut(label) {
+                    g.dom_ready = false;
+                    g.finish_pending = None;
+                }
+            });
             return;
         }
-        let now = self.now();
         let info = self.with_core(|c| {
             c.ads.guests.get_mut(label).map(|g| {
                 g.loads += 1;
                 g.last_load_ms = now;
                 g.retry_at = None;
+                let finish_now = g.dom_ready;
+                if !finish_now {
+                    g.finish_pending = Some(now);
+                }
                 (
                     g.embedder.clone(),
                     g.element_id.clone(),
-                    g.visible,
+                    finish_now,
                     (g.loads > 1 && g.tracking_changed)
                         .then(|| g.attributes.custom_tracking.clone()),
                 )
             })
         });
-        let Some((embedder, element_id, visible, tracking)) = info else {
+        let Some((embedder, element_id, finish_now, tracking)) = info else {
             return;
         };
         if let Some(w) = self.app.get_webview(label) {
             // ow-electron mutes, and signals visibility and focus, on every load.
             let _ = crate::platform::webview::set_muted(&w, true);
-            let _ = w.eval(host_call_script(
-                "setVisibility",
-                &Value::from(if visible { "visible" } else { "hidden" }),
-            ));
+            self.sync_visibility(label, true);
             let focused = w.window().is_focused().unwrap_or(false);
-            let _ = w.eval(host_call_script("setEmbedderFocus", &Value::Bool(focused)));
+            self.guest_call(label, "setEmbedderFocus", &Value::Bool(focused));
             if let Some(t) = tracking {
-                let _ = w.eval(deliver_script("customTracking", Some(&t)));
+                self.guest_deliver(label, "customTracking", Some(&t));
             }
         }
-        self.host_event(&embedder, &element_id, "did-finish-load", None);
+        if finish_now {
+            self.host_event(&embedder, &element_id, "did-finish-load", None);
+        }
     }
 
     /// `adview_event` from the guest `label` (A.2.6, D.4).
@@ -933,10 +1048,12 @@ impl<R: Runtime> Host<R> {
                 Some(InternalEvent::Crash) => Next::Crash,
                 Some(InternalEvent::Reload) => {
                     g.reload_at = Some(now + RELOAD_DELAY_MS);
-                    Next::Nothing
+                    Next::ScheduleReload
                 }
                 Some(InternalEvent::DomReady) => {
-                    Next::DomReady(g.embedder.clone(), g.element_id.clone())
+                    g.dom_ready = true;
+                    let finish = g.finish_pending.take().is_some();
+                    Next::DomReady(g.embedder.clone(), g.element_id.clone(), finish)
                 }
             }
         });
@@ -971,40 +1088,72 @@ impl<R: Runtime> Host<R> {
                     let _ = crate::platform::webview::set_muted(&w, muted);
                 }
             }
-            Next::DomReady(embedder, element_id) => {
+            Next::DomReady(embedder, element_id, finish) => {
                 self.host_event(&embedder, &element_id, "dom-ready", None);
+                if finish {
+                    self.host_event(&embedder, &element_id, "did-finish-load", None);
+                }
             }
             Next::Log(message) => self.log(LogLevel::Debug, message),
             Next::Ready(page_url) => {
                 if let Some(p) = page_url {
-                    self.guest_eval(label, &host_call_script("setNextPageUrl", &Value::from(p)));
+                    self.guest_call(label, "setNextPageUrl", &Value::from(p));
                 }
+            }
+            Next::ScheduleReload => {
+                // A one-shot timer: the reload follows ~70 ms later, not at
+                // the next 250 ms host tick.
+                let host = Arc::clone(self);
+                let label = label.to_owned();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(RELOAD_DELAY_MS)).await;
+                    host.run_due_reload(&label);
+                });
             }
         }
         Ok(())
     }
 
-    /// The embedder window `id` was hidden (D.5 `window-hidden`).
-    pub(crate) fn ads_window_hidden(self: &Arc<Self>, id: u32) {
-        let labels = self.with_core(|c| {
+    /// The guests embedded in window `id`, in its app or remote webview.
+    fn guests_of_window(self: &Arc<Self>, id: u32) -> Vec<String> {
+        self.with_core(|c| {
             let mut l = c.ads.labels_of(&crate::window::ui_label(id));
             l.extend(c.ads.labels_of(&crate::window::remote_label(id)));
             l
-        });
-        let script = deliver_script("window-hidden", None);
-        let hidden = host_call_script("setVisibility", &Value::from("hidden"));
-        for l in labels {
-            self.guest_eval(&l, &script);
-            self.guest_eval(&l, &hidden);
+        })
+    }
+
+    /// The embedder window `id` was hidden (D.5 `window-hidden`): its
+    /// guests' documents become hidden.
+    pub(crate) fn ads_window_hidden(self: &Arc<Self>, id: u32) {
+        self.set_embedder_hidden(id, true);
+    }
+
+    /// The embedder window `id` was shown again: its guests' documents
+    /// become visible again where the element is visible.
+    pub(crate) fn ads_window_shown(self: &Arc<Self>, id: u32) {
+        self.set_embedder_hidden(id, false);
+    }
+
+    fn set_embedder_hidden(self: &Arc<Self>, id: u32, hidden: bool) {
+        for l in self.guests_of_window(id) {
+            let changed = self.with_core(|c| {
+                c.ads
+                    .guests
+                    .get_mut(&l)
+                    .is_some_and(|g| std::mem::replace(&mut g.embedder_hidden, hidden) != hidden)
+            });
+            if changed && hidden {
+                self.guest_deliver(&l, "window-hidden", None);
+            }
+            self.sync_visibility(&l, false);
         }
     }
 
     /// The embedder window `id` gained or lost focus (D.3 `hasWindowFocus`).
     pub(crate) fn ads_window_focus(self: &Arc<Self>, id: u32, focused: bool) {
-        let labels = self.with_core(|c| c.ads.labels_of(&crate::window::ui_label(id)));
-        let script = host_call_script("setEmbedderFocus", &Value::Bool(focused));
-        for l in labels {
-            self.guest_eval(&l, &script);
+        for l in self.guests_of_window(id) {
+            self.guest_call(&l, "setEmbedderFocus", &Value::Bool(focused));
         }
     }
 

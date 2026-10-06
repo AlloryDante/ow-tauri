@@ -441,7 +441,25 @@ mod tests {
         assert!(nsh.contains(&format!(
             r#"WriteRegStr SHCTX "Software\OverwolfElectron\{computed}" "version" "1.2.3""#
         )));
-        assert!(nsh.contains(&format!(r#"RMDir /r "$APPDATA\ow-electron\{computed}""#)));
+        // The per-user state folder, in the per-user context also for a
+        // per-machine install; the install record in the install mode's.
+        let rmdir = format!(r#"RMDir /r "$APPDATA\ow-electron\{computed}""#);
+        let at = nsh.find(&rmdir).expect("state folder removal");
+        let before = &nsh[..at];
+        assert!(
+            before.trim_end().ends_with("SetShellVarContext current"),
+            "{nsh}"
+        );
+        let record = before
+            .find(&format!(
+                r#"DeleteRegKey SHCTX "Software\OverwolfElectron\{computed}""#
+            ))
+            .expect("record removal");
+        assert!(
+            before[..record].contains("!insertmacro OW_TAURI_INSTALL_CONTEXT"),
+            "{nsh}"
+        );
+        assert!(nsh.contains(r#"!if "${INSTALLMODE}" == "perMachine""#));
         assert!(nsh.contains("${If} $UpdateMode <> 1"));
         let url = format!(
             "https://analyticssec.overwolf.com/analytics/Counter?Name=ow_tauri_app_uninstall&MUID=$R0&MUIDV2=$R1&Extra=%7B%22app_id%22%3A%22{computed}%22%2C%22app_version%22%3A%221.2.3%22%2C%22app_name%22%3A%22Example+App%22%7D"

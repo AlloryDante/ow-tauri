@@ -242,6 +242,10 @@ impl<R: Runtime> Host<R> {
                 }
             }
         });
+        if event == PageLoadEvent::Finished {
+            // E.1: `<UA>` from the platform webview's own user agent.
+            self.request_user_agent();
+        }
         match after {
             AfterMainLoad::Nothing => {}
             AfterMainLoad::Restart(url) => {

@@ -79,6 +79,9 @@ pub(crate) struct ConsentCore {
     pub(crate) default_opened: bool,
     /// A non-empty `params` body was logged.
     pub(crate) params_logged: bool,
+    /// The origin of the settings window's `cmpURL` when it is not an
+    /// Overwolf page: the window may load it (D.6.4).
+    pub(crate) settings_origin: Option<String>,
 }
 
 impl ConsentCore {
@@ -133,6 +136,8 @@ impl<R: Runtime> Host<R> {
     pub(crate) fn start_consent(self: &Arc<Self>) {
         let first = self.with_core(|c| !std::mem::replace(&mut c.consent.started, true));
         if first {
+            // Before any consent page can save `cmp` (F.2 key order).
+            self.record_first_launch();
             let round = self.with_core(|c| {
                 c.consent.rounds += 1;
                 c.consent.rounds
@@ -149,12 +154,11 @@ impl<R: Runtime> Host<R> {
             let cacheable = if host.analytics.user_enabled() {
                 let request = host.analytics.reporter().cmp_eu_only();
                 let body = match host.analytics.dispatcher.send(request, false).await {
-                    Ok(Ok(r)) => Some(r.body),
-                    Ok(Err(err)) => {
+                    Ok(r) => Some(r.body),
+                    Err(err) => {
                         host.log(LogLevel::Debug, &format!("cmp-eu-only failed: {err}"));
                         None
                     }
-                    Err(_) => None,
                 };
                 let outcome = eu_only_outcome(body.as_deref());
                 if let Some(p) = outcome.params {
@@ -368,7 +372,7 @@ impl<R: Runtime> Host<R> {
             if round.is_some()
                 && host.info.config.consent.host_cookie_fallback == CookieFallback::Auto
             {
-                host.cookie_fallback(&label);
+                host.cookie_fallback(&label).await;
             }
             if let Some(w) = host.app.get_webview_window(&label) {
                 let _ = w.destroy();
@@ -380,26 +384,20 @@ impl<R: Runtime> Host<R> {
     /// D.6.3: when both consent cookies are missing from the ads data
     /// store, writes them from the stored `cmp` values. Runs off the main
     /// thread (WebView2 cookie access must not block it).
-    fn cookie_fallback(self: &Arc<Self>, label: &str) {
+    async fn cookie_fallback(self: &Arc<Self>, label: &str) {
         let Some(window) = self.app.get_webview_window(label) else {
             return;
         };
-        let Ok(url) = Url::parse("https://www.overwolf.com/") else {
+        let Some(cookies) = self.ads_store_cookies("https://www.overwolf.com/").await else {
+            self.log(
+                LogLevel::Debug,
+                "consent cookie check skipped: the ads data store did not answer",
+            );
             return;
-        };
-        let cookies = match window.cookies_for_url(url) {
-            Ok(c) => c,
-            Err(err) => {
-                self.log(
-                    LogLevel::Debug,
-                    &format!("consent cookie read failed: {err}"),
-                );
-                return;
-            }
         };
         if cookies
             .iter()
-            .any(|c| c.name() == "euconsent-v2" || c.name() == "acconsent")
+            .any(|(name, _)| name == "euconsent-v2" || name == "acconsent")
         {
             return;
         }
@@ -408,13 +406,26 @@ impl<R: Runtime> Host<R> {
             stored.cmp_string.as_deref(),
             stored.unified_consent_string.as_deref(),
         );
+        let wanted: Vec<_> = [("euconsent-v2", tcf), ("acconsent", ac)]
+            .into_iter()
+            .filter_map(|(name, value)| value.map(|v| consent_cookie(name, &v)))
+            .collect();
+        if wanted.is_empty() {
+            return;
+        }
+        let results = tauri::async_runtime::spawn_blocking(move || {
+            wanted
+                .into_iter()
+                .map(|c| (c.name().to_owned(), window.set_cookie(c)))
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
         let mut wrote = false;
-        for (name, value) in [("euconsent-v2", tcf), ("acconsent", ac)] {
-            if let Some(v) = value {
-                match window.set_cookie(consent_cookie(name, &v)) {
-                    Ok(()) => wrote = true,
-                    Err(err) => self.log(LogLevel::Warn, &format!("writing {name} failed: {err}")),
-                }
+        for (name, result) in results {
+            match result {
+                Ok(()) => wrote = true,
+                Err(err) => self.log(LogLevel::Warn, &format!("writing {name} failed: {err}")),
             }
         }
         if wrote {
@@ -504,9 +515,14 @@ impl<R: Runtime> Host<R> {
             .clone()
             .or_else(|| options.cmp_url.clone())
             .unwrap_or_else(|| DEFAULT_CMP_URL.to_owned());
-        if Url::parse(&base).map(|u| u.scheme().to_owned()).as_deref() != Ok("https") {
-            return Err(Error::invalid_argument("cmpURL must be an https: URL."));
-        }
+        let base_url = Url::parse(&base)
+            .ok()
+            .filter(|u| u.scheme() == "https")
+            .ok_or_else(|| Error::invalid_argument("cmpURL must be an https: URL."))?;
+        // A custom cmpURL off Overwolf loads; only saving is refused there,
+        // by the capability scope of `cmp_event` (D.6.4).
+        let custom = (!is_overwolf_url(&base_url)).then(|| base_url.origin().ascii_serialization());
+        self.with_core(|c| c.consent.settings_origin = custom);
         if let Some(w) = self.app.get_webview_window(CMP_SETTINGS_LABEL) {
             let _ = w.unminimize();
             let _ = w.set_focus();
@@ -566,6 +582,13 @@ impl<R: Runtime> Host<R> {
         if let Some(color) = parse_color(&background) {
             builder = builder.background_color(color);
         }
+        // As Electron's BrowserWindow: x and y apply only together.
+        if options.x.is_some() != options.y.is_some() {
+            self.log(
+                LogLevel::Debug,
+                "openCMPWindow: x and y apply only together; the window is centered",
+            );
+        }
         builder = match (options.x, options.y) {
             (Some(x), Some(y)) => builder.position(x, y),
             _ if options.center == Some(false) => builder,
@@ -584,10 +607,16 @@ impl<R: Runtime> Host<R> {
     }
 
     /// The navigation policy of a consent window (D.6.4): Overwolf pages,
-    /// `data:` (the preloader) and `about:blank`.
-    pub(crate) fn cmp_navigation(&self, label: &str, url: &Url) -> bool {
+    /// in the settings window also the origin of a custom `cmpURL`, `data:`
+    /// (the preloader) and `about:blank`.
+    pub(crate) fn cmp_navigation(self: &Arc<Self>, label: &str, url: &Url) -> bool {
         let ok = match url.scheme() {
-            "https" => is_overwolf_url(url),
+            "https" => {
+                is_overwolf_url(url)
+                    || (label == CMP_SETTINGS_LABEL
+                        && self.with_core(|c| c.consent.settings_origin.clone())
+                            == Some(url.origin().ascii_serialization()))
+            }
             "data" => true,
             "about" => url.as_str() == "about:blank",
             _ => false,
@@ -596,7 +625,7 @@ impl<R: Runtime> Host<R> {
             self.log(
                 LogLevel::Debug,
                 &format!(
-                    "{label}: navigation to a non-Overwolf {} URL cancelled",
+                    "{label}: navigation to a {} URL outside its pages cancelled",
                     url.scheme()
                 ),
             );

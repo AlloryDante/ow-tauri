@@ -422,6 +422,11 @@ pub(crate) fn setup<R: Runtime>(
         started: Instant::now(),
         flush_scheduled: AtomicBool::new(false),
     });
+    host.analytics
+        .dispatcher
+        .set_hooks(Arc::new(super::cookies::HostRequestHooks(Arc::downgrade(
+            &host,
+        ))));
     for w in warnings {
         host.log(LogLevel::Warn, &w);
     }

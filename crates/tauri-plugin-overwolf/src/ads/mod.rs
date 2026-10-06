@@ -825,43 +825,44 @@ pub fn gone_data(reason: GoneReason, exit_code: i64) -> Value {
 }
 
 /// The JavaScript that delivers a host message to the guest (D.5).
+/// `host_key` is the guest's random host API property (`hostKey` of its
+/// configuration).
 ///
 /// ```
 /// use serde_json::json;
 /// use tauri_plugin_overwolf::ads::deliver_script;
 /// assert_eq!(
-///     deliver_script("window-hidden", None),
-///     r#"window.__owTauriHost && window.__owTauriHost.deliver({"type":"window-hidden"})"#
+///     deliver_script("_k1", "window-hidden", None),
+///     r#"(function(h){h&&h.deliver({"type":"window-hidden"})})(window["_k1"])"#
 /// );
 /// ```
 #[must_use]
-pub fn deliver_script(kind: &str, data: Option<&Value>) -> String {
+pub fn deliver_script(host_key: &str, kind: &str, data: Option<&Value>) -> String {
     let mut m = Map::new();
     m.insert("type".into(), kind.into());
     if let Some(d) = data {
         m.insert("data".into(), d.clone());
     }
-    format!(
-        "window.__owTauriHost && window.__owTauriHost.deliver({})",
-        script_json(&Value::Object(m))
-    )
+    host_call_script(host_key, "deliver", &Value::Object(m))
 }
 
-/// The JavaScript that calls a shim-internal host function (D.5).
+/// The JavaScript that calls a shim-internal host function (D.5) on the
+/// guest's host API property `host_key`.
 ///
 /// ```
 /// use serde_json::json;
 /// use tauri_plugin_overwolf::ads::host_call_script;
 /// assert_eq!(
-///     host_call_script("setVisibility", &json!("hidden")),
-///     r#"window.__owTauriHost && window.__owTauriHost.setVisibility("hidden")"#
+///     host_call_script("_k1", "setVisibility", &json!("hidden")),
+///     r#"(function(h){h&&h.setVisibility("hidden")})(window["_k1"])"#
 /// );
 /// ```
 #[must_use]
-pub fn host_call_script(function: &str, arg: &Value) -> String {
+pub fn host_call_script(host_key: &str, function: &str, arg: &Value) -> String {
     format!(
-        "window.__owTauriHost && window.__owTauriHost.{function}({})",
-        script_json(arg)
+        "(function(h){{h&&h.{function}({})}})(window[{}])",
+        script_json(arg),
+        script_json(&Value::from(host_key))
     )
 }
 

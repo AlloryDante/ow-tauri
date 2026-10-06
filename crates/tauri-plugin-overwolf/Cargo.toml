@@ -35,6 +35,7 @@ plugin = [
   "dep:reqwest",
   "dep:objc2",
   "dep:objc2-foundation",
+  "dep:block2",
   "dep:webview2-com",
   "dep:windows",
   "dep:webkit2gtk",
@@ -80,9 +81,11 @@ webview2-com = { version = "0.39.1", optional = true }
 windows = { version = "0.62.2", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# Guest mute and the shaped first navigation (D.8.3); wry's versions.
+# Guest mute, the shaped navigations (D.8.3) and the ads data store's
+# cookies for host requests (E.1); wry's versions.
 objc2 = { version = "0.6.5", optional = true }
-objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "NSString", "NSURL", "NSURLRequest"] }
+objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "NSArray", "NSDate", "NSHTTPCookie", "NSString", "NSURL", "NSURLRequest"] }
+block2 = { version = "0.6.2", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Guest mute, the shaped first navigation, crash and load-failure reports;

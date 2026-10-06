@@ -63,6 +63,39 @@ pub(crate) fn request_shape(url: &str, document: bool) -> RequestShape {
     }
 }
 
+/// Chromium's `net::Error` code and name for a WebView2
+/// `COREWEBVIEW2_WEB_ERROR_STATUS` (Electron reports these in
+/// `did-fail-load`, D.7). Statuses without a close Chromium equivalent
+/// are `ERR_FAILED`.
+///
+/// The names follow `net/base/net_error_list.h`.
+#[cfg_attr(
+    not(any(windows, test)),
+    expect(dead_code, reason = "WebView2 statuses exist on Windows only")
+)]
+pub(crate) fn webview2_net_error(status: i32) -> (i64, &'static str) {
+    match status {
+        1 => (-200, "ERR_CERT_COMMON_NAME_INVALID"),
+        2 => (-201, "ERR_CERT_DATE_INVALID"),
+        3 => (-117, "ERR_BAD_SSL_CLIENT_AUTH_CERT"),
+        4 => (-203, "ERR_CERT_REVOKED"),
+        5 => (-207, "ERR_CERT_INVALID"),
+        6 => (-109, "ERR_ADDRESS_UNREACHABLE"),
+        7 => (-7, "ERR_TIMED_OUT"),
+        8 => (-320, "ERR_INVALID_RESPONSE"),
+        9 => (-103, "ERR_CONNECTION_ABORTED"),
+        10 => (-101, "ERR_CONNECTION_RESET"),
+        11 => (-106, "ERR_INTERNET_DISCONNECTED"),
+        12 => (-104, "ERR_CONNECTION_FAILED"),
+        13 => (-105, "ERR_NAME_NOT_RESOLVED"),
+        14 => (-3, "ERR_ABORTED"),
+        15 => (-310, "ERR_TOO_MANY_REDIRECTS"),
+        17 => (-338, "ERR_INVALID_AUTH_CREDENTIALS"),
+        18 => (-127, "ERR_PROXY_AUTH_REQUESTED"),
+        _ => (-2, "ERR_FAILED"),
+    }
+}
+
 /// Mutes or unmutes the page's audio. Errors only when the webview is gone.
 pub(crate) fn set_muted<R: Runtime>(webview: &Webview<R>, muted: bool) -> tauri::Result<()> {
     webview.with_webview(move |pw| {
@@ -168,13 +201,73 @@ pub(crate) fn install_guest_hooks<R: Runtime>(
     })
 }
 
+/// Reads every cookie of the default `WKWebsiteDataStore` (the macOS ads
+/// data store, D.8.1) and calls `done` with them. Call it on the main
+/// thread; `done` runs there later (not at all when `WebKit` is missing).
+#[cfg(target_os = "macos")]
+pub(crate) fn default_store_cookies(
+    done: impl FnOnce(Vec<crate::host::cookies::StoredCookie>) + Send + 'static,
+) {
+    macos::default_store_cookies(done);
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
     use std::ffi::c_void;
+    use std::ptr::NonNull;
+    use std::sync::Mutex;
 
+    use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
-    use objc2::{msg_send, sel};
-    use objc2_foundation::{NSMutableURLRequest, NSString, NSURL};
+    use objc2::{class, msg_send, sel};
+    use objc2_foundation::{NSArray, NSHTTPCookie, NSMutableURLRequest, NSString, NSURL};
+
+    use crate::host::cookies::StoredCookie;
+
+    /// `-[WKHTTPCookieStore getAllCookies:]` on the default data store.
+    pub(super) fn default_store_cookies(done: impl FnOnce(Vec<StoredCookie>) + Send + 'static) {
+        // SAFETY: class methods and properties of WebKit's public API, on
+        // the main thread (the caller's contract); `wry` links WebKit.
+        let store: Option<Retained<AnyObject>> =
+            unsafe { msg_send![class!(WKWebsiteDataStore), defaultDataStore] };
+        let Some(store) = store else { return };
+        // SAFETY: as above; `httpCookieStore` is non-null on macOS 10.13+.
+        let cookie_store: Option<Retained<AnyObject>> =
+            unsafe { msg_send![&*store, httpCookieStore] };
+        let Some(cookie_store) = cookie_store else {
+            return;
+        };
+        let done = Mutex::new(Some(done));
+        let block = block2::RcBlock::new(move |cookies: NonNull<NSArray<NSHTTPCookie>>| {
+            // SAFETY: WebKit passes a valid array for the duration of the call.
+            let cookies = unsafe { cookies.as_ref() };
+            let list = cookies.iter().map(|c| stored(&c)).collect();
+            if let Some(done) = done
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+            {
+                done(list);
+            }
+        });
+        // SAFETY: `getAllCookies:` takes a block `void (^)(NSArray<NSHTTPCookie *> *)`,
+        // which WebKit copies.
+        let () = unsafe { msg_send![&*cookie_store, getAllCookies: &*block] };
+    }
+
+    fn stored(cookie: &NSHTTPCookie) -> StoredCookie {
+        StoredCookie {
+            name: cookie.name().to_string(),
+            value: cookie.value().to_string(),
+            domain: cookie.domain().to_string(),
+            path: cookie.path().to_string(),
+            secure: cookie.isSecure(),
+            expires: cookie
+                .expiresDate()
+                .filter(|_| !cookie.isSessionOnly())
+                .map(|d| d.timeIntervalSince1970()),
+        }
+    }
 
     /// Mutes the page with the `WebKit` selector `_setPageMuted:` when the selector
     /// exists (the only way WKWebView mutes every frame; a known
@@ -247,10 +340,45 @@ mod linux {
         let _ = webview.connect_load_failed(move |_, _event, uri, error| {
             // A cancelled load (a new navigation replaced it) is not a failure.
             if !error.matches(webkit2gtk::NetworkError::Cancelled) {
-                reports.load_failed(&label, -2, &error.to_string(), uri);
+                let (code, name) = net_error(error);
+                reports.load_failed(&label, code, name, uri);
             }
             false
         });
+    }
+
+    /// Chromium's `net::Error` code and name closest to a `WebKitGTK` load
+    /// error (D.7); `ERR_FAILED` when none is close.
+    fn net_error(error: &webkit2gtk::glib::Error) -> (i64, &'static str) {
+        use webkit2gtk::gio::{IOErrorEnum, ResolverError, TlsError};
+        if let Some(kind) = error.kind::<IOErrorEnum>() {
+            return match kind {
+                IOErrorEnum::TimedOut => (-7, "ERR_TIMED_OUT"),
+                IOErrorEnum::HostNotFound => (-105, "ERR_NAME_NOT_RESOLVED"),
+                IOErrorEnum::ConnectionRefused => (-102, "ERR_CONNECTION_REFUSED"),
+                IOErrorEnum::HostUnreachable => (-109, "ERR_ADDRESS_UNREACHABLE"),
+                IOErrorEnum::NetworkUnreachable => (-106, "ERR_INTERNET_DISCONNECTED"),
+                IOErrorEnum::BrokenPipe | IOErrorEnum::NotConnected => {
+                    (-101, "ERR_CONNECTION_RESET")
+                }
+                IOErrorEnum::ProxyFailed => (-130, "ERR_PROXY_CONNECTION_FAILED"),
+                IOErrorEnum::ProxyAuthFailed | IOErrorEnum::ProxyNeedAuth => {
+                    (-127, "ERR_PROXY_AUTH_REQUESTED")
+                }
+                _ => (-2, "ERR_FAILED"),
+            };
+        }
+        if error.is::<ResolverError>() {
+            (-105, "ERR_NAME_NOT_RESOLVED")
+        } else if error.is::<TlsError>() {
+            (-107, "ERR_SSL_PROTOCOL_ERROR")
+        } else if error.matches(webkit2gtk::NetworkError::UnknownProtocol) {
+            (-301, "ERR_UNKNOWN_URL_SCHEME")
+        } else if error.matches(webkit2gtk::NetworkError::FileDoesNotExist) {
+            (-6, "ERR_FILE_NOT_FOUND")
+        } else {
+            (-2, "ERR_FAILED")
+        }
     }
 }
 
@@ -276,7 +404,7 @@ mod windows_impl {
     };
     use windows::core::{BOOL, HSTRING, Interface, PWSTR};
 
-    use super::{GuestReports, RequestShape, Shaping, request_shape};
+    use super::{GuestReports, RequestShape, Shaping, request_shape, webview2_net_error};
     use crate::ads::GoneReason;
 
     pub(super) fn set_muted(controller: &ICoreWebView2Controller, muted: bool) {
@@ -419,12 +547,8 @@ mod windows_impl {
                             let _ = args.WebErrorStatus(&mut status);
                             // Operation canceled: a new navigation replaced it.
                             if status != COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED {
-                                reports.load_failed(
-                                    &label,
-                                    -i64::from(status.0),
-                                    &format!("WebView2 web error status {}", status.0),
-                                    crate::ads::ADVIEW_URL,
-                                );
+                                let (code, name) = webview2_net_error(status.0);
+                                reports.load_failed(&label, code, name, crate::ads::ADVIEW_URL);
                             }
                         }
                         Ok(())
@@ -440,6 +564,15 @@ mod windows_impl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn webview2_statuses_map_to_chromium_errors() {
+        assert_eq!(webview2_net_error(7), (-7, "ERR_TIMED_OUT"));
+        assert_eq!(webview2_net_error(13), (-105, "ERR_NAME_NOT_RESOLVED"));
+        assert_eq!(webview2_net_error(12), (-104, "ERR_CONNECTION_FAILED"));
+        assert_eq!(webview2_net_error(0), (-2, "ERR_FAILED"));
+        assert_eq!(webview2_net_error(99), (-2, "ERR_FAILED"));
+    }
 
     #[test]
     fn shapes() {

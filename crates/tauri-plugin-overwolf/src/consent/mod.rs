@@ -330,12 +330,22 @@ pub fn cookie_values(
 
 /// Builds a consent cookie with D.6.3's attributes: domain `.overwolf.com`,
 /// path `/`, `Secure`, `SameSite=None`, not `HttpOnly`, 365 days.
+///
+/// `domain()` reports `.overwolf.com` with its leading dot: Tauri passes
+/// that value to the platform store, where the dot is what makes the cookie
+/// reach every `*.overwolf.com` page (a domain cookie) and not only
+/// `overwolf.com` itself.
+///
+/// ```
+/// let c = tauri_plugin_overwolf::consent::consent_cookie("euconsent-v2", "CQ");
+/// assert_eq!(c.domain(), Some(".overwolf.com"));
+/// ```
 #[cfg(feature = "plugin")]
 #[must_use]
 pub fn consent_cookie(name: &str, value: &str) -> tauri::webview::cookie::Cookie<'static> {
     use tauri::webview::cookie::{Cookie, SameSite, time};
     Cookie::build((name.to_owned(), value.to_owned()))
-        .domain(".overwolf.com")
+        .domain(crate::host::cookies::domain_cookie_attr("overwolf.com"))
         .path("/")
         .secure(true)
         .http_only(false)
@@ -458,7 +468,7 @@ mod tests {
     #[test]
     fn cookie_attributes() {
         let c = consent_cookie("euconsent-v2", "CQ");
-        assert_eq!(c.domain(), Some("overwolf.com"));
+        assert_eq!(c.domain(), Some(".overwolf.com"));
         assert_eq!(c.path(), Some("/"));
         assert_eq!(c.secure(), Some(true));
         assert_eq!(c.same_site(), Some(tauri::webview::cookie::SameSite::None));

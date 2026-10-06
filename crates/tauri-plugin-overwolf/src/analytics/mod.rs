@@ -262,6 +262,10 @@ pub struct HostResponse {
     pub status: u16,
     /// The decoded body.
     pub body: Vec<u8>,
+    /// Every `Set-Cookie` header value, in response order. The plugin writes
+    /// them to the ads data store, as Chromium's network stack does for
+    /// ow-electron (CONTRACT E.1).
+    pub set_cookies: Vec<String>,
 }
 
 /// Encodes like `URLSearchParams`: space as `+`, every byte other than ASCII

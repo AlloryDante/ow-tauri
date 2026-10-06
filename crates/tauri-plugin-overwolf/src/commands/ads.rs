@@ -171,6 +171,28 @@ pub(crate) async fn packages_get_channel<R: Runtime>(
     Ok(crate::packages::get_channel(&names.unwrap_or_default()))
 }
 
+/// The longest `adview_mount` waits for the embedder's `document.title`.
+const TITLE_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The embedder document's `document.title` (ow-electron's `windowTitle`
+/// follows it, D.2); `None` when the webview does not answer in time.
+async fn document_title<R: Runtime>(webview: &Webview<R>) -> Option<String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let tx = std::sync::Mutex::new(Some(tx));
+    webview
+        .eval_with_callback("document.title", move |json| {
+            if let Some(tx) = tx
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+            {
+                let _ = tx.send(serde_json::from_str::<String>(&json).ok());
+            }
+        })
+        .ok()?;
+    tokio::time::timeout(TITLE_WAIT, rx).await.ok()?.ok()?
+}
+
 #[tauri::command]
 pub(crate) async fn adview_mount<R: Runtime>(
     webview: Webview<R>,
@@ -180,7 +202,10 @@ pub(crate) async fn adview_mount<R: Runtime>(
     let host = host(&state);
     require_ui(&webview, host)?;
     let mount: AdviewMount = body(&request, "adview_mount")?;
-    let guest_label = host.mount_guest(&webview, mount)?;
+    // The guest's `<UA>` and `windowTitle` (E.1, D.2) are fixed at creation.
+    host.wait_user_agent().await;
+    let title = document_title(&webview).await;
+    let guest_label = host.mount_guest(&webview, mount, title)?;
     Ok(Mounted { guest_label })
 }
 

@@ -10,6 +10,7 @@
 pub(crate) mod ads;
 pub(crate) mod analytics;
 pub(crate) mod consent;
+pub(crate) mod cookies;
 mod main_webview;
 mod setup;
 mod windows;

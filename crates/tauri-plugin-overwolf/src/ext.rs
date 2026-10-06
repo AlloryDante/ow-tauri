@@ -403,8 +403,19 @@ impl<R: Runtime> Overwolf<R> {
         self.0.consent_tick(now_ms);
     }
 
+    /// As if the poll saw the window `id` hidden (`false`) or shown again
+    /// (`true`): its guests' visibility follows (D.5).
+    pub fn test_ads_window_visible(&self, id: u32, visible: bool) {
+        if visible {
+            self.0.ads_window_shown(id);
+        } else {
+            self.0.ads_window_hidden(id);
+        }
+    }
+
     /// The state of the ad guest `label`: `{ embedder, elementId, navigated,
-    /// ready, loads, recoveries, visible }`, or `None` when it is gone.
+    /// ready, domReady, loads, recoveries, visible, embedderHidden,
+    /// visibilityState, reloadScheduled }`, or `None` when it is gone.
     #[must_use]
     pub fn test_guest(&self, label: &str) -> Option<Value> {
         self.0.with_core(|c| {
@@ -414,9 +425,13 @@ impl<R: Runtime> Overwolf<R> {
                     "elementId": g.element_id,
                     "navigated": g.navigated,
                     "ready": g.ready,
+                    "domReady": g.dom_ready,
                     "loads": g.loads,
                     "recoveries": g.recoveries,
                     "visible": g.visible,
+                    "embedderHidden": g.embedder_hidden,
+                    "visibilityState": if g.sent_visible { "visible" } else { "hidden" },
+                    "reloadScheduled": g.reload_at.is_some(),
                 })
             })
         })
