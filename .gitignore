@@ -23,3 +23,8 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Parity harness: local installs, captures and the local app identity
+/tools/parity-harness/node_modules/
+/tools/parity-harness/captures/
+/tools/parity-harness/local.identity.json
