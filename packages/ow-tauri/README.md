@@ -14,8 +14,11 @@ The surface is specified member by member in
 Status: the IPC core (section C), the state cache, `ow-tauri/electron`
 (B.2), `ipcRenderer` / `contextBridge` and the `<owadview>` runtime (B.3) in
 `ow-tauri/renderer`, `app.overwolf` with its packages manager (B.1.1 to
-B.1.3), `files` and `whenHostReady` in `ow-tauri/main`, `ow-tauri/testing`
-and the typings (B.4) are implemented. `autoUpdater` is not yet.
+B.1.3), `files`, `whenHostReady` and the electron-updater compatible
+`autoUpdater` (I.5) in `ow-tauri/main`, `ow-tauri/testing` and the typings
+(B.4) are implemented. The plugin's `updater_*` commands behind
+`autoUpdater` are not implemented yet: until they are, its calls reject and
+emit `error`.
 
 ## Runtime and facades
 

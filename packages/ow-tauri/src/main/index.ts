@@ -9,6 +9,7 @@ import type { FacadeKernel } from '../bootstrap/facade-kernel.js';
 import { attachRuntime } from '../bootstrap/install.js';
 import { createFiles, type Files } from './files.js';
 import { overwolfOf, type Overwolf } from './overwolf.js';
+import { autoUpdaterOf, type AppUpdater } from './updater.js';
 
 const kernel: FacadeKernel = attachRuntime();
 
@@ -44,6 +45,24 @@ export const overwolf: Overwolf = overwolfOf(kernel);
  * ```
  */
 export const files: Files = kernel.singleton('main.files', () => createFiles(kernel));
+
+/**
+ * electron-updater's `autoUpdater` over the plugin's update client
+ * (CONTRACT I.5): the same properties, methods and events for a generic
+ * provider feed.
+ *
+ * @example
+ * ```ts
+ * import { autoUpdater } from 'ow-tauri/main';
+ *
+ * autoUpdater.autoDownload = false;
+ * autoUpdater.setFeedURL({ provider: 'generic', url: 'https://example.com/updates' });
+ * autoUpdater.on('update-downloaded', () => autoUpdater.quitAndInstall());
+ * const result = await autoUpdater.checkForUpdates(); // null in an unpackaged build
+ * if (result?.isUpdateAvailable) await autoUpdater.downloadUpdate();
+ * ```
+ */
+export const autoUpdater: AppUpdater = autoUpdaterOf(kernel);
 
 /**
  * Resolves once `ipc_main_ready` and `main_ready` were sent to the host.
@@ -87,5 +106,17 @@ export type {
   SetChannelResult,
 } from './overwolf-types.js';
 export type { Files, MkdirOptions } from './files.js';
+export { AppUpdater } from './updater.js';
+export type {
+  CurrentVersion,
+  GenericFeedOptions,
+  ProgressInfo,
+  ReleaseNoteInfo,
+  UpdateCheckResult,
+  UpdateFileInfo,
+  UpdateInfo,
+  UpdaterConfig,
+  UpdaterLogger,
+} from './updater.js';
 export { OwTauriError, OwTauriUnsupportedError } from '../shared/errors.js';
 export type { OwTauriErrorCode, OwTauriErrorOptions } from '../shared/errors.js';

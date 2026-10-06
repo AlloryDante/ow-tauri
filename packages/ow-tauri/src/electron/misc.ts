@@ -230,11 +230,11 @@ export const powerSaveBlocker = unsupportedModule(
 /**
  * Electron's `autoUpdater`: Electron's updater is not provided; every member throws `OwTauriUnsupportedError`.
  *
- * @deprecated Unsupported in ow-tauri: ow-tauri's own updater (CONTRACT B.1) is not available yet.
+ * @deprecated Unsupported in ow-tauri: use the electron-updater compatible `autoUpdater` from `ow-tauri/main` (CONTRACT I.5).
  */
 export const autoUpdater = unsupportedModule(
   'autoUpdater',
-  reason("ow-tauri's own updater is not available yet"),
+  reason("use the electron-updater compatible autoUpdater from 'ow-tauri/main'"),
 ) as UnsupportedModule<U.AutoUpdaterMembers>;
 /**
  * Electron's `clipboard`: no clipboard module; every member throws `OwTauriUnsupportedError`.
