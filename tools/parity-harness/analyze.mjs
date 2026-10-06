@@ -87,6 +87,43 @@ function guestShaping(requests) {
   return { documents, owads, xow, originCounts };
 }
 
+/**
+ * IPC between the host and its pages (ipc.jsonl, round-2 instrumentation):
+ * the private messages the host sends to ad guests ({type, data}), the
+ * internal guest channels, and the page -> host channels, with counts and
+ * first/last times.
+ */
+function ipcSummary(entries) {
+  const groups = new Map();
+  const add = (key, t, sample) => {
+    const g = groups.get(key) ?? { key, count: 0, first: t, last: t, sample };
+    g.count += 1;
+    g.last = t;
+    groups.set(key, g);
+  };
+  for (const e of entries) {
+    if (e.dir === 'page->host' && e.channel) {
+      add(`page->host ${e.type ?? '?'} ${e.channel}`, e.t, e.args?.slice(0, 160));
+    } else if (e.dir === 'host->page' && e.via === 'webContents._sendInternal') {
+      const m = /^\["([^"]+)",(.*)$/.exec(e.args ?? '');
+      if (!m) continue;
+      const [, channel, rest] = m;
+      if (channel.startsWith('GUEST_VIEW_INTERNAL_DISPATCH_EVENT')) {
+        const name = /^"([^"]+)"/.exec(rest);
+        add(`host->embedder element event ${name ? name[1] : '?'}`, e.t, null);
+      } else if (channel === 'GUEST_VIEW_PRIVATE_MESSAGE') {
+        const type = /"type":"([^"]+)"/.exec(rest);
+        add(`host->${e.type} private message ${type ? type[1] : '?'}`, e.t, rest.slice(0, 160));
+      } else {
+        add(`host->${e.type} ${channel} ${rest.slice(0, 40)}`, e.t, null);
+      }
+    } else if (e.dir === 'host->page' && e.via.startsWith('webContents.') && e.type !== 'window') {
+      add(`host->${e.type} ${e.via}`, e.t, e.args?.slice(0, 160));
+    }
+  }
+  return [...groups.values()].sort((a, b) => a.first - b.first);
+}
+
 function redactCookie(line) {
   return /^cookie:/i.test(line) ? `${line.split(':')[0]}: <${line.length} chars>` : line;
 }
@@ -143,6 +180,17 @@ function main() {
     })),
     packageEvents: readJsonl(join(runDir, 'packages.jsonl')),
     liveLoads: readJsonl(join(runDir, 'live-loads.jsonl')).length,
+    ipc: ipcSummary(readJsonl(join(runDir, 'ipc.jsonl'))),
+    actions: readJsonl(join(runDir, 'actions.jsonl'))
+      .filter((a) => a.phase !== 'done')
+      .map((a) => ({
+        t: a.t,
+        phase: a.phase,
+        do: a.do,
+        label: a.label ?? a.fn ?? a.method ?? null,
+      })),
+    windowMonitor:
+      readJsonl(join(runDir, 'window-monitor.jsonl')).find((e) => e.kind === 'end') ?? null,
     fileDiff: meta.fileDiff,
   };
   writeFileSync(join(runDir, 'report.json'), JSON.stringify(report, null, 2) + '\n');
@@ -197,6 +245,32 @@ function main() {
     '',
     `Guest document.referrer: ${report.guestReferrer}`,
     '',
+    ...(report.actions.length
+      ? [
+          '## Actions',
+          '',
+          ...report.actions.map((a) => `- t=${a.t} ms ${a.phase} ${a.do} ${a.label ?? ''}`),
+          '',
+        ]
+      : []),
+    ...(report.ipc.length
+      ? [
+          '## IPC (host <-> pages)',
+          '',
+          '| first (ms) | last (ms) | count | message |',
+          '|---|---|---|---|',
+          ...report.ipc.map(
+            (g) => `| ${g.first} | ${g.last} | ${g.count} | ${g.key.replace(/\|/g, '\\|')} |`,
+          ),
+          '',
+        ]
+      : []),
+    ...(report.windowMonitor
+      ? [
+          `Window monitor: ${report.windowMonitor.samples} samples, ever visible: ${report.windowMonitor.everVisible}`,
+          '',
+        ]
+      : []),
   ];
   writeFileSync(join(runDir, 'report.md'), lines.join('\n'));
   console.log(join(runDir, 'report.md'));

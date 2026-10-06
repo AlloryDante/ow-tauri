@@ -21,17 +21,29 @@ Each run writes `captures/<run-id>/`. That folder is git-ignored and holds:
 | `cmp-pages.jsonl`, `cookies-*.json`, `cookie-changes.jsonl`  | The consent page's native API surface, plus cookie jars at startup and at the end, and every cookie change with its cause.                                                                                                                                                                                                                           |
 | `files/before`, `files/after`                                | The ow-electron state folder (`<appData>/ow-electron/<uid>`) and the app's userData, hashed and copied. `meta.json` has the diff.                                                                                                                                                                                                                    |
 | `live-loads.jsonl`                                           | Every live ad load, counted against the cap.                                                                                                                                                                                                                                                                                                         |
+| `ipc.jsonl`                                                  | Messages between the host and every page: `host->page` (`send`, internal sends, `postMessage`, `executeJavaScript`, `reload`, `loadURL`, `setAudioMuted`, ...) and `page->host` (`-ipc-message` / `-ipc-invoke` on the session, with the reply). The harness's own probes are left out.                                                            |
+| `wc-events.jsonl`                                            | Other webContents events of the ad guests (navigation, crashes, load failures).                                                                                                                                                                                                                                                                      |
+| `actions.jsonl`, `ticks.jsonl`                               | The scenario's timed actions with their results, and a periodic heartbeat from the harness.                                                                                                                                                                                                                                                          |
+| `introspect.jsonl`, `listeners.jsonl`                        | Own member names of ow-electron objects and the IPC listener names on each webContents (names only).                                                                                                                                                                                                                                                 |
+| `features.jsonl`                                             | Requests answered by the local feature-flag stand-in (`--features`), with headers in order.                                                                                                                                                                                                                                                          |
+| `window-monitor.jsonl`                                       | macOS: every window the app owns as the window server sees it (alpha, on-screen, bounds), and an `everVisible` verdict at the end.                                                                                                                                                                                                                   |
+| `emitter-trace.jsonl`                                        | Every `EventEmitter.emit` in the main process. Only with `emitterTrace` in a scenario config; large.                                                                                                                                                                                                                                                  |
+| `screen-*.png`, `app.pid`                                    | Screenshots of the main display (only with `--screencapture`) and the app's pid.                                                                                                                                                                                                                                                                     |
 | `report.md`, `report.json`                                   | Summary from `analyze.mjs`.                                                                                                                                                                                                                                                                                                                          |
 
 ## Safety
 
 - **No visible windows.** The app hides its dock icon first. `browser-window-created` and guards on every `BrowserWindow` show, focus and fullscreen method keep each window hidden (`--present hidden`) or at opacity 0, ignoring the mouse and not focusable (`--present transparent`). Every call to those methods is logged.
-- **No clicks.** The harness never sends input to a page, and it never calls `openCMPWindow()`.
+- **Windows are pinned invisible before they exist on screen.** `browser-window-created` runs before the constructor applies its options (the `cmp` scenario calibrates this first and drops its window actions if it fails). The handler sets opacity 0, ignores the mouse and makes the window not focusable. Later calls to `setOpacity`, `setIgnoreMouseEvents` and `setFocusable` are pinned to those values and logged as `pinned-call`. This is what makes it safe to call `openAdPrivacySettingsWindow()` and `openCMPWindow()`, which show their window from JavaScript.
+- **Proof.** `--window-monitor` (macOS) polls the window server for the app's windows and records `everVisible`. Treat a run with `everVisible: true` as a failure. Under `taskpolicy -b` it samples about every 190 ms.
+- **No clicks.** The harness never sends input to a page.
 - **Live ads are opt-in and capped.** `--mode live` needs `--live-ok`. The run removes every `<owadview>` once `--max-live-loads` loads have happened (default 10), and every live load is logged in `live-loads.jsonl`.
 - **Offline probes.** `uid-matrix.mjs` and the muid experiment launch with `--proxy-server=127.0.0.1:9`, so throwaway app identities send no analytics.
 - **Isolated home.** By default each run gets a fresh home: `CFFIXED_USER_HOME` on macOS, `HOME` and `XDG_CONFIG_HOME` on Linux. The real profile, consent and cookies are not touched. Windows has no isolation, so use `--home real` there knowingly. `--use-mock-keychain` keeps Chromium out of the login keychain.
 - **Quiet machine.** Launches wait, for at most 10 minutes, until the 1-minute load average is below 8.
 - **Raw machine identifiers are never printed.** `muid-probe.mjs` reports only which derivation matched.
+
+- **Screenshots are opt-in.** `screencapture` actions do nothing without `--screencapture`. On recent macOS the first capture from a terminal can raise a system screen-recording prompt. Do not answer it from an automated run.
 
 ## Setup
 
@@ -80,6 +92,19 @@ node run.mjs --disable-analytics --present transparent
 node run.mjs --packages gep,overlay
 node run.mjs --webrequest --present transparent
 
+# Round-2 scenarios: an option preset plus a timed action script (lib/scenarios.mjs).
+node run.mjs --scenario messages --window-monitor             # host <-> page messages, email hashes, payment id
+node run.mjs --scenario crash --window-monitor                # guest crash recovery and analytics
+node run.mjs --scenario block --window-monitor                # first ad page load refused: retry timing
+node run.mjs --scenario cmp --window-monitor                  # consent windows, pinned invisible
+node run.mjs --scenario cmp-required --features empty-object  # isCMPRequired() against a local stand-in
+node run.mjs --scenario windows --window-monitor              # window analytics names (offline)
+node run.mjs --scenario windows-urls --window-monitor         # names for remote, about:, data: URLs (offline)
+node run.mjs --scenario offscreen --window-monitor            # ad window at opacity 0 and off-screen
+node run.mjs --scenario packages                              # package manager surface (offline)
+node run.mjs --scenario introspect                            # own member and listener names
+nohup taskpolicy -b node run.mjs --scenario long --allow-long --caffeinate --no-cdp &   # 13 h hidden session
+
 node analyze.mjs captures/<run-id>        # report.md + report.json
 node lib/netlog-parse.mjs <netlog.json>   # parse any net log
 node uid-matrix.mjs                       # author shapes x name fields -> uid, checked with `ow client calc-electron-uid`
@@ -95,4 +120,8 @@ Run `node run.mjs --help` for every option. Prefix long runs with `taskpolicy -b
 - Attaching the DevTools protocol to a guest before its first `dom-ready` breaks ow-electron's guest preload. The guest then reloads, with `Cannot destructure property 'preloadScripts'`. The harness attaches late. `--no-cdp` is the control run: the net log still records everything.
 - Do not style `<owadview>`. A sized block style changes the slot the guest reports and the ad library rejects it. Size the parent instead, as Overwolf's sample does.
 - `--webrequest` adds `session.webRequest` listeners to the default session, where ow-electron also shapes ad requests. Compare with a run without it before you trust header details from such a run.
+- In Electron 42, messages from a page to the main process arrive as `-ipc-message` and `-ipc-invoke` events on the page's **session**, not on its webContents. The harness wraps `Session.prototype.emit` to see them.
+- `session.webRequest.onBeforeRequest` registered by the app is not called for `<owadview>` guest navigations, and `debugger` network emulation does not reach the guests. To make a guest load fail, the `block` scenario rewrites the guest's `loadURL` to a closed local port.
+- macOS clamps window positions: a window moved to -20000,-20000 lands just off the left edge of the display (for example x -960). It is still fully off-screen.
+- `--offline` blocks the consent page too. Add `--offline-allow content.overwolf.com` when a scenario needs it to load.
 - The net log has no HTTP/3 upload bodies. Only some ad-page requests use h3. Host analytics go over HTTP/2.
