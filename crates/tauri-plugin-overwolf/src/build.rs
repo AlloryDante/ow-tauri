@@ -87,6 +87,15 @@ pub struct EmbedOutput {
 ///
 /// [`BuildError`] when the file cannot be read, fails validation (the error
 /// names the field path), or `OUT_DIR` is not set.
+///
+/// ```no_run
+/// // build.rs of the app (`tauri-plugin-overwolf` in [build-dependencies]
+/// // with `default-features = false`):
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     tauri_plugin_overwolf::build::embed_manifest("../package.json")?;
+///     Ok(())
+/// }
+/// ```
 #[expect(
     clippy::print_stdout,
     reason = "cargo reads build-script directives from stdout"
@@ -115,6 +124,18 @@ pub fn embed_manifest(path: impl AsRef<Path>) -> Result<(), BuildError> {
 /// # Errors
 ///
 /// As [`embed_manifest`].
+///
+/// ```
+/// use tauri_plugin_overwolf::build::embed_manifest_to;
+/// let dir = std::env::temp_dir().join(format!("ow-tauri-doc-embed-{}", std::process::id()));
+/// std::fs::create_dir_all(&dir).unwrap();
+/// let package_json = dir.join("package.json");
+/// std::fs::write(&package_json, r#"{"name":"demo","productName":"Demo","version":"1.0.0","author":"Example Studio"}"#).unwrap();
+/// let out = embed_manifest_to(&package_json, None, &dir, false).unwrap();
+/// let text = std::fs::read_to_string(&out.manifest_path).unwrap();
+/// assert!(text.contains("Example Studio"));
+/// # std::fs::remove_dir_all(&dir).unwrap();
+/// ```
 pub fn embed_manifest_to(
     package_json: &Path,
     tauri_conf: Option<&Path>,

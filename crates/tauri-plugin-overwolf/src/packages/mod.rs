@@ -68,7 +68,14 @@ pub enum ResolvedBackend {
 }
 
 impl PackagesBackend {
-    /// Applies the H.1 table.
+    /// Applies the H.1 table (owner scope cut: no simulated backends).
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::packages::{PackagesBackend, ResolvedBackend};
+    /// assert_eq!(PackagesBackend::Auto.resolve(true), ResolvedBackend::Native);
+    /// assert_eq!(PackagesBackend::Auto.resolve(false), ResolvedBackend::Failed("unsupported-host"));
+    /// assert_eq!(PackagesBackend::None.resolve(true), ResolvedBackend::Failed("packages-disabled"));
+    /// ```
     #[must_use]
     pub fn resolve(self, native_registered: bool) -> ResolvedBackend {
         match self {
@@ -86,6 +93,12 @@ impl PackagesBackend {
 
 impl ResolvedBackend {
     /// The `PackagesSnapshot.backend` value.
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::packages::ResolvedBackend;
+    /// assert_eq!(ResolvedBackend::Native.wire_name(), "native");
+    /// assert_eq!(ResolvedBackend::Failed("unsupported-host").wire_name(), "none");
+    /// ```
     #[must_use]
     pub fn wire_name(self) -> &'static str {
         match self {

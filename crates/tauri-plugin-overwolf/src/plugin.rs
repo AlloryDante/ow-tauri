@@ -41,6 +41,11 @@ impl Default for Builder {
 
 impl Builder {
     /// A builder with the defaults of CONTRACT A.1.
+    ///
+    /// ```rust
+    /// let builder = tauri_plugin_overwolf::Builder::new();
+    /// # let _ = builder;
+    /// ```
     pub fn new() -> Self {
         Builder {
             options: SetupOptions {
@@ -55,6 +60,12 @@ impl Builder {
 
     /// The app manifest, the output of
     /// [`embedded_manifest!`](crate::embedded_manifest). Required.
+    ///
+    /// ```rust
+    /// // In an app: `.manifest_json(tauri_plugin_overwolf::embedded_manifest!())`.
+    /// let builder = tauri_plugin_overwolf::Builder::new().manifest_json(r#"{"name":"demo"}"#);
+    /// # let _ = builder;
+    /// ```
     pub fn manifest_json(mut self, json: &'static str) -> Self {
         self.options.manifest_json = Some(json);
         self
@@ -62,18 +73,38 @@ impl Builder {
 
     /// Which package runtime to use (H.1); overrides `packagesBackend` in
     /// the configuration.
+    ///
+    /// ```rust
+    /// use tauri_plugin_overwolf::{Builder, PackagesBackend};
+    /// let builder = Builder::new().packages_backend(PackagesBackend::None);
+    /// # let _ = builder;
+    /// ```
     pub fn packages_backend(mut self, backend: PackagesBackend) -> Self {
         self.options.packages_backend = Some(backend);
         self
     }
 
     /// Registers a native package runtime (H.2).
+    ///
+    /// ```no_run
+    /// use std::sync::Arc;
+    /// use tauri_plugin_overwolf::packages::PackageRuntime;
+    /// fn with_runtime(runtime: Arc<dyn PackageRuntime>) -> tauri_plugin_overwolf::Builder {
+    ///     tauri_plugin_overwolf::Builder::new().package_runtime(runtime)
+    /// }
+    /// ```
     pub fn package_runtime(mut self, runtime: Arc<dyn PackageRuntime>) -> Self {
         self.options.package_runtime = Some(runtime);
         self
     }
 
     /// Forces test ads on or off (the `--test-ad` switch wins when set).
+    ///
+    /// ```rust
+    /// // Test ads in a lab build, whatever the command line says.
+    /// let builder = tauri_plugin_overwolf::Builder::new().test_ad(true);
+    /// # let _ = builder;
+    /// ```
     pub fn test_ad(mut self, enabled: bool) -> Self {
         self.options.test_ad = Some(enabled);
         self
@@ -81,6 +112,12 @@ impl Builder {
 
     /// Console-assigned uid; overrides the configuration and the computed
     /// uid (G.2).
+    ///
+    /// ```rust
+    /// let builder = tauri_plugin_overwolf::Builder::new()
+    ///     .uid("djpddhibpjddgdpcfkbooljealnjnamkhlihgbab");
+    /// # let _ = builder;
+    /// ```
     pub fn uid(mut self, uid: impl Into<String>) -> Self {
         self.options.uid = Some(uid.into());
         self
@@ -88,6 +125,12 @@ impl Builder {
 
     /// Whether the plugin registers the opener, dialog and global-shortcut
     /// plugins it calls when the app has not (default `true`).
+    ///
+    /// ```rust
+    /// // The app registers opener, dialog and global-shortcut itself.
+    /// let builder = tauri_plugin_overwolf::Builder::new().companion_plugins(false);
+    /// # let _ = builder;
+    /// ```
     pub fn companion_plugins(mut self, enabled: bool) -> Self {
         self.options.companion_plugins = enabled;
         self
@@ -96,6 +139,12 @@ impl Builder {
     /// Whether the plugin adds its runtime capabilities (default `true`).
     /// Apps that grant `overwolf:main` to `ow-main` in their own
     /// capability files, and test harnesses with an empty ACL, turn it off.
+    ///
+    /// ```rust
+    /// // `capabilities/main.json` grants `overwolf:main` to `ow-main`.
+    /// let builder = tauri_plugin_overwolf::Builder::new().runtime_capabilities(false);
+    /// # let _ = builder;
+    /// ```
     pub fn runtime_capabilities(mut self, enabled: bool) -> Self {
         self.options.runtime_capabilities = enabled;
         self
@@ -103,12 +152,24 @@ impl Builder {
 
     /// Whether the plugin creates the hidden main webview `ow-main`
     /// (default `true`). Tests turn it off.
+    ///
+    /// ```rust
+    /// // A mock-runtime test creates `ow-main` itself.
+    /// let builder = tauri_plugin_overwolf::Builder::new().main_webview(false);
+    /// # let _ = builder;
+    /// ```
     pub fn main_webview(mut self, enabled: bool) -> Self {
         self.options.main_webview = enabled;
         self
     }
 
     /// Overrides the process arguments (tests).
+    ///
+    /// ```rust
+    /// let builder = tauri_plugin_overwolf::Builder::new()
+    ///     .argv(vec!["app".into(), "--test-ad".into()]);
+    /// # let _ = builder;
+    /// ```
     pub fn argv(mut self, argv: Vec<String>) -> Self {
         self.options.argv = Some(argv);
         self
@@ -116,6 +177,11 @@ impl Builder {
 
     /// Skips every OS display and cursor query, for Tauri's mock runtime,
     /// which implements none: displays are empty and the cursor is at 0, 0.
+    ///
+    /// ```rust
+    /// let builder = tauri_plugin_overwolf::Builder::new().skip_os_queries();
+    /// # let _ = builder;
+    /// ```
     #[cfg(feature = "test-util")]
     pub fn skip_os_queries(mut self) -> Self {
         self.options.os_queries = false;
@@ -124,6 +190,16 @@ impl Builder {
 
     /// Builds the plugin. The configuration is `plugins.overwolf` in
     /// `tauri.conf.json` (A.1); it may be absent.
+    ///
+    /// ```no_run
+    /// let app = tauri::Builder::default().plugin(
+    ///     tauri_plugin_overwolf::Builder::new()
+    ///         .manifest_json(manifest()) // `embedded_manifest!()` in an app
+    ///         .build(),
+    /// );
+    /// # let _ = app;
+    /// # fn manifest() -> &'static str { "{}" }
+    /// ```
     pub fn build<R: Runtime>(self) -> TauriPlugin<R, Option<Config>> {
         let options = self.options;
         tauri::plugin::Builder::<R, Option<Config>>::new(crate::PLUGIN_NAME)

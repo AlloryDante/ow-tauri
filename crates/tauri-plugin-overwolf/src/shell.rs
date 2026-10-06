@@ -28,6 +28,13 @@ pub const EXTERNAL_SCHEMES: [&str; 3] = ["http", "https", "mailto"];
 ///
 /// `invalid-argument` when it is not an absolute URL, its scheme is not
 /// `http`, `https` or `mailto`, or it carries credentials.
+///
+/// ```
+/// use tauri_plugin_overwolf::shell::validate_external_url;
+/// let url = validate_external_url("https://www.overwolf.com/app?x=1").unwrap();
+/// assert_eq!(url.host_str(), Some("www.overwolf.com"));
+/// assert!(validate_external_url("javascript:alert(1)").is_err());
+/// ```
 pub fn validate_external_url(input: &str) -> Result<Url, Error> {
     let url = Url::parse(input).map_err(|_| Error::invalid_argument("not an absolute URL"))?;
     if !EXTERNAL_SCHEMES.contains(&url.scheme()) {

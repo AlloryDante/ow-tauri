@@ -394,6 +394,14 @@ impl Config {
     /// # Errors
     ///
     /// The first [`ConfigError`] found, naming the field.
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::config::Config;
+    /// assert!(Config::default().validate().is_ok());
+    /// let mut c = Config::default();
+    /// c.main.url = "https://example.com/main.html".into();
+    /// assert!(c.validate().is_err());
+    /// ```
     pub fn validate(&self) -> Result<(), ConfigError> {
         let main_url = self.main.url.trim();
         if main_url.is_empty() {

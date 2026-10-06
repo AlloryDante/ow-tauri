@@ -112,6 +112,16 @@ pub fn expand_template(template: &str, dirs: &TemplateDirs) -> Option<PathBuf> {
 ///
 /// `forbidden` for a relative path or a `..` / `.` in the part that does not
 /// exist yet; `io` when the existing part cannot be resolved.
+///
+/// ```
+/// use std::path::Path;
+/// use tauri_plugin_overwolf::fs_scope::canonicalize_lenient;
+/// let tmp = std::env::temp_dir();
+/// let p = canonicalize_lenient(&tmp.join("ow-tauri-doc-missing").join("file.txt")).unwrap();
+/// assert!(p.ends_with("ow-tauri-doc-missing/file.txt"));
+/// assert!(canonicalize_lenient(Path::new("relative/file.txt")).is_err());
+/// assert!(canonicalize_lenient(&tmp.join("ow-tauri-doc-missing").join("..").join("x")).is_err());
+/// ```
 pub fn canonicalize_lenient(path: &Path) -> Result<PathBuf, Error> {
     if !path.is_absolute() {
         return Err(Error::forbidden("path must be absolute"));
@@ -169,6 +179,14 @@ impl FsScope {
     /// Builds the scope from `userData` (read-write), the state directory
     /// (read-only), the virtual app root and the expanded `fs.scope`
     /// directories (read-write).
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::fs_scope::{Access, FsScope};
+    /// let tmp = std::env::temp_dir();
+    /// let scope = FsScope::new(tmp.join("user-data"), tmp.join("state"), &tmp.join("app"), Vec::new());
+    /// assert!(scope.check(&tmp.join("user-data").join("prefs.json"), Access::Write).is_ok());
+    /// assert!(scope.check(&tmp.join("state").join("log.txt"), Access::Write).is_err());
+    /// ```
     #[must_use]
     pub fn new(
         user_data: PathBuf,
@@ -202,6 +220,13 @@ impl FsScope {
     }
 
     /// The virtual `package.json` path.
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::fs_scope::FsScope;
+    /// let tmp = std::env::temp_dir();
+    /// let scope = FsScope::new(tmp.join("u"), tmp.join("s"), &tmp.join("app"), Vec::new());
+    /// assert_eq!(scope.manifest_path(), tmp.join("app").join("package.json"));
+    /// ```
     #[must_use]
     pub fn manifest_path(&self) -> &Path {
         &self.manifest_path
@@ -214,6 +239,16 @@ impl FsScope {
     /// `forbidden` when the path is relative, contains `..` that leaves a
     /// root, or is outside every root with that access; `io` when it cannot
     /// be resolved.
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::fs_scope::{Access, FsScope, Resolved};
+    /// let tmp = std::env::temp_dir();
+    /// let scope = FsScope::new(tmp.join("u"), tmp.join("s"), &tmp.join("app"), Vec::new());
+    /// assert_eq!(scope.check(scope.manifest_path(), Access::Read).unwrap(), Resolved::Manifest);
+    /// assert!(scope.check(scope.manifest_path(), Access::Write).is_err());
+    /// let escape = tmp.join("u").join("..").join("elsewhere.txt");
+    /// assert_eq!(scope.check(&escape, Access::Read).unwrap_err().code().as_str(), "forbidden");
+    /// ```
     pub fn check(&self, path: &Path, access: Access) -> Result<Resolved, Error> {
         if path == self.manifest_path {
             return if access == Access::Read {

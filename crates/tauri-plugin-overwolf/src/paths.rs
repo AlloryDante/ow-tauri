@@ -5,7 +5,7 @@
 //! the port: `userData` is `<appData>/<productName>`.
 //!
 //! ```
-//! use std::path::PathBuf;
+//! use std::path::{Path, PathBuf};
 //! use tauri_plugin_overwolf::paths::{electron_paths, BaseDirs, TargetOs};
 //! let base = BaseDirs {
 //!     app_data: PathBuf::from("/home/u/.config"),
@@ -16,8 +16,8 @@
 //!     ..BaseDirs::default()
 //! };
 //! let paths = electron_paths(&base, "Example App", TargetOs::Linux);
-//! assert_eq!(paths["userData"], "/home/u/.config/Example App");
-//! assert_eq!(paths["logs"], "/home/u/.config/Example App/logs");
+//! assert_eq!(Path::new(&paths["userData"]), Path::new("/home/u/.config/Example App"));
+//! assert_eq!(Path::new(&paths["logs"]), Path::new("/home/u/.config/Example App/logs"));
 //! ```
 
 use std::collections::BTreeMap;
@@ -37,6 +37,13 @@ pub enum TargetOs {
 
 impl TargetOs {
     /// The OS this binary was built for.
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::paths::TargetOs;
+    /// if cfg!(windows) {
+    ///     assert_eq!(TargetOs::current(), TargetOs::Windows);
+    /// }
+    /// ```
     #[must_use]
     pub const fn current() -> Self {
         if cfg!(windows) {
@@ -49,6 +56,12 @@ impl TargetOs {
     }
 
     /// Node's `process.platform` spelling.
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::paths::TargetOs;
+    /// assert_eq!(TargetOs::Windows.node_platform(), "win32");
+    /// assert_eq!(TargetOs::Macos.node_platform(), "darwin");
+    /// ```
     #[must_use]
     pub const fn node_platform(self) -> &'static str {
         match self {
@@ -60,6 +73,13 @@ impl TargetOs {
 }
 
 /// Node's `process.arch` spelling for the running binary.
+///
+/// ```
+/// let arch = tauri_plugin_overwolf::paths::node_arch();
+/// if cfg!(target_arch = "x86_64") {
+///     assert_eq!(arch, "x64");
+/// }
+/// ```
 #[must_use]
 pub fn node_arch() -> &'static str {
     match std::env::consts::ARCH {
@@ -101,6 +121,12 @@ pub struct BaseDirs {
 }
 
 /// The `userData` directory: `<appData>/<productName>`.
+///
+/// ```
+/// use std::path::Path;
+/// let dir = tauri_plugin_overwolf::paths::user_data_dir(Path::new("/home/u/.config"), "Example App");
+/// assert_eq!(dir, Path::new("/home/u/.config/Example App"));
+/// ```
 #[must_use]
 pub fn user_data_dir(app_data: &Path, product_name: &str) -> PathBuf {
     app_data.join(product_name)
@@ -108,6 +134,12 @@ pub fn user_data_dir(app_data: &Path, product_name: &str) -> PathBuf {
 
 /// The virtual app root behind `app.getAppPath()`: `<resources>/app`.
 /// `<appPath>/package.json` is served from the embedded manifest.
+///
+/// ```
+/// use std::path::Path;
+/// let root = tauri_plugin_overwolf::paths::app_path(Path::new("/opt/example"));
+/// assert_eq!(root.join("package.json"), Path::new("/opt/example/app/package.json"));
+/// ```
 #[must_use]
 pub fn app_path(resources: &Path) -> PathBuf {
     resources.join("app")
@@ -119,7 +151,21 @@ fn put(map: &mut BTreeMap<String, String>, key: &str, path: &Path) {
     }
 }
 
-/// Every `getPath` name plus `appPath`, as strings.
+/// Every `getPath` name plus `appPath`, as strings. Names whose base
+/// directory is unknown are omitted.
+///
+/// ```
+/// use std::path::{Path, PathBuf};
+/// use tauri_plugin_overwolf::paths::{electron_paths, BaseDirs, TargetOs};
+/// let base = BaseDirs {
+///     app_data: PathBuf::from("/Users/u/Library/Application Support"),
+///     home: PathBuf::from("/Users/u"),
+///     ..BaseDirs::default()
+/// };
+/// let paths = electron_paths(&base, "Example App", TargetOs::Macos);
+/// assert_eq!(Path::new(&paths["logs"]), Path::new("/Users/u/Library/Logs/Example App"));
+/// assert!(!paths.contains_key("downloads"));
+/// ```
 #[must_use]
 pub fn electron_paths(
     base: &BaseDirs,

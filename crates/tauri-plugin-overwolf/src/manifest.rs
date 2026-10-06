@@ -105,6 +105,14 @@ impl EmbeddedManifest {
     /// # Errors
     ///
     /// [`ManifestError`] when the JSON is not an embedded manifest.
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::manifest::EmbeddedManifest;
+    /// let json = serde_json::to_string(&EmbeddedManifest::minimal("Demo", "Example Studio", "1.0.0")).unwrap();
+    /// let m = EmbeddedManifest::from_embedded_json(&json).unwrap();
+    /// assert_eq!(m.version, "1.0.0");
+    /// assert_eq!(EmbeddedManifest::from_embedded_json("[]").unwrap_err().path, "$");
+    /// ```
     pub fn from_embedded_json(json: &str) -> Result<Self, ManifestError> {
         serde_json::from_str(json).map_err(|e| ManifestError {
             path: "$".into(),
@@ -137,6 +145,13 @@ impl EmbeddedManifest {
 
     /// The `package.json` text served at `<appPath>/package.json` (CONTRACT
     /// A.2.3): the raw manifest, pretty-printed.
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::manifest::EmbeddedManifest;
+    /// let text = EmbeddedManifest::minimal("Demo", "Example Studio", "1.0.0").package_json_text();
+    /// let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    /// assert_eq!(v["author"], "Example Studio");
+    /// ```
     #[must_use]
     pub fn package_json_text(&self) -> String {
         serde_json::to_string_pretty(&self.raw).unwrap_or_default()

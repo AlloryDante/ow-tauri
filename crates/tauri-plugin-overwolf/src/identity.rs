@@ -210,6 +210,13 @@ pub struct EmailHashes {
 
 impl EmailHashes {
     /// Whether every field is absent or empty (which clears stored hashes).
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::identity::EmailHashes;
+    /// assert!(EmailHashes::default().is_empty());
+    /// let some = EmailHashes { md5: Some("abc".into()), ..EmailHashes::default() };
+    /// assert!(!some.is_empty());
+    /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
         [&self.sha1, &self.sha256, &self.md5]

@@ -17,7 +17,12 @@
 //!   manifest parser, the identity functions and the [`build`] helper, which
 //!   is what an app's build script needs.
 //! - `devtools`: lets `window_devtools` open devtools in release builds.
-//! - `test-util`: hooks for testing IPC wiring on Tauri's mock runtime.
+//! - `test-util`: `Builder::skip_os_queries` and hidden hooks that drive the
+//!   plugin's event handlers on Tauri's mock runtime, which fires none. Not a
+//!   stable API.
+//!
+//! The documented modules are the public API. Modules hidden from the docs
+//! are internal building blocks, public only for their tests.
 //!
 //! ## Example
 //!
@@ -30,25 +35,41 @@
 #![deny(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-pub mod accelerator;
-pub mod ads;
-pub mod analytics;
 pub mod build;
 pub mod config;
-pub mod consent;
 pub mod error;
 pub mod fs_scope;
 pub mod identity;
-pub mod ipc;
-pub mod lifecycle;
 pub mod manifest;
 pub mod packages;
 pub mod paths;
-pub mod screen;
 pub mod shell;
+
+// Internal building blocks: public so their doctests run and so the
+// mock-runtime suite can reach them, but not part of the documented API and
+// not covered by semver. The ads, analytics, consent and updater modules are
+// placeholders that later work fills in.
+#[doc(hidden)]
+pub mod accelerator;
+#[doc(hidden)]
+pub mod ads;
+#[doc(hidden)]
+pub mod analytics;
+#[doc(hidden)]
+pub mod consent;
+#[doc(hidden)]
+pub mod ipc;
+#[doc(hidden)]
+pub mod lifecycle;
+#[doc(hidden)]
+pub mod screen;
+#[doc(hidden)]
 pub mod snapshot;
+#[doc(hidden)]
 pub mod state;
+#[doc(hidden)]
 pub mod updater;
+#[doc(hidden)]
 pub mod window;
 
 mod platform;
@@ -66,6 +87,8 @@ mod plugin;
 
 pub use error::{Error, ErrorCode, Result};
 pub use packages::PackagesBackend;
+pub use snapshot::Flags;
+pub use state::log::LogLevel;
 
 #[cfg(feature = "plugin")]
 pub use ext::{Overwolf, OverwolfExt};

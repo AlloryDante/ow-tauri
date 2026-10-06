@@ -28,60 +28,141 @@ impl<R: Runtime> std::fmt::Debug for Overwolf<R> {
 
 impl<R: Runtime> Overwolf<R> {
     /// The effective app uid (G.2).
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// let uid = app.overwolf().uid();
+    /// assert!(!uid.is_empty());
+    /// # }
+    /// ```
     #[must_use]
     pub fn uid(&self) -> &str {
         &self.0.info.identity.uid
     }
 
     /// The computed uid, even when an override applies (G.2).
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// let ow = app.overwolf();
+    /// if ow.uid() != ow.cuid() {
+    ///     println!("a console-assigned uid is in use");
+    /// }
+    /// # }
+    /// ```
     #[must_use]
     pub fn cuid(&self) -> &str {
         &self.0.info.identity.cuid
     }
 
     /// The machine/user id used by analytics (E.4).
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// println!("muid {}", app.overwolf().muid());
+    /// # }
+    /// ```
     #[must_use]
     pub fn muid(&self) -> &str {
         &self.0.info.muid
     }
 
     /// Equals [`Overwolf::muid`] (OQ-02).
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// let ow = app.overwolf();
+    /// assert_eq!(ow.muid_v2(), ow.muid());
+    /// # }
+    /// ```
     #[must_use]
     pub fn muid_v2(&self) -> &str {
         &self.0.info.muid
     }
 
     /// The phase percent derived from the muid.
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// assert!(app.overwolf().phase_percent() < 100);
+    /// # }
+    /// ```
     #[must_use]
     pub fn phase_percent(&self) -> u8 {
         self.0.info.phase_percent
     }
 
     /// `ow-electron.json` `utmParams`, or `null`.
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// if let Some(source) = app.overwolf().utm_params().get("utm_source") {
+    ///     println!("installed from {source}");
+    /// }
+    /// # }
+    /// ```
     #[must_use]
     pub fn utm_params(&self) -> &Value {
         &self.0.info.utm_params
     }
 
     /// The embedded manifest.
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// println!("{} {}", app.overwolf().manifest().product_name, app.overwolf().manifest().version);
+    /// # }
+    /// ```
     #[must_use]
     pub fn manifest(&self) -> &EmbeddedManifest {
         &self.0.info.manifest
     }
 
     /// The effective configuration (file, builder, environment, switches).
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// let config = app.overwolf().config();
+    /// println!("main document {}", config.main.url);
+    /// # }
+    /// ```
     #[must_use]
     pub fn config(&self) -> &Config {
         &self.0.info.config
     }
 
     /// The per-app state directory `<appData>/ow-electron/<uid>` (F.1).
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// let log_dir = app.overwolf().state_dir().join("logs");
+    /// println!("{}", log_dir.display());
+    /// # }
+    /// ```
     #[must_use]
     pub fn state_dir(&self) -> &Path {
         self.0.info.state_dir.root()
     }
 
     /// The session switches.
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// if app.overwolf().flags().ads_fpd_disabled {
+    ///     println!("first-party data is off for this session");
+    /// }
+    /// # }
+    /// ```
     #[must_use]
     pub fn flags(&self) -> Flags {
         self.0.with_core(|c| c.flags)
@@ -95,6 +176,14 @@ impl<R: Runtime> Overwolf<R> {
     }
 
     /// `app.overwolf.disableAnonymousAnalytics()` (A.2.2).
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// app.overwolf().disable_anonymous_analytics();
+    /// assert!(app.overwolf().flags().anonymous_analytics_disabled);
+    /// # }
+    /// ```
     pub fn disable_anonymous_analytics(&self) {
         self.set_flag("anonymousAnalyticsDisabled", |f| {
             f.anonymous_analytics_disabled = true;
@@ -102,6 +191,13 @@ impl<R: Runtime> Overwolf<R> {
     }
 
     /// `disableAdsOptimization()` (A.2.2).
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// app.overwolf().disable_ads_optimization();
+    /// # }
+    /// ```
     pub fn disable_ads_optimization(&self) {
         self.set_flag("adsOptimizationDisabled", |f| {
             f.ads_optimization_disabled = true;
@@ -109,11 +205,26 @@ impl<R: Runtime> Overwolf<R> {
     }
 
     /// `disableAdsFPD()` (A.2.2).
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// app.overwolf().disable_ads_fpd();
+    /// # }
+    /// ```
     pub fn disable_ads_fpd(&self) {
         self.set_flag("adsFpdDisabled", |f| f.ads_fpd_disabled = true);
     }
 
     /// Hashes an email address with the configured encoding (A.2.2).
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// let hashes = app.overwolf().generate_user_email_hashes("someone@example.com");
+    /// println!("{hashes:?}");
+    /// # }
+    /// ```
     #[must_use]
     pub fn generate_user_email_hashes(&self, email: &str) -> EmailHashes {
         email_hashes(email, self.0.info.config.email_hashes.encoding)
@@ -121,6 +232,15 @@ impl<R: Runtime> Overwolf<R> {
 
     /// Fires `app.on('second-instance')` in `ow-main`. Call it from the app's
     /// `tauri-plugin-single-instance` callback (A.5).
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// // In the `tauri-plugin-single-instance` callback:
+    /// let argv = vec!["app".to_owned(), "--open=settings".to_owned()];
+    /// app.overwolf().emit_second_instance(argv, "/".to_owned());
+    /// # }
+    /// ```
     pub fn emit_second_instance(&self, argv: Vec<String>, cwd: String) {
         let mut extra = Map::new();
         extra.insert("argv".into(), Value::from(argv));
@@ -136,16 +256,39 @@ impl<R: Runtime> Overwolf<R> {
     /// Reports that the `ow-main` render process died (A.6). Apps forward
     /// `tauri::Builder::on_web_content_process_terminate` (macOS) here for
     /// the webview labelled `ow-main`.
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// // From `tauri::Builder::on_web_content_process_terminate` for `ow-main`:
+    /// app.overwolf().report_main_webview_crash();
+    /// # }
+    /// ```
     pub fn report_main_webview_crash(&self) {
         self.0.main_crashed();
     }
 
     /// Starts the graceful quit sequence (A.6), as `app.quit()` does.
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// app.overwolf().quit();
+    /// # }
+    /// ```
     pub fn quit(&self) {
         self.0.begin_quit(0);
     }
 
     /// Appends a line to the ow-tauri log (F.4).
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// use tauri_plugin_overwolf::LogLevel;
+    /// app.overwolf().log(LogLevel::Info, "tray menu opened");
+    /// # }
+    /// ```
     pub fn log(&self, level: LogLevel, message: &str) {
         self.0.log(level, message);
     }

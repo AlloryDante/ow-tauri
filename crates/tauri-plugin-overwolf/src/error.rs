@@ -231,6 +231,12 @@ macro_rules! constructors {
     ($($(#[$doc:meta])* $fn_name:ident => $variant:ident;)*) => {
         $(
             $(#[$doc])*
+            ///
+            /// ```
+            #[doc = concat!("let err = tauri_plugin_overwolf::Error::", stringify!($fn_name), "(\"It failed.\");")]
+            #[doc = concat!("assert_eq!(err.code(), tauri_plugin_overwolf::ErrorCode::", stringify!($variant), ");")]
+            /// assert_eq!(err.message(), "It failed.");
+            /// ```
             #[must_use]
             pub fn $fn_name(message: impl Into<String>) -> Self {
                 Error::$variant { message: message.into(), data: None }
@@ -306,6 +312,12 @@ impl Error {
     }
 
     /// The machine-readable code.
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::{Error, ErrorCode};
+    /// assert_eq!(Error::forbidden("No.").code(), ErrorCode::Forbidden);
+    /// assert_eq!(ErrorCode::Forbidden.as_str(), "forbidden");
+    /// ```
     #[must_use]
     pub fn code(&self) -> ErrorCode {
         match self {
@@ -326,12 +338,24 @@ impl Error {
     }
 
     /// The human-readable message.
+    ///
+    /// ```
+    /// let err = tauri_plugin_overwolf::Error::not_ready("The main webview restarted.");
+    /// assert_eq!(err.message(), "The main webview restarted.");
+    /// ```
     #[must_use]
     pub fn message(&self) -> &str {
         self.parts().0
     }
 
     /// The code-specific details, if any.
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::Error;
+    /// let err = Error::invalid_argument("Bad channel.").with_data(serde_json::json!({ "channel": "" }));
+    /// assert_eq!(err.data().unwrap()["channel"], "");
+    /// assert!(Error::io("Disk full.").data().is_none());
+    /// ```
     #[must_use]
     pub fn data(&self) -> Option<&Value> {
         self.parts().1.as_ref()
@@ -357,6 +381,15 @@ impl Error {
 
     /// Wraps an I/O failure. The OS message is kept in `data.os` and the
     /// path is never included.
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::{Error, ErrorCode};
+    /// let io = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+    /// let err = Error::from_io("Writing the settings", &io);
+    /// assert_eq!(err.code(), ErrorCode::Io);
+    /// assert_eq!(err.message(), "Writing the settings failed.");
+    /// assert!(err.data().unwrap()["os"].is_string());
+    /// ```
     #[must_use]
     pub fn from_io(context: &str, err: &std::io::Error) -> Self {
         Error::Io {
