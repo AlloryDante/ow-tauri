@@ -1,8 +1,8 @@
 /**
  * Error types shared by every ow-tauri entry point.
  *
- * The contract for each code is in `docs/CONTRACT.md`, section C.5 (IPC
- * errors) and section B.2 (unsupported Electron members).
+ * The contract for each code is in `docs/CONTRACT.md`, sections A.4 (error
+ * shape), C.8 (IPC errors) and B.2 (unsupported Electron members).
  *
  * @packageDocumentation
  */
@@ -10,23 +10,37 @@
 /**
  * Machine-readable reason carried by every {@link OwTauriError}.
  *
+ * The same strings are the `code` of the Rust plugin's serialised errors
+ * (`docs/CONTRACT.md`, section A.4), so a command rejection maps one-to-one.
+ *
  * - `unsupported`: the API exists in Electron or ow-electron but ow-tauri does
  *   not implement it (see {@link OwTauriUnsupportedError}).
+ * - `not-ready`: the call needs the host (or a package) to be ready and it is not.
+ * - `invalid-argument`: an argument failed validation.
+ * - `not-found`: the window, element, event or request it refers to does not exist.
+ * - `forbidden`: the calling webview's class may not make this call, or a path
+ *   is outside the allowed scope.
  * - `ipc-no-handler`: `ipcRenderer.invoke` reached a channel with no
  *   `ipcMain.handle` registration.
  * - `ipc-timeout`: an IPC request got no reply within its timeout.
- * - `ipc-serialization`: an argument or result cannot cross IPC as JSON.
- * - `not-ready`: the call needs the host to be ready and it is not yet.
- * - `invalid-argument`: an argument failed validation.
- * - `backend`: the Rust plugin or a package runtime reported a failure.
+ * - `ipc-serialization`: a value cannot be encoded for IPC (section C.7).
+ * - `ipc-remote-error`: the `ipcMain.handle` handler threw or rejected.
+ * - `io`: a file-system or window-system operation failed.
+ * - `network`: an HTTP request failed.
+ * - `backend`: the plugin or a package runtime reported another failure.
  */
 export type OwTauriErrorCode =
   | 'unsupported'
+  | 'not-ready'
+  | 'invalid-argument'
+  | 'not-found'
+  | 'forbidden'
   | 'ipc-no-handler'
   | 'ipc-timeout'
   | 'ipc-serialization'
-  | 'not-ready'
-  | 'invalid-argument'
+  | 'ipc-remote-error'
+  | 'io'
+  | 'network'
   | 'backend';
 
 /**
