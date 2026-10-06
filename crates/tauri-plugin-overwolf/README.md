@@ -11,9 +11,81 @@ app ported from ow-electron the same Overwolf runtime services it had before.
 - an electron-updater-compatible update client
 - the IPC router behind the `ow-tauri/electron` subset
 
-Status: scaffold. The public surface is specified in
-[docs/CONTRACT.md](../../docs/CONTRACT.md) and the design in
-[docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md).
+The public surface is specified in [docs/CONTRACT.md](../../docs/CONTRACT.md)
+and the design in [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md).
+
+## Status
+
+| Area | Contract | State |
+|---|---|---|
+| Configuration, environment and switches | A.1 | done |
+| Main webview: bootstrap, lifecycle, IPC routing | A.2.1, C | done |
+| Windows, screen, shell, dialogs, global shortcuts, scoped files | A.2.3 | done |
+| UI window commands (`overwolf:renderer`) | A.2.5 | done, without `adview_*` |
+| Host messages and errors | A.3, A.4 | done |
+| Rust API (`Builder`, `OverwolfExt`) | A.5 | identity, flags, quit, second instance |
+| Main webview liveness, soft restart, crash limit, quit sequence | A.6 | done |
+| State files and log | F | done |
+| Manifest, uid, `build::embed_manifest` | G | done |
+| Ads, consent, analytics, updater | A.2.2, A.2.6 to A.2.8, D, E, I | stubs, later milestones |
+| Packages | A.2.4, H | reported as unavailable; no simulated backends |
+
+## Usage
+
+```toml
+# src-tauri/Cargo.toml
+[dependencies]
+tauri-plugin-overwolf = "0.1"
+
+[build-dependencies]
+tauri-plugin-overwolf = { version = "0.1", default-features = false }
+```
+
+```rust
+// src-tauri/build.rs
+fn main() {
+    tauri_plugin_overwolf::build::embed_manifest("../package.json")
+        .expect("package.json overwolf manifest");
+    tauri_build::build();
+}
+```
+
+```rust
+// src-tauri/src/main.rs
+tauri::Builder::default()
+    .plugin(
+        tauri_plugin_overwolf::Builder::new()
+            .manifest_json(tauri_plugin_overwolf::embedded_manifest!())
+            .build(),
+    )
+    .run(tauri::generate_context!())
+    .expect("error while running tauri application");
+```
+
+The plugin creates the hidden main webview `ow-main` and grants it
+`overwolf:main` through a runtime capability. Grant `overwolf:renderer` to
+the `BrowserWindow` webviews in a capability file, by webview label only:
+
+```json
+{
+  "identifier": "ow-tauri-renderer",
+  "local": true,
+  "webviews": ["bw-*"],
+  "permissions": ["overwolf:renderer"]
+}
+```
+
+It registers `tauri-plugin-opener`, `tauri-plugin-dialog` and
+`tauri-plugin-global-shortcut` itself unless the app already did. No webview
+is granted their permissions; the plugin calls them from Rust.
+
+## Tests
+
+- `cargo test -p tauri-plugin-overwolf`: unit and property tests of the pure
+  modules (router ordering and back-pressure, quit sequence, scopes, uid).
+- `cargo test -p ow-tauri-acl-tests`: every command from every webview class
+  on Tauri's mock runtime, with the ACL compiled from `permissions/`, plus
+  IPC routing through real commands (`tests/acl-app`).
 
 ## Requirements
 

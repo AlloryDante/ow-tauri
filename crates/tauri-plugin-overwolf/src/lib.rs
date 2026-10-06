@@ -53,8 +53,24 @@ pub mod window;
 
 mod platform;
 
+#[cfg(feature = "plugin")]
+mod capabilities;
+#[cfg(feature = "plugin")]
+mod commands;
+#[cfg(feature = "plugin")]
+mod ext;
+#[cfg(feature = "plugin")]
+mod host;
+#[cfg(feature = "plugin")]
+mod plugin;
+
 pub use error::{Error, ErrorCode, Result};
 pub use packages::PackagesBackend;
+
+#[cfg(feature = "plugin")]
+pub use ext::{Overwolf, OverwolfExt};
+#[cfg(feature = "plugin")]
+pub use plugin::{Builder, COMMANDS};
 
 /// The plugin name registered with Tauri.
 ///
