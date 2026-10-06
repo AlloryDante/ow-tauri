@@ -1,0 +1,9 @@
+{
+  "name": "acl-fixture",
+  "productName": "ACL Fixture",
+  "version": "0.1.0",
+  "author": "Example Studio",
+  "overwolf": {
+    "packages": []
+  }
+}

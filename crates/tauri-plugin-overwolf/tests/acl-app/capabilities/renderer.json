@@ -1,0 +1,7 @@
+{
+  "identifier": "fixture-renderer",
+  "description": "What an app grants its BrowserWindow webviews: overwolf:renderer, matched by webview label only.",
+  "local": true,
+  "webviews": ["bw-*"],
+  "permissions": ["overwolf:renderer"]
+}

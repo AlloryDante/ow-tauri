@@ -1,10 +1,11 @@
 # ow-tauri Cargo workspace.
 #
-# Members are added as they land: the plugin crate today, the example app's
-# `src-tauri` crate once the packages-sample port reaches it.
+# Members are added as they land: the plugin crate and its mock-runtime ACL
+# test app today, the example app's `src-tauri` crate once the
+# packages-sample port reaches it.
 [workspace]
 resolver = "3"
-members = ["crates/tauri-plugin-overwolf"]
+members = ["crates/tauri-plugin-overwolf", "crates/tauri-plugin-overwolf/tests/acl-app"]
 
 [workspace.package]
 version = "0.1.0"
