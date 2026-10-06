@@ -90,6 +90,39 @@ export function createSettings(
 }
 
 /**
+ * The `setExternalPaymentUserId()` options as the wire carries them:
+ * ow-electron appends the options as given to the report, so every own
+ * enumerable key is copied in the app's order with its original value [OBS
+ * R2-3]. Values JSON cannot carry (functions, symbols, bigints, `undefined`)
+ * are left out, and so is an empty `providerName`, which the plugin then
+ * defaults to `"tebex"` after the other fields [DEC].
+ *
+ * @param raw - the app's options
+ * @returns the wire options
+ */
+function paymentOptions(raw: object): Record<string, unknown> {
+  const wire: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (
+      value === undefined ||
+      typeof value === 'function' ||
+      typeof value === 'symbol' ||
+      typeof value === 'bigint'
+    )
+      continue;
+    if (key === 'providerName' && value === '') continue;
+    // defineProperty, so a `__proto__` key stays a plain field.
+    Object.defineProperty(wire, key, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return wire;
+}
+
+/**
  * The `app.overwolf` implementation. One instance per main webview, shared by
  * `ow-tauri/main` (`overwolf`) and `ow-tauri/electron` (`app.overwolf`).
  */
@@ -98,6 +131,13 @@ export class Overwolf implements OverwolfApi {
   readonly packages: PackageManager;
   /** ow-electron's internal settings object [OBS]. */
   readonly __settings__: OverwolfSettings;
+  /**
+   * Present on ow-electron's object and always `false`, also after
+   * `disableAdsOptimization()` [OBS]; not in its typings.
+   *
+   * @internal
+   */
+  readonly enableAdsOptimization: boolean = false;
   readonly #kernel: FacadeKernel;
   #adsOptimization: AdsOptimizationSettings = Object.freeze({});
 
@@ -236,7 +276,8 @@ export class Overwolf implements OverwolfApi {
 
   /**
    * Reports the user's id at an external payment provider (E.2 `sub_info`).
-   * Rejects (never throws) with {@link PAYMENT_ID_MANDATORY} without a
+   * The options reach the report as given: same keys, order and values
+   * [OBS]. Rejects (never throws) with {@link PAYMENT_ID_MANDATORY} without a
    * `userId`, and with {@link NOT_READY_MESSAGE} before `app.ready`; a failed
    * report still resolves [OBS].
    *
@@ -256,10 +297,7 @@ export class Overwolf implements OverwolfApi {
     )
       throw new Error(PAYMENT_ID_MANDATORY);
     if (!this.#kernel.isReady) throw new Error(NOT_READY_MESSAGE);
-    const wire: Record<string, unknown> = { userId: String(userId) };
-    if (typeof raw.providerName === 'string' && raw.providerName !== '')
-      wire['providerName'] = raw.providerName;
-    if (typeof raw.paymentId === 'string') wire['paymentId'] = raw.paymentId;
+    const wire = paymentOptions(raw);
     try {
       await this.#kernel.command('set_external_payment_user_id', { options: wire });
     } catch (error) {
@@ -280,6 +318,49 @@ export class Overwolf implements OverwolfApi {
       }
       this.#kernel.log('warn', `set_external_payment_user_id failed: ${(error as Error).message}`);
     }
+  }
+
+  /**
+   * Present on ow-electron's object, not in its typings [OBS]: resolves once
+   * the app is ready (`main_ready` acknowledged) [DEC].
+   *
+   * @returns resolves when ready
+   * @internal
+   */
+  async assureOWElectronIsReady(): Promise<void> {
+    this.#kernel.require('main', 'app.overwolf.assureOWElectronIsReady');
+    await this.#kernel.whenHostReady();
+  }
+
+  /**
+   * Present on ow-electron's object, not in its typings, semantics not
+   * observed [OBS]: has no effect in ow-tauri and logs a warning once.
+   *
+   * @param _url - ignored
+   * @internal
+   */
+  overrideAdViewUrl(_url: unknown): void {
+    this.#kernel.require('main', 'app.overwolf.overrideAdViewUrl');
+    this.#kernel.warnOnce(
+      'app.overwolf.overrideAdViewUrl',
+      'app.overwolf.overrideAdViewUrl() is internal to ow-electron and has no effect in ow-tauri',
+    );
+  }
+
+  /**
+   * Present on ow-electron's object, not in its typings, semantics not
+   * observed [OBS]: has no effect in ow-tauri and logs a warning once; use
+   * {@link Overwolf.setUserEmailHashes}.
+   *
+   * @param _hashes - ignored
+   * @internal
+   */
+  storeEmailHashes(_hashes: unknown): void {
+    this.#kernel.require('main', 'app.overwolf.storeEmailHashes');
+    this.#kernel.warnOnce(
+      'app.overwolf.storeEmailHashes',
+      'app.overwolf.storeEmailHashes() is internal to ow-electron and has no effect in ow-tauri; use setUserEmailHashes()',
+    );
   }
 
   #sendHashes(hashes: EmailHashes | undefined): void {

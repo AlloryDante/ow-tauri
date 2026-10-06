@@ -68,6 +68,26 @@ describe('app.overwolf synchronous members (B.1.1, B.1.6)', () => {
     expect(overwolf.phasePercent).toBe(0);
   });
 
+  it('has the members ow-electron has beyond its typings [OBS]', async () => {
+    host = mockHost();
+    const api = overwolf as unknown as Record<string, unknown>;
+    expect(api['enableAdsOptimization']).toBe(false);
+    overwolf.disableAdsOptimization();
+    expect(api['enableAdsOptimization']).toBe(false);
+    expect(overwolf.assureOWElectronIsReady.length).toBe(0);
+    expect(overwolf.overrideAdViewUrl.length).toBe(1);
+    expect(overwolf.storeEmailHashes.length).toBe(1);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    overwolf.overrideAdViewUrl('https://example.com/');
+    overwolf.storeEmailHashes({ sha256: 'a' });
+    overwolf.storeEmailHashes({ sha256: 'b' });
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(host.callsOf('set_user_email_hashes')).toHaveLength(0);
+    const ready = overwolf.assureOWElectronIsReady();
+    await whenHostReady();
+    await expect(ready).resolves.toBeUndefined();
+  });
+
   it('is the same object as app.overwolf', () => {
     host = mockHost();
     expect(app.overwolf).toBe(overwolf);
@@ -307,10 +327,32 @@ describe('setExternalPaymentUserId (A.2.2, E.2) [OBS]', () => {
     await whenHostReady();
     await overwolf.setExternalPaymentUserId({ userId: 'u1', paymentId: 'p1' } as never);
     await overwolf.setExternalPaymentUserId({ providerName: 'other', userId: 42 as never });
-    expect(host.callsOf('set_external_payment_user_id')).toEqual([
-      { options: { userId: 'u1', paymentId: 'p1' } },
-      { options: { userId: '42', providerName: 'other' } },
+    await overwolf.setExternalPaymentUserId({
+      providerName: '',
+      userId: 'u2',
+      extra: { a: 1 },
+      skipped: () => undefined,
+      big: 1n,
+      none: undefined,
+    } as never);
+    await overwolf.setExternalPaymentUserId(JSON.parse('{"__proto__":"x","userId":"u3"}') as never);
+    const sent = host
+      .callsOf('set_external_payment_user_id')
+      .map((args) => (args as { options: Record<string, unknown> }).options);
+    expect(sent).toEqual([
+      { userId: 'u1', paymentId: 'p1' },
+      { providerName: 'other', userId: 42 },
+      { userId: 'u2', extra: { a: 1 } },
+      JSON.parse('{"__proto__":"x","userId":"u3"}'),
     ]);
+    // The app's key order reaches the report [OBS R2-3].
+    expect(sent.map((options) => Object.keys(options))).toEqual([
+      ['userId', 'paymentId'],
+      ['providerName', 'userId'],
+      ['userId', 'extra'],
+      ['__proto__', 'userId'],
+    ]);
+    expect(Object.getPrototypeOf(sent[3])).toBe(Object.prototype);
     host.setCommand('set_external_payment_user_id', () => {
       throw { code: 'network', message: 'offline' };
     });
