@@ -17,7 +17,7 @@
  */
 import { OwTauriError } from './errors.js';
 
-/** A JSON value produced by {@link encode}. */
+/** A JSON value produced by the OTJ encoder (CONTRACT C.7). */
 export type OtjValue = null | boolean | number | string | OtjValue[] | { [key: string]: OtjValue };
 
 /** The tag key. */
@@ -82,6 +82,48 @@ const REFUSED_TAGS: ReadonlySet<string> = new Set([
   'AbortSignal',
 ]);
 
+/**
+ * Deepest nesting of objects and arrays in an encoded value. Tauri parses
+ * command arguments with `serde_json`, whose recursion limit is 128 levels;
+ * OTJ tags add levels (a `Map` entry adds three), and the command envelope a
+ * few more, so values are refused well below that limit with a clear error.
+ */
+export const MAX_DEPTH = 100;
+
+/**
+ * Checks that `value` really is what its `Symbol.toStringTag` claims, by
+ * calling a method that throws for any other object.
+ */
+const BRAND_CHECKS: Readonly<Record<string, (value: object) => unknown>> = {
+  Date: (v) => Date.prototype.getTime.call(v as Date),
+  RegExp: (v) =>
+    Object.getOwnPropertyDescriptor(RegExp.prototype, 'source')?.get?.call(v) as unknown,
+  Map: (v) => Map.prototype.has.call(v as Map<unknown, unknown>, undefined),
+  Set: (v) => Set.prototype.has.call(v as Set<unknown>, undefined),
+  Number: (v) => Number.prototype.valueOf.call(v as unknown as number),
+  String: (v) => String.prototype.valueOf.call(v as unknown as string),
+  Boolean: (v) => Boolean.prototype.valueOf.call(v as unknown as boolean),
+  BigInt: (v) => BigInt.prototype.valueOf.call(v as unknown as bigint),
+};
+
+/**
+ * The built-in type of `value` when its tag is genuine, else `Object`.
+ *
+ * @param value - an object
+ * @param tag - its `Object.prototype.toString` tag
+ * @returns the tag, or `Object` for a spoofed `Symbol.toStringTag`
+ */
+function brandOf(value: object, tag: string): string {
+  const check = BRAND_CHECKS[tag];
+  if (!check) return tag;
+  try {
+    check(value);
+    return tag;
+  } catch {
+    return 'Object';
+  }
+}
+
 /** Options for {@link encode}. */
 export interface EncodeOptions {
   /** Name of the root value in error messages; default `value`. */
@@ -96,8 +138,9 @@ export interface EncodeOptions {
  * @returns the JSON-compatible encoding
  * @throws OwTauriError `ipc-serialization` for functions, symbols, DOM nodes,
  *   `Window`, promises, `WeakMap` / `WeakSet` and similar platform objects,
- *   and for cyclic or shared references; the message names the path of the
- *   offending value (for example `args[1].handler`)
+ *   for cyclic or shared references, and for values nested deeper than
+ *   {@link MAX_DEPTH}; the message names the path of the offending value
+ *   (for example `args[1].handler`)
  *
  * @example
  * ```ts
@@ -105,7 +148,7 @@ export interface EncodeOptions {
  * ```
  */
 export function encode(value: unknown, options?: EncodeOptions): OtjValue {
-  return new Encoder().value(value, options?.root ?? 'value');
+  return new Encoder().value(value, options?.root ?? 'value', 0);
 }
 
 /**
@@ -118,7 +161,7 @@ export function encode(value: unknown, options?: EncodeOptions): OtjValue {
  */
 export function encodeArgs(args: readonly unknown[], root = 'args'): OtjValue[] {
   const encoder = new Encoder();
-  return args.map((arg, i) => encoder.value(arg, `${root}[${String(i)}]`));
+  return args.map((arg, i) => encoder.value(arg, `${root}[${String(i)}]`, 1));
 }
 
 /**
@@ -181,7 +224,12 @@ class Encoder {
   /** Every object seen so far: OTJ rejects cyclic and shared references. */
   private readonly seen = new WeakSet();
 
-  value(value: unknown, path: string): OtjValue {
+  /**
+   * @param value - the value
+   * @param path - its path, for error messages
+   * @param depth - nesting level of `value` in the encoded output
+   */
+  value(value: unknown, path: string, depth: number): OtjValue {
     switch (typeof value) {
       case 'undefined':
         return { [TAG]: 'undefined' };
@@ -200,27 +248,33 @@ class Encoder {
         break;
     }
     if (value === null) return null;
-    return this.object(value as object, path);
+    return this.object(value as object, path, depth);
   }
 
-  private object(value: object, path: string): OtjValue {
+  private object(value: object, path: string, depth: number): OtjValue {
     if (isDomNode(value)) return refuse(path, 'a DOM node');
-    const tag = Object.prototype.toString.call(value).slice(8, -1);
+    const tag = brandOf(value, Object.prototype.toString.call(value).slice(8, -1));
     if (REFUSED_TAGS.has(tag) || isWindow(value)) return refuse(path, `a ${tag} object`);
     if (this.seen.has(value)) return refuse(path, 'a cyclic or shared reference');
+    if (depth >= MAX_DEPTH) {
+      return refuse(path, `nested more than ${String(MAX_DEPTH)} levels deep`);
+    }
     this.seen.add(value);
 
     if (Array.isArray(value)) {
       const out: OtjValue[] = [];
       for (let i = 0; i < value.length; i++) {
-        out.push(this.value(i in value ? value[i] : undefined, `${path}[${String(i)}]`));
+        out.push(this.value(i in value ? value[i] : undefined, `${path}[${String(i)}]`, depth + 1));
       }
       return out;
     }
     switch (tag) {
       case 'Date': {
-        const time = (value as Date).getTime();
-        return { [TAG]: 'date', v: Number.isNaN(time) ? null : (value as Date).toISOString() };
+        const time = Date.prototype.getTime.call(value as Date);
+        return {
+          [TAG]: 'date',
+          v: Number.isNaN(time) ? null : Date.prototype.toISOString.call(value as Date),
+        };
       }
       case 'RegExp':
         return {
@@ -231,17 +285,20 @@ class Encoder {
       case 'Map': {
         const entries: OtjValue[] = [];
         let i = 0;
-        for (const [k, v] of value as Map<unknown, unknown>) {
+        for (const [k, v] of Map.prototype.entries.call(value as Map<unknown, unknown>)) {
           const at = `${path}.entries[${String(i++)}]`;
-          entries.push([this.value(k, `${at}[0]`), this.value(v, `${at}[1]`)]);
+          entries.push([
+            this.value(k, `${at}[0]`, depth + 3),
+            this.value(v, `${at}[1]`, depth + 3),
+          ]);
         }
         return { [TAG]: 'map', entries };
       }
       case 'Set': {
         const values: OtjValue[] = [];
         let i = 0;
-        for (const v of value as Set<unknown>)
-          values.push(this.value(v, `${path}.values[${String(i++)}]`));
+        for (const v of Set.prototype.values.call(value as Set<unknown>))
+          values.push(this.value(v, `${path}.values[${String(i++)}]`, depth + 2));
         return { [TAG]: 'set', values };
       }
       case 'Number':
@@ -249,7 +306,7 @@ class Encoder {
       case 'Boolean':
       case 'BigInt':
         // Boxed primitives travel as their primitive value.
-        return this.value((value as { valueOf(): unknown }).valueOf(), path);
+        return this.value(BRAND_CHECKS[tag]?.(value), path, depth);
       default:
         break;
     }
@@ -257,6 +314,7 @@ class Encoder {
     if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return encodeBytes(value, tag);
 
     const props: Record<string, OtjValue> = {};
+    const wrapped = Object.hasOwn(value, TAG);
     let read: unknown;
     for (const key of Object.keys(value)) {
       try {
@@ -272,9 +330,9 @@ class Encoder {
         );
       }
       if (read === undefined) continue;
-      props[key] = this.value(read, `${path}${keyPath(key)}`);
+      props[key] = this.value(read, `${path}${keyPath(key)}`, depth + (wrapped ? 2 : 1));
     }
-    return Object.hasOwn(value, TAG) ? { [TAG]: 'object', v: props } : props;
+    return wrapped ? { [TAG]: 'object', v: props } : props;
   }
 }
 

@@ -8,6 +8,7 @@ import {
   encodeArgs,
   encodedSize,
   fromBase64,
+  MAX_DEPTH,
   toBase64,
 } from './otj.js';
 
@@ -385,6 +386,39 @@ describe('OTJ: values that throw ipc-serialization (C.7)', () => {
     const error = serializationError(() => encode(value, { root: 'result' }));
     expect(error.message).toBe('result.bad threw while being read');
     expect(error.cause).toBeInstanceOf(Error);
+  });
+});
+
+describe('OTJ: hostile and deep values', () => {
+  it('treats a spoofed Symbol.toStringTag as a plain object', () => {
+    for (const tag of ['Date', 'Map', 'Set', 'RegExp', 'Number', 'String', 'Boolean', 'BigInt']) {
+      const fake = { a: 1, [Symbol.toStringTag]: tag };
+      expect(encode(fake)).toEqual({ a: 1 });
+    }
+  });
+
+  it('encodes real instances whose methods were shadowed', () => {
+    const date = new Date(0);
+    Object.defineProperty(date, 'getTime', { value: () => 'nope' });
+    expect(encode(date)).toEqual({ $otj: 'date', v: '1970-01-01T00:00:00.000Z' });
+    const map = new Map([[1, 2]]);
+    Object.defineProperty(map, Symbol.iterator, { value: () => [][Symbol.iterator]() });
+    expect(encode(map)).toEqual({ $otj: 'map', entries: [[1, 2]] });
+  });
+
+  it(`refuses values nested more than ${String(MAX_DEPTH)} levels deep, naming the path`, () => {
+    const nest = (levels: number): unknown => {
+      let value: unknown = 1;
+      for (let i = 0; i < levels; i++) value = [value];
+      return value;
+    };
+    expect(() => encode(nest(MAX_DEPTH))).not.toThrow();
+    expect(() => encode(nest(MAX_DEPTH + 1))).toThrow(
+      /value(\[0\]){100} cannot be sent .* nested more than 100 levels deep/,
+    );
+    // Arguments sit one level down, and a Map entry adds three levels.
+    expect(() => encodeArgs([new Map([[1, nest(MAX_DEPTH - 4)]])])).not.toThrow();
+    expect(() => encodeArgs([new Map([[1, nest(MAX_DEPTH - 3)]])])).toThrow(OwTauriError);
   });
 });
 
