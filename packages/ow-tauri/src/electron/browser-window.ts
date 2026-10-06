@@ -654,9 +654,13 @@ export class BrowserWindow extends EventEmitter {
     this.#native('minimize');
   }
 
-  /** Maximizes the window. */
+  /**
+   * Maximizes the window. A hidden window is shown first (not focused), and
+   * `show` is emitted, as in Electron.
+   */
   maximize(): void {
-    this.#set({ maximized: true, minimized: false, visible: true });
+    this.#showIfHidden();
+    this.#set({ maximized: true, minimized: false });
     this.#native('maximize');
   }
 
@@ -666,9 +670,13 @@ export class BrowserWindow extends EventEmitter {
     this.#native('unmaximize');
   }
 
-  /** Restores the window from the minimized state. */
+  /**
+   * Restores the window from the minimized state. A hidden window is shown
+   * (not focused), and `show` is emitted.
+   */
   restore(): void {
-    this.#set({ minimized: false, visible: true });
+    this.#showIfHidden();
+    this.#set({ minimized: false });
     this.#native('unminimize');
   }
 
@@ -1316,6 +1324,15 @@ export class BrowserWindow extends EventEmitter {
    * `hide()` emit `show` / `hide` themselves after the native call succeeded
    * (CONTRACT A.3, B.2.2).
    */
+  /** Shows a hidden window without focus; `show` follows the native call. */
+  #showIfHidden(): void {
+    if (this.#state.visible) return;
+    this.#set({ visible: true });
+    this.#native('show', undefined, () => {
+      this.#emitVisibility('show');
+    });
+  }
+
   #emitVisibility(event: 'show' | 'hide'): void {
     if (this.#destroyed) return;
     emitFromHost(this, event, createEvent());

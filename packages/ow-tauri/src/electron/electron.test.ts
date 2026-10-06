@@ -318,6 +318,33 @@ describe('BrowserWindow (B.2.2)', () => {
     expect(seen).toEqual(['show', 'hide', 'show']);
   });
 
+  it('shows a hidden window on maximize() and restore() and emits show once', async () => {
+    await start();
+    const win = new BrowserWindow({ show: false });
+    const seen: string[] = [];
+    win.on('show', () => seen.push('show'));
+    win.maximize();
+    expect(win.isVisible()).toBe(true);
+    expect(win.isFocused()).toBe(false);
+    await settle();
+    expect(seen).toEqual(['show']);
+    win.show(); // already visible: no second event
+    win.restore();
+    await settle();
+    expect(seen).toEqual(['show']);
+    win.hide();
+    win.restore();
+    await settle();
+    expect(seen).toEqual(['show', 'show']);
+    const windowCommands = names().filter((n) => n.startsWith('plugin:window|'));
+    expect(windowCommands.slice(0, 2)).toEqual(['plugin:window|show', 'plugin:window|maximize']);
+    expect(windowCommands.slice(-3)).toEqual([
+      'plugin:window|hide',
+      'plugin:window|show',
+      'plugin:window|unminimize',
+    ]);
+  });
+
   it('does not emit show when the native call fails', async () => {
     await start({
       commands: { 'plugin:window|show': () => Promise.reject({ code: 'io', message: 'x' }) },
