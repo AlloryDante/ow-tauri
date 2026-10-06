@@ -14,8 +14,8 @@ happens in place; every change is also listed in
 | Preload (`src/preload/preload.ts`) | Electron preload with `contextBridge` | the same bundle, injected as an initialization script by `webPreferences.preload` |
 | Renderer (`src/renderer/**`) | React app, OSR page, exclusive page | unchanged except one defect fix; `electron` imports through the alias; `<owadview>` from `ow-tauri/renderer` |
 | Shared (`src/common/**`) | channel names and recorder types | unchanged except one defect fix |
-| Native shell | ow-electron + ow-electron-builder | new `src-tauri/` crate using `tauri-plugin-overwolf` |
-| Packages | ow-electron package manager | `app.overwolf.packages` over the selected backend (ADR 0004) |
+| Native shell | ow-electron + ow-electron-builder | new `src-tauri/` crate using `tauri-plugin-overwolf`; Overwolf signing through `ow-tauri sign` (CONTRACT G.4) |
+| Packages | ow-electron package manager | `app.overwolf.packages` reporting packages as unavailable, as ow-electron does where they are not available: no events, observed results (CONTRACT H, ADR 0004) |
 | Updater | `electron-updater` | `autoUpdater` from `ow-tauri/main` (ADR 0008) |
 
 Legend for the file table: **Unchanged** (byte-identical), **Modified** (edited
@@ -28,12 +28,12 @@ in place; the note says what and why), **Replaced** (rewritten for Tauri).
 | `src-tauri/Cargo.toml` | thin app crate: `tauri` (with `unstable`), `tauri-build`, `tauri-plugin-overwolf`, all from `[workspace.dependencies]` |
 | `src-tauri/build.rs` | `tauri_plugin_overwolf::build::embed_manifest("../package.json")`, then `tauri_build::build()` |
 | `src-tauri/src/main.rs` | registers the plugin (`Builder::new().manifest_json(embedded_manifest!())`); no other logic |
-| `src-tauri/tauri.conf.json` | `productName` and `version` matching `package.json`; `frontendDist: ../dist`; no windows (the plugin creates `ow-main`, the app creates the rest); `plugins.overwolf` with `main.url: "browser/main.html"` and `fs.scope: ["$PICTURES/Overwolf/$APPNAME", "$VIDEOS/$APPNAME"]`; `app.security.csp` from the ARCHITECTURE section 5.5 baseline plus `fonts.googleapis.com` (styles) and `fonts.gstatic.com` (fonts) for the renderer; `app.security.freezePrototype: true`; NSIS bundle mirroring `build.win` and `build.nsis` where Tauri has an equivalent |
+| `src-tauri/tauri.conf.json` | `productName` and `version` matching `package.json`; `frontendDist: ../dist`; no windows (the plugin creates `ow-main`, the app creates the rest); `plugins.overwolf` with `main.url: "browser/main.html"` and `fs.scope: ["$PICTURES/Overwolf/$APPNAME", "$VIDEOS/$APPNAME"]`; `app.security.csp` from the ARCHITECTURE section 5.5 baseline plus `fonts.googleapis.com` (styles) and `fonts.gstatic.com` (fonts) for the renderer; `app.security.freezePrototype: true`; NSIS bundle mirroring `build.win` and `build.nsis` where Tauri has an equivalent, with `bundle.windows.nsis.installerHooks` pointing at the hooks that do Overwolf's install and uninstall work (CONTRACT I.6); `bundle.windows.signCommand` for the Authenticode step of `ow-tauri sign` (CONTRACT G.4) |
 | `src-tauri/capabilities/ui.json` | `"webviews": ["bw-*"]` (no `windows` key, so ad guests and remote pages inside `bw-*` windows do not match), `"local": true`, permissions `overwolf:renderer` and `core:window:allow-start-dragging`; no `core:event:*` (ARCHITECTURE section 5.2) |
 | `src-tauri/icons/*` | generated from a neutral placeholder icon |
-| `scenarios/*.json` | simulated GEP, overlay and recorder scenarios for development (CONTRACT H.7); game ids limited to well-known public titles already in the status data (for example 5426) |
+| `src-tauri/windows/hooks.nsh` | the NSIS hooks of CONTRACT I.6: registry values at install; on a real uninstall only, the per-app data folder, the registry key and the `ow_<label>_app_uninstall` Counter |
 | `CHANGES-FROM-UPSTREAM.md` | the change log against `8a27053` |
-| `.env.example` | names of the optional dev-mode variables (`OW_CLI_EMAIL`, `OW_CLI_API_KEY`, `OW_DEV_KEY`, `OW_TAURI_TEST_AD`, `OW_TAURI_REMOTE_DEBUGGING_PORT`), no values |
+| `.env.example` | names of the optional variables (`OW_CLI_EMAIL`, `OW_CLI_API_KEY`, `OW_BUILD_KEY`, `OW_CLI_API_URL`, `OW_REQUIRE_SIGNING`, `OW_DEV_KEY`, `OW_TAURI_TEST_AD`, `OW_TAURI_REMOTE_DEBUGGING_PORT`), no values |
 
 ## 3. Node built-ins used by the main process
 
@@ -224,17 +224,18 @@ Security fixes made during the port (beyond the list above):
 - `open-folder` passed a renderer-supplied path to `exec("explorer.exe ...")`
   (shell injection). It now uses `shell.openPath`.
 - Overlay windows ran with `nodeIntegration: true, contextIsolation: false`,
-  and one loaded a remote site with an injected IPC button. In ow-tauri, local
-  overlay windows get only the renderer permission set, and the remote window
-  gets no IPC at all.
+  and one loaded a remote site with an injected IPC button. The ported code
+  creates them as ordinary windows with only the renderer permission set, and
+  the remote window gets no IPC at all. They are created only once the overlay
+  package is ready, which does not happen while packages are deferred.
 
 ## 6. What does not port, and why
 
 | Feature | Status | Reference |
 |---|---|---|
-| GEP, overlay injection, in-game hotkeys, exclusive mode, recorder, utility, CRN | Native runtime required; simulated in debug builds; `failed-to-initialize` in release builds without a runtime | ADR 0004, OQ-21 |
-| Offscreen-rendered overlay windows and shared textures | No WebView2 / WKWebView equivalent; simulated overlay windows are ordinary transparent windows | OQ-33 |
+| GEP, overlay injection, in-game hotkeys, exclusive mode, recorder, utility, CRN | Deferred. Packages are reported as unavailable exactly as ow-electron reports them where they are not available: no `ready` or `failed-to-initialize` event, `getChannel()` resolves `{}`, `getAvailableChannels()` rejects. The sample's package screens stay in their waiting state. The runtime interface is a design appendix | CONTRACT H, Appendix P, ADR 0004, OQ-21 |
+| Offscreen-rendered overlay windows and shared textures | Deferred with the packages; no WebView2 / WKWebView equivalent | OQ-33 |
 | `owutility.dll` ad optimisation | Not shipped | OQ-14 |
-| Overwolf signing (`requireSigning`, `enableOWCertSigning`) | Build warning; nothing faked | OQ-09 |
+| Overwolf signing (`requireSigning`, `enableOWCertSigning`) | `ow-tauri sign` runs the published builder's flow: `/sign/electron`, `integrity.dll`, the `OWEINTEGRITY/OWE` resource, optional Overwolf Authenticode, and the same build gating. `/sign/asar` is not done and not faked (Tauri has no asar) | CONTRACT G.4, ADR 0016, OQ-09 |
 | `crashReporter` | No-op; use a Rust crash handler | CONTRACT B.2.5 |
 | Display friendly names from the recorder's monitor list | Available only with a recorder runtime; otherwise the OS monitor name or `Display N` | CONTRACT B.2.5 |
