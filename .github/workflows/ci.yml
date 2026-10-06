@@ -62,13 +62,29 @@ jobs:
         run: cargo test --workspace --all-features --locked
       - name: doc
         run: cargo doc --workspace --no-deps --all-features --locked
-      - name: OWEINTEGRITY/OWE resource links next to a VERSIONINFO (CONTRACT G.4 c, MSVC)
-        if: runner.os == 'Windows'
+      - name: mingw-w64 (GNU cross-link of the OWE resource)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+          rustup target add x86_64-pc-windows-gnu
+      # CONTRACT G.4 c: the OWEINTEGRITY/OWE resource links next to the
+      # VERSIONINFO that tauri-build writes, with MSVC (native, Windows) and
+      # with GNU (mingw-w64 cross from Linux), in a release build that applies
+      # a signed fixture. Versions are pinned: the fixture has no lockfile.
+      - name: OWEINTEGRITY/OWE resource links next to a VERSIONINFO (MSVC and GNU)
+        if: runner.os != 'macOS'
         shell: bash
         run: |
           set -euo pipefail
           uid=djpddhibpjddgdpcfkbooljealnjnamkhlihgbab
-          plugin="$(cygpath -m "$GITHUB_WORKSPACE/crates/tauri-plugin-overwolf")"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            plugin="$(cygpath -m "$GITHUB_WORKSPACE/crates/tauri-plugin-overwolf")"
+            target=x86_64-pc-windows-msvc
+          else
+            plugin="$GITHUB_WORKSPACE/crates/tauri-plugin-overwolf"
+            target=x86_64-pc-windows-gnu
+            export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
+          fi
           dir="$RUNNER_TEMP/owe-link"
           mkdir -p "$dir/src" "$dir/ow-tauri-signed"
           cat > "$dir/Cargo.toml" <<EOF
@@ -79,7 +95,8 @@ jobs:
           [workspace]
           [build-dependencies]
           tauri-plugin-overwolf = { path = "$plugin", default-features = false, features = ["embed-resource"] }
-          tauri-winres = "0.3"
+          embed-resource = "=3.0.12"
+          tauri-winres = "=0.3.6"
           EOF
           echo 'fn main() {}' > "$dir/src/main.rs"
           cat > "$dir/build.rs" <<'EOF'
@@ -93,12 +110,18 @@ jobs:
           EOF
           echo '{"name":"owe-link","version":"1.0.0","author":"CI"}' > "$dir/package.json"
           echo "{\"name\":\"owe-link\",\"version\":\"1.0.0\",\"author\":\"CI\",\"overwolf\":{\"uid\":\"$uid\"}}" > "$dir/ow-tauri-signed/package.json"
-          cargo build --release --manifest-path "$dir/Cargo.toml"
-          exe="$dir/target/release/owe-link.exe"
-          readobj="$(command -v llvm-readobj || echo '/c/Program Files/LLVM/bin/llvm-readobj.exe')"
-          "$readobj" --coff-resources "$exe" | tee "$dir/resources.txt"
-          grep -q 'OWEINTEGRITY' "$dir/resources.txt"
+          cargo build --release --target "$target" --manifest-path "$dir/Cargo.toml"
+          exe="$dir/target/$target/release/owe-link.exe"
+          # Resource type names are stored as UTF-16LE in the PE resource
+          # directory; the data is the JSON as written.
+          LC_ALL=C grep -q -a -P 'O\x00W\x00E\x00I\x00N\x00T\x00E\x00G\x00R\x00I\x00T\x00Y\x00' "$exe"
+          LC_ALL=C grep -q -a -P 'V\x00S\x00_\x00V\x00E\x00R\x00S\x00I\x00O\x00N\x00_\x00I\x00N\x00F\x00O\x00' "$exe"
           grep -q -a "{\"appUid\":\"$uid\"}" "$exe"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            readobj="$(command -v llvm-readobj || echo '/c/Program Files/LLVM/bin/llvm-readobj.exe')"
+            "$readobj" --coff-resources "$exe" | tee "$dir/resources.txt"
+            grep -q 'OWEINTEGRITY' "$dir/resources.txt"
+          fi
 
   msrv:
     name: Rust MSRV 1.90
