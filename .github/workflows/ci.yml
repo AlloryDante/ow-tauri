@@ -53,10 +53,52 @@ jobs:
         run: cargo fmt --all -- --check
       - name: clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: clippy (build-dependency feature sets of the plugin)
+        shell: bash
+        run: |
+          cargo clippy -p tauri-plugin-overwolf --all-targets --no-default-features --locked -- -D warnings
+          cargo clippy -p tauri-plugin-overwolf --all-targets --no-default-features --features embed-resource --locked -- -D warnings
       - name: test
         run: cargo test --workspace --all-features --locked
       - name: doc
         run: cargo doc --workspace --no-deps --all-features --locked
+      - name: OWEINTEGRITY/OWE resource links next to a VERSIONINFO (CONTRACT G.4 c, MSVC)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          uid=djpddhibpjddgdpcfkbooljealnjnamkhlihgbab
+          plugin="$(cygpath -m "$GITHUB_WORKSPACE/crates/tauri-plugin-overwolf")"
+          dir="$RUNNER_TEMP/owe-link"
+          mkdir -p "$dir/src" "$dir/ow-tauri-signed"
+          cat > "$dir/Cargo.toml" <<EOF
+          [package]
+          name = "owe-link"
+          version = "1.0.0"
+          edition = "2024"
+          [workspace]
+          [build-dependencies]
+          tauri-plugin-overwolf = { path = "$plugin", default-features = false, features = ["embed-resource"] }
+          tauri-winres = "0.3"
+          EOF
+          echo 'fn main() {}' > "$dir/src/main.rs"
+          cat > "$dir/build.rs" <<'EOF'
+          fn main() {
+              tauri_plugin_overwolf::build::embed_manifest("package.json").unwrap();
+              // A VERSIONINFO as tauri-build writes one, in its own .res.
+              let mut res = tauri_winres::WindowsResource::new();
+              res.set("FileDescription", "owe-link");
+              res.compile().unwrap();
+          }
+          EOF
+          echo '{"name":"owe-link","version":"1.0.0","author":"CI"}' > "$dir/package.json"
+          echo "{\"name\":\"owe-link\",\"version\":\"1.0.0\",\"author\":\"CI\",\"overwolf\":{\"uid\":\"$uid\"}}" > "$dir/ow-tauri-signed/package.json"
+          cargo build --release --manifest-path "$dir/Cargo.toml"
+          exe="$dir/target/release/owe-link.exe"
+          readobj="$(command -v llvm-readobj || echo '/c/Program Files/LLVM/bin/llvm-readobj.exe')"
+          "$readobj" --coff-resources "$exe" | tee "$dir/resources.txt"
+          grep -q 'OWEINTEGRITY' "$dir/resources.txt"
+          grep -q -a "{\"appUid\":\"$uid\"}" "$exe"
 
   msrv:
     name: Rust MSRV 1.90
