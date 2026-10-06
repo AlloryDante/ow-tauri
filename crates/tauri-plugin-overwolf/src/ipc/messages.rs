@@ -99,6 +99,11 @@ pub enum WindowEventName {
     DomReady,
     DidFailLoad,
     RenderProcessGone,
+    /// A top-level navigation the A.2.3.1 policy cancelled; `data.url`.
+    WillNavigate,
+    /// A `window.open` / `target=_blank` request, always denied natively;
+    /// `data.url`. The main runtime runs `setWindowOpenHandler`.
+    NewWindow,
 }
 
 /// Everything Rust sends to a webview.

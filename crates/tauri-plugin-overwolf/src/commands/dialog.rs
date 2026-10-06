@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Request;
-use tauri::{Manager, Runtime, State, Webview, WebviewWindow};
+use tauri::{Manager, Runtime, State, Webview, Window};
 use tauri_plugin_dialog::{
     Dialog, FileDialogBuilder, FilePath, MessageDialogButtons, MessageDialogKind,
     MessageDialogResult,
@@ -136,13 +136,15 @@ fn dialog<R: Runtime>(webview: &Webview<R>) -> Result<Dialog<R>> {
         .ok_or_else(|| Error::not_ready("The dialog plugin is not registered."))
 }
 
-fn parent<R: Runtime>(webview: &Webview<R>, window_id: Option<u32>) -> Option<WebviewWindow<R>> {
-    window_id.and_then(|id| webview.app_handle().get_webview_window(&ui_label(id)))
+/// The native window `bw-<id>`, whatever webview it holds (after a switch to
+/// a remote page it holds `bwr-<id>`).
+fn parent<R: Runtime>(webview: &Webview<R>, window_id: Option<u32>) -> Option<Window<R>> {
+    window_id.and_then(|id| webview.app_handle().get_window(&ui_label(id)))
 }
 
 fn file_builder<R: Runtime>(
     dialog: &Dialog<R>,
-    parent: Option<&WebviewWindow<R>>,
+    parent: Option<&Window<R>>,
     title: Option<&String>,
     default_path: Option<&String>,
     filters: &[FileFilter],

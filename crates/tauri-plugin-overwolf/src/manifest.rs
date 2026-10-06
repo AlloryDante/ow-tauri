@@ -312,6 +312,16 @@ pub fn parse_package_json(text: &str) -> Result<ParsedManifest, ManifestError> {
                 Some(_) => return Err(err("overwolf.packages", "must be an array of strings")),
             };
             let uid = optional_string(ow, "uid", "overwolf.uid")?;
+            // The uid names the state directory `<appData>/ow-electron/<uid>`
+            // (F.1), so it must be a plain path segment.
+            if let Some(u) = uid.as_deref().map(str::trim).filter(|u| !u.is_empty())
+                && !crate::identity::is_valid_uid(u)
+            {
+                return Err(err(
+                    "overwolf.uid",
+                    "must be 1 to 64 ASCII letters or digits",
+                ));
+            }
             OverwolfBlock { packages, uid }
         }
         Some(_) => return Err(err("overwolf", "must be an object")),
@@ -582,6 +592,11 @@ mod tests {
             ),
             (r#"{"name":"n","build":7}"#, "build"),
             (r#"{"name":"n","overwolf":{"uid":3}}"#, "overwolf.uid"),
+            (
+                r#"{"name":"n","overwolf":{"uid":"../../x"}}"#,
+                "overwolf.uid",
+            ),
+            (r#"{"name":"n","overwolf":{"uid":"a/b"}}"#, "overwolf.uid"),
         ];
         for (text, path) in cases {
             let e = parse_package_json(text).unwrap_err();

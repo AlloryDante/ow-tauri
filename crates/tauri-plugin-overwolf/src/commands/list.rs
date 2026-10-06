@@ -17,6 +17,7 @@ pub const COMMANDS: &[&str] = &[
     "log",
     "ipc_reply",
     "ipc_emit",
+    "ipc_emit_skip",
     // A.2.2 session switches
     "disable_anonymous_analytics",
     "disable_ads_optimization",

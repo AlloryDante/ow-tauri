@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use tauri::plugin::{PluginApi, TauriPlugin};
-use tauri::webview::PageLoadPayload;
+use tauri::webview::{PageLoadEvent, PageLoadPayload};
 use tauri::{AppHandle, Manager, RunEvent, Runtime, Webview, WindowEvent};
 use url::Url;
 
@@ -225,28 +225,34 @@ fn on_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
         RunEvent::ExitRequested { code, api, .. } => {
             // `app.exit(code)` from the plugin's own exit path carries a code
             // and proceeds. A request without a code comes from the last
-            // window closing or from the OS (A.6): the plugin runs the quit
-            // sequence instead. During a soft restart or after a main webview
-            // crash the plugin is already handling the exit.
+            // window closing or from the OS (A.6): it is always prevented and
+            // the host runs the quit sequence (or exits when it cannot).
             if code.is_none() {
                 api.prevent_exit();
-                if !host.is_exiting() && !host.soft_restart_pending() && host.has_main_webview() {
-                    host.begin_quit(0);
-                }
+                host.exit_requested();
             }
         }
+        RunEvent::Exit => host.on_exit(),
         RunEvent::WindowEvent { label, event, .. } => window_event(&host, label, event),
         #[cfg(target_os = "macos")]
-        RunEvent::Reopen { .. } => {
-            host.send_main(crate::ipc::messages::HostMessage::lifecycle(
-                "activate", None, None,
-            ));
+        RunEvent::Reopen {
+            has_visible_windows,
+            ..
+        } => {
+            let mut message = crate::ipc::messages::HostMessage::lifecycle("activate", None, None);
+            if let crate::ipc::messages::HostMessage::Lifecycle { extra, .. } = &mut message {
+                extra.insert(
+                    "hasVisibleWindows".into(),
+                    serde_json::Value::Bool(*has_visible_windows),
+                );
+            }
+            host.send_main(message);
         }
         _ => {}
     }
 }
 
-fn window_event<R: Runtime>(host: &Arc<Host<R>>, label: &str, event: &WindowEvent) {
+pub(crate) fn window_event<R: Runtime>(host: &Arc<Host<R>>, label: &str, event: &WindowEvent) {
     match classify(label) {
         WebviewClass::Main => match event {
             WindowEvent::CloseRequested { api, .. } => {
@@ -263,23 +269,171 @@ fn window_event<R: Runtime>(host: &Arc<Host<R>>, label: &str, event: &WindowEven
 }
 
 fn on_navigation<R: Runtime>(webview: &Webview<R>, url: &Url) -> bool {
-    let Some(host) = host_of(webview) else {
-        return true;
-    };
-    match classify(webview.label()) {
+    host_of(webview).is_none_or(|host| navigation(&host, webview.label(), url))
+}
+
+/// The navigation policy of the webview `label` (A.2.3.1, A.6).
+pub(crate) fn navigation<R: Runtime>(host: &Arc<Host<R>>, label: &str, url: &Url) -> bool {
+    match classify(label) {
         WebviewClass::Main => host.main_navigation(url),
-        WebviewClass::Ui(_) => host.ui_navigation(url),
+        WebviewClass::Ui(id) => host.ui_navigation(id, url),
         _ => true,
     }
 }
 
 fn on_page_load<R: Runtime>(webview: &Webview<R>, payload: &PageLoadPayload<'_>) {
-    let Some(host) = host_of(webview) else { return };
-    let label = webview.label();
+    if let Some(host) = host_of(webview) {
+        page_load(&host, webview.label(), payload.event(), payload.url());
+    }
+}
+
+/// A page load of the webview `label` (top-level documents only).
+pub(crate) fn page_load<R: Runtime>(
+    host: &Arc<Host<R>>,
+    label: &str,
+    event: PageLoadEvent,
+    url: &Url,
+) {
     match classify(label) {
-        WebviewClass::Main => host.main_page_load(payload.event()),
-        WebviewClass::Ui(id) => host.window_page_load(id, true, label, payload.event()),
-        WebviewClass::Remote(id) => host.window_page_load(id, false, label, payload.event()),
+        WebviewClass::Main => host.main_page_load(event, url),
+        WebviewClass::Ui(id) => host.window_page_load(id, true, label, event, url),
+        WebviewClass::Remote(id) => host.window_page_load(id, false, label, event, url),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    use tauri::test::{MockRuntime, mock_builder, mock_context, noop_assets};
+    use tauri::{App, Manager, WebviewUrl, WebviewWindowBuilder};
+
+    use super::{Builder, host_of};
+    use crate::ipc::messages::{HostMessage, WindowEventName};
+    use crate::ipc::router::MAIN_LABEL;
+    use crate::manifest::EmbeddedManifest;
+
+    fn app(name: &str, probe: tauri::plugin::TauriPlugin<MockRuntime>) -> App<MockRuntime> {
+        let dir =
+            std::env::temp_dir().join(format!("ow-tauri-plugin-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let manifest = serde_json::to_string(&EmbeddedManifest::minimal(
+            "Plugin Test",
+            "Example Studio",
+            "1.0.0",
+        ))
+        .unwrap();
+        let mut context = mock_context(noop_assets());
+        context.config_mut().plugins.0.insert(
+            "overwolf".into(),
+            serde_json::json!({ "state": { "appDataDir": dir } }),
+        );
+        let mut builder = Builder::new()
+            .manifest_json(Box::leak(manifest.into_boxed_str()))
+            .companion_plugins(false)
+            .runtime_capabilities(false)
+            .main_webview(false)
+            .argv(vec!["plugin-test".into()]);
+        builder.options.os_queries = false;
+        mock_builder()
+            .plugin(builder.build())
+            .plugin(probe)
+            .build(context)
+            .unwrap()
+    }
+
+    fn wait(what: &str, done: impl Fn() -> bool) {
+        let start = Instant::now();
+        while !done() {
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "timed out: {what}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// The new `ow-main` of a soft restart is created while Tauri holds its
+    /// plugin-store lock (the `Destroyed` window event reaches the plugin's
+    /// `on_event` under that lock). Creating it inline would take the lock
+    /// again and deadlock. The probe plugin's `on_webview_ready` hook runs
+    /// under the same lock and reports the destruction from there.
+    #[test]
+    fn soft_restart_recreates_main_from_a_hook_without_deadlock() {
+        let fired = Arc::new(AtomicBool::new(false));
+        let seen = Arc::clone(&fired);
+        let probe = tauri::plugin::Builder::<MockRuntime>::new("probe")
+            .on_webview_ready(move |webview| {
+                if webview.label() == "probe" {
+                    let host = host_of(webview.app_handle()).unwrap();
+                    host.main_destroyed();
+                    seen.store(true, Ordering::SeqCst);
+                }
+            })
+            .build();
+        let app = app("soft-restart", probe);
+        let host = host_of(app.handle()).unwrap();
+        let url = tauri::Url::parse("tauri://localhost/index.html").unwrap();
+        host.with_core(|c| {
+            c.soft_restart = Some(url.clone());
+            c.restart_stale_windows.insert(5);
+        });
+        // An exit request during the restart waits for the new main.
+        host.exit_requested();
+        assert!(host.with_core(|c| c.quit_after_restart && !c.quit.is_running()));
+        // Late events of a window the restart closed are dropped.
+        host.with_core(|c| {
+            c.queue_main(HostMessage::window(5, WindowEventName::Closed, None));
+            assert_eq!(c.router.queued(MAIN_LABEL), 0);
+        });
+
+        let handle = app.handle().clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let built = WebviewWindowBuilder::new(&handle, "probe", WebviewUrl::App("x".into()))
+                .build()
+                .is_ok();
+            let _ = tx.send(built);
+        });
+        let built = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the hook returned (no deadlock)");
+        assert!(built);
+        assert!(fired.load(Ordering::SeqCst));
+        wait("the new ow-main", || {
+            app.get_webview_window(MAIN_LABEL).is_some()
+        });
+        assert!(
+            host.with_core(|c| c.soft_restart.is_some()),
+            "the restart lasts until the new main has loaded"
+        );
+        // A second `Destroyed` report does not create another one.
+        host.main_destroyed();
+
+        host.main_page_load(tauri::webview::PageLoadEvent::Finished, &url);
+        assert!(host.with_core(|c| c.soft_restart.is_none() && !c.quit_after_restart));
+        assert!(
+            host.with_core(|c| c.quit.is_running()),
+            "the deferred quit started"
+        );
+    }
+
+    #[test]
+    fn crash_reports_are_counted_once() {
+        let probe = tauri::plugin::Builder::<MockRuntime>::new("probe").build();
+        let app = app("crash-once", probe);
+        let host = host_of(app.handle()).unwrap();
+        // The app's process-termination hook and the window's `Destroyed`
+        // both report the same crash.
+        host.with_core(|c| c.exiting = true);
+        host.main_crashed();
+        let history = host.ow_tauri.get().extra.get("mainCrashes").cloned();
+        assert!(
+            history.is_none(),
+            "an exit already under way records nothing"
+        );
     }
 }

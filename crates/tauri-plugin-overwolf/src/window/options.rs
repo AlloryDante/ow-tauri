@@ -289,6 +289,105 @@ pub fn same_origin(url: &Url, origin: &Url) -> bool {
         && url.port_or_known_default() == origin.port_or_known_default()
 }
 
+/// Whether the engine reports only top-level navigations to Tauri's
+/// `on_navigation` hook. WebView2 does; WKWebView and WebKitGTK also report
+/// every frame's navigations and do not say which frame navigates
+/// (A.2.3.1).
+pub const NAVIGATION_HOOK_IS_TOP_LEVEL_ONLY: bool = cfg!(windows);
+
+/// Schemes of documents that only exist inside a page (`about:srcdoc`,
+/// `blob:`, `data:` frames). They carry no app scripts (those are guarded by
+/// origin) and never leave the app.
+fn is_inline_document(url: &Url) -> bool {
+    matches!(url.scheme(), "about" | "blob" | "data")
+}
+
+/// What the navigation policy of a `bw-*` webview does (A.2.3.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiNavigation {
+    /// Let it happen.
+    Allow,
+    /// Cancel it and open the URL in the system browser (a top-level
+    /// `http(s)` navigation away from the app).
+    OpenExternal,
+    /// Cancel it and log.
+    Cancel,
+}
+
+/// Decides a `bw-*` navigation. `top_level_only` is
+/// [`NAVIGATION_HOOK_IS_TOP_LEVEL_ONLY`]: where the hook also sees frames, an
+/// `http(s)` URL may be an embedded frame (a video or stream widget), so it
+/// is allowed; the remote document gets no IPC (the renderer capability is
+/// local-only and the bootstrap is origin-guarded).
+///
+/// ```
+/// use tauri_plugin_overwolf::window::options::{ui_navigation, UiNavigation};
+/// let app = url::Url::parse("tauri://localhost/").unwrap();
+/// let at = |s: &str| url::Url::parse(s).unwrap();
+/// assert_eq!(ui_navigation(&at("tauri://localhost/b.html"), &app, false), UiNavigation::Allow);
+/// assert_eq!(ui_navigation(&at("about:srcdoc"), &app, true), UiNavigation::Allow);
+/// assert_eq!(ui_navigation(&at("https://example.com/"), &app, true), UiNavigation::OpenExternal);
+/// assert_eq!(ui_navigation(&at("https://example.com/"), &app, false), UiNavigation::Allow);
+/// assert_eq!(ui_navigation(&at("file:///etc/hosts"), &app, false), UiNavigation::Cancel);
+/// ```
+#[must_use]
+pub fn ui_navigation(url: &Url, app_origin: &Url, top_level_only: bool) -> UiNavigation {
+    if same_origin(url, app_origin) || is_inline_document(url) {
+        UiNavigation::Allow
+    } else if matches!(url.scheme(), "http" | "https") {
+        if top_level_only {
+            UiNavigation::OpenExternal
+        } else {
+            UiNavigation::Allow
+        }
+    } else {
+        UiNavigation::Cancel
+    }
+}
+
+/// What the navigation policy of `ow-main` does after its first load (A.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MainNavigation {
+    /// Let it happen (a frame inside `ow-main`).
+    Allow,
+    /// A reload of the current document: a soft restart in debug builds,
+    /// cancelled in release builds.
+    Reload,
+    /// Cancel it and log.
+    Cancel,
+}
+
+/// Decides an `ow-main` navigation after the first load. Only a navigation
+/// to the current document URL is a reload, so a same-origin frame does not
+/// restart the app. Where the hook also sees frames, same-origin and inline
+/// documents are allowed as frames; everything else is cancelled.
+///
+/// ```
+/// use tauri_plugin_overwolf::window::options::{main_navigation, MainNavigation};
+/// let app = url::Url::parse("tauri://localhost/").unwrap();
+/// let at = |s: &str| url::Url::parse(s).unwrap();
+/// let current = Some("tauri://localhost/main.html");
+/// assert_eq!(main_navigation(&at("tauri://localhost/main.html"), &app, current, true), MainNavigation::Reload);
+/// assert_eq!(main_navigation(&at("tauri://localhost/frame.html"), &app, current, false), MainNavigation::Allow);
+/// assert_eq!(main_navigation(&at("tauri://localhost/frame.html"), &app, current, true), MainNavigation::Cancel);
+/// assert_eq!(main_navigation(&at("https://example.com/"), &app, current, false), MainNavigation::Cancel);
+/// ```
+#[must_use]
+pub fn main_navigation(
+    url: &Url,
+    app_origin: &Url,
+    current: Option<&str>,
+    top_level_only: bool,
+) -> MainNavigation {
+    if current == Some(url.as_str()) {
+        MainNavigation::Reload
+    } else if is_inline_document(url) || (!top_level_only && same_origin(url, app_origin)) {
+        MainNavigation::Allow
+    } else {
+        MainNavigation::Cancel
+    }
+}
+
 /// An RGBA color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgba(pub u8, pub u8, pub u8, pub u8);

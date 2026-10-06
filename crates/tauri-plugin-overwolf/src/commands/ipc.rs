@@ -29,11 +29,14 @@ fn encoded_size(channel: &str, args: &[Value]) -> usize {
     channel.len() + serde_json::to_vec(args).map_or(usize::MAX, |v| v.len())
 }
 
-fn sender<R: Runtime>(webview: &Webview<R>, window_id: u32) -> SenderInfo {
+/// The sender of an `ipc_invoke` / `ipc_send`, with the document URL the
+/// plugin recorded from the webview's page loads (no round trip to the
+/// event loop per message).
+fn sender(core: &crate::host::Core, label: &str, window_id: u32) -> SenderInfo {
     SenderInfo {
-        label: webview.label().to_owned(),
+        label: label.to_owned(),
         window_id,
-        url: webview.url().map(|u| u.to_string()).unwrap_or_default(),
+        url: core.urls.get(label).cloned().unwrap_or_default(),
     }
 }
 
@@ -43,8 +46,8 @@ pub(crate) async fn ipc_subscribe<R: Runtime>(
     state: State<'_, Overwolf<R>>,
     on_message: Channel<Vec<HostMessage>>,
 ) -> Result<Subscribed> {
-    require_main_or_ui(&webview)?;
     let host = host(&state);
+    require_main_or_ui(&webview, host)?;
     let label = webview.label().to_owned();
     let epoch = uuid::Uuid::new_v4().simple().to_string();
     let now = host.now();
@@ -116,12 +119,13 @@ pub(crate) async fn ipc_invoke<R: Runtime>(
     epoch: String,
     seq: u64,
 ) -> Result<Accepted> {
-    let window_id = require_ui(&webview)?;
     let host = host(&state);
+    let window_id = require_ui(&webview, host)?;
     let size = encoded_size(&channel, &args);
-    let sender = sender(&webview, window_id);
+    let label = webview.label();
     let now = host.now();
     let id = host.with_core(|c| {
+        let sender = sender(c, label, window_id);
         c.router
             .invoke(&sender, &epoch, seq, &channel, args, size, now)
     })?;
@@ -137,12 +141,13 @@ pub(crate) async fn ipc_send<R: Runtime>(
     epoch: String,
     seq: u64,
 ) -> Result<()> {
-    let window_id = require_ui(&webview)?;
     let host = host(&state);
+    let window_id = require_ui(&webview, host)?;
     let size = encoded_size(&channel, &args);
-    let sender = sender(&webview, window_id);
+    let label = webview.label();
     let now = host.now();
     host.with_core(|c| {
+        let sender = sender(c, label, window_id);
         c.router
             .send(&sender, &epoch, seq, &channel, args, size, now)
     })
@@ -155,8 +160,8 @@ pub(crate) async fn ipc_skip<R: Runtime>(
     epoch: String,
     seq: u64,
 ) -> Result<()> {
-    require_ui(&webview)?;
     let host = host(&state);
+    require_ui(&webview, host)?;
     let label = webview.label().to_owned();
     let now = host.now();
     host.with_core(|c| c.router.skip(&label, &epoch, seq, now));
@@ -224,6 +229,26 @@ pub(crate) async fn ipc_emit<R: Runtime>(
         c.router
             .emit(target, label.as_deref(), seq, &channel, args, size, now)
     })
+}
+
+/// `ipc_emit_skip`: outbound `seq` to window `target` will never be sent
+/// (C.5). The main runtime reports it when an `ipc_emit` or `ipc_reply` it
+/// numbered could not reach the plugin.
+#[tauri::command]
+pub(crate) async fn ipc_emit_skip<R: Runtime>(
+    webview: Webview<R>,
+    state: State<'_, Overwolf<R>>,
+    target: u32,
+    seq: u64,
+) -> Result<()> {
+    require_main(&webview)?;
+    let host = host(&state);
+    let now = host.now();
+    host.with_core(|c| {
+        let local = c.windows.ipc_target(target).is_some();
+        c.router.emit_skip(target, local, seq, now);
+    });
+    Ok(())
 }
 
 #[cfg(test)]

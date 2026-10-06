@@ -68,7 +68,9 @@ pub struct AppIdentity {
 }
 
 /// Resolves the uid by the G.2 precedence: configured override, then the
-/// manifest's `overwolf.uid`, then the computed value.
+/// manifest's `overwolf.uid`, then the computed value. An override or a
+/// manifest uid that is not [`is_valid_uid`] is skipped: the uid names the
+/// state directory, so it must never contain a path separator or `..`.
 ///
 /// ```
 /// use tauri_plugin_overwolf::identity::{resolve_uid, UidSource};
@@ -81,13 +83,13 @@ pub struct AppIdentity {
 #[must_use]
 pub fn resolve_uid(config_uid: Option<&str>, manifest: &EmbeddedManifest) -> AppIdentity {
     let cuid = computed_uid(&manifest.author, &manifest.product_name);
-    let config_uid = config_uid.map(str::trim).filter(|s| !s.is_empty());
+    let config_uid = config_uid.map(str::trim).filter(|s| is_valid_uid(s));
     let manifest_uid = manifest
         .overwolf
         .uid
         .as_deref()
         .map(str::trim)
-        .filter(|s| !s.is_empty());
+        .filter(|s| is_valid_uid(s));
     match (config_uid, manifest_uid) {
         (Some(uid), _) => AppIdentity {
             uid: uid.to_owned(),
@@ -330,6 +332,13 @@ mod tests {
         assert_eq!(id.cuid, computed, "cuid is always computed");
         let id = resolve_uid(Some("  "), &m);
         assert_eq!(id.source, UidSource::Manifest, "blank override is ignored");
+        m.overwolf.uid = Some("../../escape".into());
+        let id = resolve_uid(Some("a/b"), &m);
+        assert_eq!(
+            (id.uid.as_str(), id.source),
+            (computed.as_str(), UidSource::Computed),
+            "uids that are not a plain path segment are skipped"
+        );
     }
 
     #[test]

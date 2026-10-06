@@ -534,6 +534,32 @@ Denies the ipc_emit command without any pre-configured scope.
 <tr>
 <td>
 
+`overwolf:allow-ipc-emit-skip`
+
+</td>
+<td>
+
+Enables the ipc_emit_skip command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-ipc-emit-skip`
+
+</td>
+<td>
+
+Denies the ipc_emit_skip command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `overwolf:allow-ipc-invoke`
 
 </td>

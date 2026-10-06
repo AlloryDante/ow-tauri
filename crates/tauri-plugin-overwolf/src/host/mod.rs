@@ -11,7 +11,7 @@ mod main_webview;
 mod setup;
 mod windows;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -112,14 +112,30 @@ pub(crate) struct Core {
     pub(crate) close_requests: HashMap<u64, CloseRequest>,
     pub(crate) evals: HashMap<u64, PendingEval>,
     pub(crate) next_eval: u64,
-    pub(crate) shortcuts: BTreeMap<String, u64>,
+    /// Global shortcuts this plugin registered: the shortcut's id (its
+    /// meaning, so `Ctrl+K` and `CommandOrControl+K` match where they are the
+    /// same keys) to the normalised accelerator.
+    pub(crate) shortcuts: BTreeMap<u32, String>,
     pub(crate) flags: Flags,
     pub(crate) main_ready: bool,
     pub(crate) main_ready_warned: bool,
     pub(crate) main_loaded: bool,
     pub(crate) relaunch_args: Option<Vec<String>>,
     pub(crate) exiting: bool,
+    /// Set from the start of a soft restart until the new `ow-main` finishes
+    /// its first load (A.6).
     pub(crate) soft_restart: Option<Url>,
+    /// The new `ow-main` of the current soft restart is being created.
+    pub(crate) restart_recreating: bool,
+    /// An exit request arrived during a soft restart; the quit sequence runs
+    /// once the new `ow-main` has loaded.
+    pub(crate) quit_after_restart: bool,
+    /// Windows closed by the current soft restart: their late events never
+    /// reach the new `ow-main`, which did not create them.
+    pub(crate) restart_stale_windows: BTreeSet<u32>,
+    /// The current top-level document URL of each webview, from its page
+    /// loads (`IpcSender.url` and the `ow-main` reload check).
+    pub(crate) urls: HashMap<String, String>,
     pub(crate) ticks: u64,
 }
 
@@ -140,8 +156,14 @@ impl Core {
         self.request_ids
     }
 
-    /// Queues a message for `ow-main`.
+    /// Queues a message for `ow-main`. Events of windows a soft restart
+    /// closed are dropped: the new `ow-main` never knew them.
     pub(crate) fn queue_main(&mut self, message: HostMessage) {
+        if let HostMessage::Window { id, .. } = &message
+            && self.restart_stale_windows.contains(id)
+        {
+            return;
+        }
         self.router.push(MAIN_LABEL, message);
     }
 
@@ -382,26 +404,54 @@ impl<R: Runtime> Host<R> {
     }
 
     /// A.6 step 5 (and `app.exit()`): analytics drain, `quit`, pending update
-    /// install, relaunch when scheduled, exit.
+    /// install, exit. A scheduled relaunch starts from [`Host::on_exit`].
     pub(crate) fn finish_exit(self: &Arc<Self>, exit_code: i32) {
         let already = self.with_core(|c| std::mem::replace(&mut c.exiting, true));
-        if already {
-            return;
+        if !already {
+            self.run_exit(exit_code);
         }
+    }
+
+    /// The body of [`Host::finish_exit`]; the caller has set `exiting`.
+    fn run_exit(self: &Arc<Self>, exit_code: i32) {
         let host = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
             crate::analytics::drain(crate::analytics::DRAIN_LIMIT).await;
             host.send_main(HostMessage::lifecycle("quit", None, Some(exit_code)));
-            host.flush();
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            host.flush_on_main_thread().await;
             crate::updater::install_pending();
-            let relaunch = host.with_core(|c| c.relaunch_args.take());
-            if let Some(args) = relaunch {
-                host.spawn_relaunch(&args);
-            }
             host.log(LogLevel::Info, &format!("exiting with code {exit_code}"));
             host.app.exit(exit_code);
         });
+    }
+
+    /// Sends everything queued from the main thread, after any flush already
+    /// scheduled there, and waits (at most 1 s) until it has run. Sending
+    /// only from the main thread keeps the A.3 delivery order.
+    async fn flush_on_main_thread(self: &Arc<Self>) {
+        let (tx, rx) = oneshot::channel();
+        let host = Arc::clone(self);
+        let posted = self.app.run_on_main_thread(move || {
+            host.flush();
+            let _ = tx.send(());
+        });
+        if posted.is_err() {
+            self.flush();
+            return;
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(1), rx).await;
+    }
+
+    /// `RunEvent::Exit`: starts the relaunch `app.relaunch()` or a crash
+    /// scheduled. It runs after the plugins registered before this one
+    /// (`tauri-plugin-single-instance` is registered first, A.5) have
+    /// released their single-instance lock, so the new process is not
+    /// turned away as a second instance.
+    pub(crate) fn on_exit(&self) {
+        let relaunch = self.lock().relaunch_args.take();
+        if let Some(args) = relaunch {
+            self.spawn_relaunch(&args);
+        }
     }
 
     /// Starts a new instance of the app with `args`.
@@ -413,14 +463,37 @@ impl<R: Runtime> Host<R> {
         }
     }
 
-    /// Whether the app is exiting through the plugin.
-    pub(crate) fn is_exiting(&self) -> bool {
-        self.lock().exiting
-    }
-
-    /// Whether a soft restart is replacing `ow-main`.
-    pub(crate) fn soft_restart_pending(&self) -> bool {
-        self.lock().soft_restart.is_some()
+    /// An exit request without an exit code (the last window closed, or the
+    /// OS: Cmd+Q, logoff, Ctrl+C). The caller always prevents the request;
+    /// this decides what happens instead (A.6).
+    pub(crate) fn exit_requested(self: &Arc<Self>) {
+        enum Next {
+            Nothing,
+            Quit,
+            Exit,
+        }
+        let has_main = self.has_main_webview();
+        let next = self.with_core(|c| {
+            if c.exiting || c.quit.is_running() {
+                Next::Nothing
+            } else if c.soft_restart.is_some() {
+                // `ow-main` is being replaced; the quit runs once the new
+                // one has loaded.
+                c.quit_after_restart = true;
+                Next::Nothing
+            } else if has_main {
+                Next::Quit
+            } else {
+                // No main webview to run the quit sequence (it is disabled
+                // or gone): exit instead of swallowing the request.
+                Next::Exit
+            }
+        });
+        match next {
+            Next::Nothing => {}
+            Next::Quit => self.begin_quit(0),
+            Next::Exit => self.finish_exit(0),
+        }
     }
 
     /// The current snapshot (`bootstrap`).

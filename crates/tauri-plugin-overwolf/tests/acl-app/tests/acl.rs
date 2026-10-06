@@ -24,7 +24,7 @@ use tauri::webview::InvokeRequest;
 use tauri::{
     App, LogicalPosition, LogicalSize, Manager, WebviewBuilder, WebviewUrl, WebviewWindowBuilder,
 };
-use tauri_plugin_overwolf::{Builder, COMMANDS};
+use tauri_plugin_overwolf::{Builder, COMMANDS, OverwolfExt};
 
 /// Commands only `bw-*` webviews may call.
 const RENDERER_ONLY: [&str; 4] = ["ipc_invoke", "ipc_send", "ipc_skip", "eval_result"];
@@ -100,6 +100,17 @@ impl AsRef<tauri::Webview<MockRuntime>> for AnyWebview {
 }
 
 fn invoke(app: &App<MockRuntime>, label: &str, cmd: &str, body: Value) -> Result<Value, Value> {
+    invoke_from(app, label, origin(), cmd, body)
+}
+
+/// [`invoke`] from a document at `url`.
+fn invoke_from(
+    app: &App<MockRuntime>,
+    label: &str,
+    url: &str,
+    cmd: &str,
+    body: Value,
+) -> Result<Value, Value> {
     let webview = AnyWebview(app.get_webview(label).unwrap());
     get_ipc_response(
         &webview,
@@ -107,7 +118,7 @@ fn invoke(app: &App<MockRuntime>, label: &str, cmd: &str, body: Value) -> Result
             cmd: format!("plugin:overwolf|{cmd}"),
             callback: CallbackFn(0),
             error: CallbackFn(1),
-            url: origin().parse().unwrap(),
+            url: url.parse().unwrap(),
             body: InvokeBody::Json(body),
             headers: tauri::http::HeaderMap::default(),
             invoke_key: INVOKE_KEY.to_owned(),
@@ -149,16 +160,29 @@ fn probe_body(cmd: &str) -> Value {
     }
 }
 
-/// Webviews of every class.
+/// A `BrowserWindow` made through `window_create`; returns its id.
+fn create_window(app: &App<MockRuntime>) -> u64 {
+    let created = invoke(
+        app,
+        "ow-main",
+        "window_create",
+        json!({ "options": { "show": false, "width": 400, "height": 300 }, "preload": null, "windowClass": "ui" }),
+    )
+    .unwrap();
+    created["id"].as_u64().unwrap()
+}
+
+/// Webviews of every class. `bw-1` and `bw-2` are `BrowserWindow`s made
+/// through `window_create` (the plugin refuses `bw-*` webviews it did not
+/// create); `bw-9` is a child webview named like a window.
 fn webviews(app: &App<MockRuntime>) {
     let url = || WebviewUrl::App("index.html".into());
     WebviewWindowBuilder::new(app, "ow-main", url())
         .build()
         .unwrap();
-    let bw = WebviewWindowBuilder::new(app, "bw-1", url())
-        .build()
-        .unwrap();
-    let window = bw.as_ref().window();
+    assert_eq!(create_window(app), 1);
+    assert_eq!(create_window(app), 2);
+    let window = app.get_window("bw-1").unwrap();
     let size = LogicalSize::new(10.0, 10.0);
     let at = LogicalPosition::new(0.0, 0.0);
     window
@@ -167,12 +191,8 @@ fn webviews(app: &App<MockRuntime>) {
     window
         .add_child(WebviewBuilder::new("bw-9", url()), at, size)
         .unwrap();
-    let remote = WebviewWindowBuilder::new(app, "bw-2", url())
-        .build()
-        .unwrap();
-    remote
-        .as_ref()
-        .window()
+    app.get_window("bw-2")
+        .unwrap()
         .add_child(WebviewBuilder::new("bwr-2", url()), at, size)
         .unwrap();
     WebviewWindowBuilder::new(app, "ow-cmp", url())
@@ -273,15 +293,35 @@ fn main_and_window(app: &App<MockRuntime>) -> String {
     WebviewWindowBuilder::new(app, "ow-main", WebviewUrl::App("index.html".into()))
         .build()
         .unwrap();
-    let created = invoke(
+    assert_eq!(create_window(app), 1);
+    "bw-1".to_owned()
+}
+
+/// Subscribes `ow-main` (ready) and the given windows; returns the window
+/// epochs in order.
+fn subscribe_all(app: &App<MockRuntime>, windows: &[&str]) -> Vec<Value> {
+    invoke(
         app,
         "ow-main",
-        "window_create",
-        json!({ "options": { "show": false, "width": 400, "height": 300 }, "preload": null, "windowClass": "ui" }),
+        "ipc_subscribe",
+        json!({ "onMessage": "__CHANNEL__:11" }),
     )
     .unwrap();
-    assert_eq!(created["id"], 1);
-    created["label"].as_str().unwrap().to_owned()
+    invoke(app, "ow-main", "ipc_main_ready", json!({})).unwrap();
+    windows
+        .iter()
+        .enumerate()
+        .map(|(i, label)| {
+            invoke(
+                app,
+                label,
+                "ipc_subscribe",
+                json!({ "onMessage": format!("__CHANNEL__:{}", 21 + i) }),
+            )
+            .unwrap()["epoch"]
+                .clone()
+        })
+        .collect()
 }
 
 #[test]
@@ -480,4 +520,218 @@ fn fs_commands_stay_in_scope() {
         json!({ "path": outside }),
     );
     assert_eq!(r.unwrap(), "path does not exist");
+}
+
+#[test]
+fn a_window_at_a_remote_origin_is_refused_by_the_acl() {
+    let (app, _) = app("remote-origin");
+    webviews(&app);
+    for cmd in [
+        "ipc_subscribe",
+        "ipc_invoke",
+        "ipc_send",
+        "ipc_skip",
+        "eval_result",
+    ] {
+        let r = invoke_from(&app, "bw-1", "https://evil.example/", cmd, json!({}));
+        assert_eq!(outcome(&r), Outcome::Acl, "{cmd}: {r:?}");
+    }
+    let r = invoke_from(
+        &app,
+        "ow-main",
+        "https://evil.example/",
+        "bootstrap",
+        json!({}),
+    );
+    assert_eq!(outcome(&r), Outcome::Acl, "{r:?}");
+}
+
+#[test]
+fn a_bw_window_the_plugin_did_not_create_is_refused() {
+    let (app, _) = app("unregistered");
+    webviews(&app);
+    // Passes the ACL by its label, but no `window_create` made it.
+    WebviewWindowBuilder::new(&app, "bw-7", WebviewUrl::App("index.html".into()))
+        .build()
+        .unwrap();
+    let r = invoke(&app, "bw-7", "ipc_skip", json!({ "epoch": "x", "seq": 1 }));
+    assert_eq!(outcome(&r), Outcome::Forbidden, "{r:?}");
+}
+
+#[test]
+fn windows_only_receive_their_own_messages_and_replies() {
+    let (app, captured) = app("isolation");
+    main_and_window(&app);
+    assert_eq!(create_window(&app), 2);
+    let epochs = subscribe_all(&app, &["bw-1", "bw-2"]);
+    let id1 = invoke(
+        &app,
+        "bw-1",
+        "ipc_invoke",
+        json!({ "channel": "who", "args": [], "epoch": epochs[0], "seq": 1 }),
+    )
+    .unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    let id2 = invoke(
+        &app,
+        "bw-2",
+        "ipc_invoke",
+        json!({ "channel": "who", "args": [], "epoch": epochs[1], "seq": 1 }),
+    )
+    .unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    invoke(
+        &app,
+        "ow-main",
+        "ipc_emit",
+        json!({ "target": 2, "channel": "only-two", "args": [], "seq": 1 }),
+    )
+    .unwrap();
+    invoke(
+        &app,
+        "ow-main",
+        "ipc_reply",
+        json!({ "id": id2, "ok": true, "value": "two", "seq": 2 }),
+    )
+    .unwrap();
+    invoke(
+        &app,
+        "ow-main",
+        "ipc_reply",
+        json!({ "id": id1, "ok": true, "value": "one", "seq": 1 }),
+    )
+    .unwrap();
+    let all = wait_for(&captured, |m| {
+        messages(m, "bw-1").len() + messages(m, "bw-2").len() >= 3
+    });
+    let one = messages(&all, "bw-1");
+    let two = messages(&all, "bw-2");
+    assert_eq!(
+        one,
+        vec![json!({ "type": "ipc-result", "id": id1, "ok": true, "value": "one" })]
+    );
+    assert_eq!(two.len(), 2, "{two:?}");
+    assert_eq!(two[0]["channel"], "only-two");
+    assert_eq!(two[1]["id"], id2);
+}
+
+#[test]
+fn a_rejected_emit_does_not_hold_back_the_next_reply() {
+    let (app, captured) = app("emit-skip");
+    main_and_window(&app);
+    let epochs = subscribe_all(&app, &["bw-1"]);
+    let id = invoke(
+        &app,
+        "bw-1",
+        "ipc_invoke",
+        json!({ "channel": "get", "args": [], "epoch": epochs[0], "seq": 1 }),
+    )
+    .unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    // seq 1: an invalid channel, rejected after the target is known.
+    let r = invoke(
+        &app,
+        "ow-main",
+        "ipc_emit",
+        json!({ "target": 1, "channel": "", "args": [], "seq": 1 }),
+    );
+    assert_eq!(r.unwrap_err()["code"], "invalid-argument");
+    // seq 2: the main runtime reports a reply that never reached the plugin.
+    invoke(
+        &app,
+        "ow-main",
+        "ipc_emit_skip",
+        json!({ "target": 1, "seq": 2 }),
+    )
+    .unwrap();
+    let start = Instant::now();
+    invoke(
+        &app,
+        "ow-main",
+        "ipc_reply",
+        json!({ "id": id, "ok": true, "value": 3, "seq": 3 }),
+    )
+    .unwrap();
+    let all = wait_for(&captured, |m| !messages(m, "bw-1").is_empty());
+    assert!(
+        start.elapsed() < Duration::from_millis(900),
+        "delivered without waiting for the 1 s gap timeout"
+    );
+    assert_eq!(messages(&all, "bw-1")[0]["value"], 3);
+}
+
+#[test]
+fn loading_a_remote_url_switches_the_window_to_a_remote_webview() {
+    let (app, captured) = app("remote-switch");
+    main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
+    invoke(
+        &app,
+        "ow-main",
+        "window_load",
+        json!({ "id": 1, "target": { "kind": "url", "url": "https://example.com/" } }),
+    )
+    .unwrap();
+    assert!(
+        app.get_webview("bwr-1").is_some(),
+        "the remote webview exists"
+    );
+    assert!(
+        app.get_webview("bw-1").is_none(),
+        "the app webview is closed"
+    );
+    assert!(app.get_window("bw-1").is_some(), "the window keeps its id");
+    // `webContents.send` to a remote window is dropped, never delivered.
+    invoke(
+        &app,
+        "ow-main",
+        "ipc_emit",
+        json!({ "target": 1, "channel": "x", "args": [], "seq": 1 }),
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(messages(&captured.lock().unwrap(), "bw-1").is_empty());
+    // The remote webview has no capability.
+    let r = invoke_from(
+        &app,
+        "bwr-1",
+        "https://example.com/",
+        "ipc_subscribe",
+        json!({}),
+    );
+    assert_eq!(outcome(&r), Outcome::Acl, "{r:?}");
+}
+
+#[test]
+fn navigation_policy_and_window_open() {
+    let (app, captured) = app("navigation");
+    main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
+    let ow = app.overwolf();
+    let at = |s: &str| tauri::Url::parse(s).unwrap();
+    let app_page = format!("{}/page.html", origin());
+    assert!(ow.test_navigation("bw-1", &at(&app_page)));
+    assert!(ow.test_navigation("bw-1", &at("about:srcdoc")));
+    assert!(ow.test_navigation("bw-1", &at("blob:tauri://localhost/1")));
+    assert!(!ow.test_navigation("bw-1", &at("file:///etc/hosts")));
+    // ow-main: the first document, then a frame or a reload.
+    let main_page = format!("{}/index.html", origin());
+    ow.test_page_load("ow-main", &at(&main_page), true);
+    assert!(ow.test_navigation("ow-main", &at("about:srcdoc")));
+    assert!(!ow.test_navigation("ow-main", &at("https://example.com/")));
+    // Rust reports the page loads of `bw-1` with the document URL.
+    ow.test_page_load("bw-1", &at(&app_page), true);
+    let all = wait_for(&captured, |m| {
+        messages(m, "ow-main")
+            .iter()
+            .any(|x| x["event"] == "did-finish-load")
+    });
+    let loaded = messages(&all, "ow-main")
+        .into_iter()
+        .find(|x| x["event"] == "did-finish-load")
+        .unwrap();
+    assert_eq!(loaded["data"]["url"], app_page.as_str());
 }

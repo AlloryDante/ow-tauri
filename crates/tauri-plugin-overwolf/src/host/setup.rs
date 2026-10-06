@@ -169,7 +169,16 @@ pub(crate) fn setup<R: Runtime>(
 
     let ow_tauri = OwTauriFile::load(state_dir.ow_tauri_json());
     if ow_tauri.corrupt_at_load {
-        warnings.push("ow-tauri.json was not valid JSON; starting from defaults".into());
+        warnings.push(match &ow_tauri.corrupt_backup {
+            Some(backup) => format!(
+                "ow-tauri.json was not valid JSON; starting from defaults (the old file is {})",
+                backup
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            ),
+            None => "ow-tauri.json could not be read; starting from defaults".into(),
+        });
     }
     if config.analytics.muid_strategy == MuidStrategy::MachineId {
         warnings.push(
@@ -308,6 +317,10 @@ pub(crate) fn setup<R: Runtime>(
         relaunch_args: None,
         exiting: false,
         soft_restart: None,
+        restart_recreating: false,
+        quit_after_restart: false,
+        restart_stale_windows: std::collections::BTreeSet::new(),
+        urls: HashMap::new(),
         ticks: 0,
     };
 

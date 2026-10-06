@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use tauri::webview::PageLoadEvent;
+use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{LogicalPosition, Manager, Runtime, WebviewBuilder, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::oneshot;
 use url::Url;
@@ -17,8 +17,8 @@ use crate::ipc::messages::{HostMessage, WindowEventName};
 use crate::lifecycle::CLOSE_TIMEOUT_MS;
 use crate::state::log::LogLevel;
 use crate::window::options::{
-    LoadTarget, ResolvedLoad, WindowClassWire, WindowCreateRequest, parse_color, resolve_load,
-    same_origin,
+    LoadTarget, NAVIGATION_HOOK_IS_TOP_LEVEL_ONLY, ResolvedLoad, UiNavigation, WindowClassWire,
+    WindowCreateRequest, parse_color, resolve_load, ui_navigation,
 };
 use crate::window::{WindowKind, WindowState, derive_state_events, remote_label, ui_label};
 
@@ -92,10 +92,12 @@ impl<R: Runtime> Host<R> {
             Some(p) => Some(self.read_asset_text(p)?),
             None => None,
         };
+        // The native window, not its webview: after a switch to a remote
+        // page the window `bw-<id>` holds the webview `bwr-<id>`.
         let parent = match req.options.parent_id {
             Some(pid) => Some(
                 self.app
-                    .get_webview_window(&ui_label(pid))
+                    .get_window(&ui_label(pid))
                     .ok_or_else(|| Error::not_found("The parent window does not exist."))?,
             ),
             None => None,
@@ -117,6 +119,7 @@ impl<R: Runtime> Host<R> {
         let (w, h) = o.size();
         let visible = o.show.unwrap_or(true);
         let mut b = WebviewWindowBuilder::new(&self.app, &label, WebviewUrl::External(blank))
+            .on_new_window(self.new_window_handler(id))
             .initialization_script(renderer_init_script(&origin, &bootstrap))
             .inner_size(w, h)
             .visible(visible)
@@ -188,7 +191,7 @@ impl<R: Runtime> Host<R> {
             b = b.devtools(dev);
         }
         if let Some(parent) = &parent {
-            b = b.parent(parent).map_err(Error::from)?;
+            b = with_parent(b, parent)?;
         }
         #[cfg(windows)]
         {
@@ -277,8 +280,9 @@ impl<R: Runtime> Host<R> {
             not(windows),
             expect(unused_mut, reason = "browser arguments are added on Windows only")
         )]
-        let mut builder =
-            WebviewBuilder::new(remote_label(id), WebviewUrl::External(url)).auto_resize();
+        let mut builder = WebviewBuilder::new(remote_label(id), WebviewUrl::External(url))
+            .auto_resize()
+            .on_new_window(self.new_window_handler(id));
         #[cfg(windows)]
         {
             builder = builder.additional_browser_args(&self.info.browser_args);
@@ -300,6 +304,7 @@ impl<R: Runtime> Host<R> {
             }
             c.router.remove_peer(&ui_label(id), None);
             c.sinks.remove(&ui_label(id));
+            c.urls.remove(&ui_label(id));
             take_evals(c, id)
         });
         reject_evals(evals, "The window switched to a remote page.");
@@ -550,8 +555,11 @@ impl<R: Runtime> Host<R> {
             c.router.remove_peer(&ui_label(id), Some(id));
             c.router.remove_peer(&remote_label(id), None);
             c.sinks.remove(&ui_label(id));
+            c.urls.remove(&ui_label(id));
+            c.urls.remove(&remote_label(id));
             c.close_requests.retain(|_, r| r.window != id);
             c.queue_main(HostMessage::window(id, WindowEventName::Closed, None));
+            c.restart_stale_windows.remove(&id);
             let mut ids = c.request_ids;
             let actions = c.quit.window_gone(id, now, &mut ids);
             c.request_ids = ids;
@@ -568,21 +576,26 @@ impl<R: Runtime> Host<R> {
         app_webview: bool,
         label: &str,
         event: PageLoadEvent,
+        url: &Url,
     ) {
+        let href = url.to_string();
         match event {
             PageLoadEvent::Started => {
-                if app_webview {
-                    let evals = self.with_core(|c| {
-                        if c.router.is_subscribed(label) {
-                            c.router.document_unloaded(label);
-                            c.sinks.remove(label);
-                        }
-                        take_evals(c, id)
-                    });
-                    reject_evals(evals, "The window navigated.");
-                }
+                let evals = self.with_core(|c| {
+                    c.urls.insert(label.to_owned(), href);
+                    if !app_webview {
+                        return Vec::new();
+                    }
+                    if c.router.is_subscribed(label) {
+                        c.router.document_unloaded(label);
+                        c.sinks.remove(label);
+                    }
+                    take_evals(c, id)
+                });
+                reject_evals(evals, "The window navigated.");
             }
             PageLoadEvent::Finished => self.with_core(|c| {
+                c.urls.insert(label.to_owned(), href.clone());
                 let Some(entry) = c.windows.get_mut(id) else {
                     return;
                 };
@@ -592,7 +605,7 @@ impl<R: Runtime> Host<R> {
                 c.queue_main(HostMessage::window(
                     id,
                     WindowEventName::DidFinishLoad,
-                    None,
+                    Some(json!({ "url": href })),
                 ));
                 if first {
                     c.queue_main(HostMessage::window(id, WindowEventName::ReadyToShow, None));
@@ -601,32 +614,105 @@ impl<R: Runtime> Host<R> {
         }
     }
 
-    /// The navigation policy of `bw-*` webviews (A.2.3.1): app origin (and
-    /// the initial `about:blank`) only; `http(s)` targets open in the system
-    /// browser.
-    pub(crate) fn ui_navigation(self: &Arc<Self>, url: &Url) -> bool {
-        if same_origin(url, &self.info.app_origin) || url.as_str() == "about:blank" {
-            return true;
-        }
-        if matches!(url.scheme(), "http" | "https") {
-            match crate::shell::validate_external_url(url.as_str()) {
-                Ok(u) => {
-                    if let Err(err) = tauri_plugin_opener::open_url(u.as_str(), None::<&str>) {
-                        self.log(
-                            LogLevel::Warn,
-                            &format!("opening a link in the system browser failed: {err}"),
-                        );
+    /// The navigation policy of the `bw-<id>` webview (A.2.3.1, see
+    /// [`ui_navigation`]). A cancelled top-level `http(s)` navigation opens
+    /// in the system browser and reaches the app as `will-navigate`.
+    pub(crate) fn ui_navigation(self: &Arc<Self>, id: u32, url: &Url) -> bool {
+        match ui_navigation(
+            url,
+            &self.info.app_origin,
+            NAVIGATION_HOOK_IS_TOP_LEVEL_ONLY,
+        ) {
+            UiNavigation::Allow => true,
+            UiNavigation::OpenExternal => {
+                self.send_main(HostMessage::window(
+                    id,
+                    WindowEventName::WillNavigate,
+                    Some(json!({ "url": url.as_str() })),
+                ));
+                match crate::shell::validate_external_url(url.as_str()) {
+                    Ok(u) => {
+                        if let Err(err) = tauri_plugin_opener::open_url(u.as_str(), None::<&str>) {
+                            self.log(
+                                LogLevel::Warn,
+                                &format!("opening a link in the system browser failed: {err}"),
+                            );
+                        }
                     }
+                    Err(_) => self.log(LogLevel::Warn, "navigation to an invalid URL cancelled"),
                 }
-                Err(_) => self.log(LogLevel::Warn, "navigation to an invalid URL cancelled"),
+                false
             }
-        } else {
-            self.log(
-                LogLevel::Warn,
-                &format!("navigation to a {} URL cancelled", url.scheme()),
-            );
+            UiNavigation::Cancel => {
+                self.log(
+                    LogLevel::Warn,
+                    &format!("navigation to a {} URL cancelled", url.scheme()),
+                );
+                false
+            }
         }
-        false
+    }
+
+    /// The `window.open` handler of window `id`'s webviews: the request is
+    /// always denied natively and reported as a `new-window` event, so the
+    /// main runtime runs the app's `setWindowOpenHandler` (B.2).
+    fn new_window_handler(
+        self: &Arc<Self>,
+        id: u32,
+    ) -> impl Fn(Url, tauri::webview::NewWindowFeatures) -> NewWindowResponse<R> + Send + 'static
+    {
+        let weak = Arc::downgrade(self);
+        move |url, _features| {
+            if let Some(host) = weak.upgrade() {
+                host.send_main(HostMessage::window(
+                    id,
+                    WindowEventName::NewWindow,
+                    Some(json!({ "url": url.as_str() })),
+                ));
+            }
+            NewWindowResponse::Deny
+        }
+    }
+}
+
+/// Makes `parent` (a `bw-*` window, whatever webview it holds) the parent
+/// of the window `b` builds, as `WebviewWindowBuilder::parent` does for a
+/// `WebviewWindow`: owner on Windows, child window on macOS, transient on
+/// Linux.
+fn with_parent<'a, R: Runtime, M: Manager<R>>(
+    b: WebviewWindowBuilder<'a, R, M>,
+    parent: &tauri::Window<R>,
+) -> Result<WebviewWindowBuilder<'a, R, M>, Error> {
+    #[cfg(windows)]
+    {
+        Ok(b.owner_raw(parent.hwnd().map_err(Error::from)?))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Ok(b.parent_raw(parent.ns_window().map_err(Error::from)?))
+    }
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    {
+        Ok(b.transient_for_raw(&parent.gtk_window().map_err(Error::from)?))
+    }
+    #[cfg(not(any(
+        windows,
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    )))]
+    {
+        let _ = parent;
+        Ok(b)
     }
 }
 

@@ -46,12 +46,47 @@ pub fn validate_external_url(input: &str) -> Result<Url, Error> {
     Ok(url)
 }
 
-/// Windows launcher extensions refused besides `PATHEXT`.
-pub const WINDOWS_EXTRA_EXTENSIONS: [&str; 11] = [
-    ".lnk", ".url", ".scf", ".ps1", ".msi", ".msp", ".reg", ".hta", ".cpl", ".jar", ".exe",
+/// Windows launcher extensions refused besides `PATHEXT`: shortcuts,
+/// installers, scripts, and file types whose shell handler runs or installs
+/// code (screensavers, `ClickOnce`, `MSIX`/`AppX`, setting and search shortcuts,
+/// compiled help, disk images that auto-mount, Excel add-ins).
+pub const WINDOWS_EXTRA_EXTENSIONS: &[&str] = &[
+    ".lnk",
+    ".url",
+    ".scf",
+    ".ps1",
+    ".msi",
+    ".msp",
+    ".reg",
+    ".hta",
+    ".cpl",
+    ".jar",
+    ".exe",
+    ".scr",
+    ".pif",
+    ".appref-ms",
+    ".application",
+    ".msix",
+    ".msixbundle",
+    ".appx",
+    ".appxbundle",
+    ".appinstaller",
+    ".settingcontent-ms",
+    ".diagcab",
+    ".chm",
+    ".inf",
+    ".iso",
+    ".img",
+    ".vhd",
+    ".vhdx",
+    ".xll",
+    ".website",
+    ".library-ms",
+    ".search-ms",
 ];
-/// macOS launcher extensions.
-pub const MACOS_EXTENSIONS: [&str; 7] = [
+/// macOS launcher extensions: apps and installers, scripts, Finder
+/// location files (which open their target), Java archives and disk images.
+pub const MACOS_EXTENSIONS: &[&str] = &[
     ".app",
     ".command",
     ".tool",
@@ -59,9 +94,30 @@ pub const MACOS_EXTENSIONS: [&str; 7] = [
     ".workflow",
     ".pkg",
     ".mpkg",
+    ".fileloc",
+    ".inetloc",
+    ".webloc",
+    ".jar",
+    ".prefpane",
+    ".saver",
+    ".dmg",
+    ".scpt",
+    ".scptd",
+    ".applescript",
+];
+/// macOS bundle extensions that are launchers even though they are
+/// directories.
+pub const MACOS_BUNDLE_EXTENSIONS: &[&str] = &[
+    ".app",
+    ".prefpane",
+    ".saver",
+    ".workflow",
+    ".pkg",
+    ".mpkg",
+    ".scptd",
 ];
 /// Linux launcher extensions.
-pub const LINUX_EXTENSIONS: [&str; 2] = [".desktop", ".appimage"];
+pub const LINUX_EXTENSIONS: &[&str] = &[".desktop", ".appimage", ".jar"];
 
 /// The `PATHEXT` default used when the variable is unset.
 pub const DEFAULT_PATHEXT: &str = ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC";
@@ -81,7 +137,8 @@ fn lower_extension(path: &Path) -> Option<String> {
 }
 
 /// Whether `path` is an executable or a launcher on `os` (A.2.3.2).
-/// Directories are allowed, except macOS `.app` bundles, which are launchers.
+/// Directories are allowed, except macOS bundles that are launchers
+/// ([`MACOS_BUNDLE_EXTENSIONS`]).
 ///
 /// ```
 /// use std::path::Path;
@@ -109,7 +166,10 @@ pub fn is_executable(path: &Path, facts: PathFacts, os: TargetOs, pathext: &str)
                 || WINDOWS_EXTRA_EXTENSIONS.contains(&ext.as_str())
         }
         TargetOs::Macos => {
-            if ext.as_deref() == Some(".app") {
+            if ext
+                .as_deref()
+                .is_some_and(|e| MACOS_BUNDLE_EXTENSIONS.contains(&e))
+            {
                 return true;
             }
             if facts.is_dir {
@@ -191,6 +251,40 @@ mod tests {
                 "{p}"
             );
         }
+        // Every extra launcher type, in any case.
+        for ext in WINDOWS_EXTRA_EXTENSIONS {
+            let p = format!("C:/u/file{}", ext.to_ascii_uppercase());
+            assert!(
+                is_executable(Path::new(&p), FILE, TargetOs::Windows, ""),
+                "{p}"
+            );
+        }
+        for p in [
+            "a.scr",
+            "a.pif",
+            "a.appref-ms",
+            "a.application",
+            "a.msix",
+            "a.appx",
+            "a.appinstaller",
+            "a.settingcontent-ms",
+            "a.diagcab",
+            "a.chm",
+            "a.inf",
+            "a.iso",
+            "a.img",
+            "a.vhd",
+            "a.vhdx",
+            "a.xll",
+            "a.website",
+            "a.library-ms",
+            "a.search-ms",
+        ] {
+            assert!(
+                is_executable(Path::new(p), FILE, TargetOs::Windows, pathext),
+                "{p}"
+            );
+        }
         for p in ["a.txt", "a.png", "a", "a.exe.txt"] {
             assert!(
                 !is_executable(Path::new(p), FILE, TargetOs::Windows, pathext),
@@ -222,10 +316,29 @@ mod tests {
             "/a.workflow",
             "/a.pkg",
             "/a.mpkg",
+            "/a.fileloc",
+            "/a.inetloc",
+            "/a.webloc",
+            "/a.jar",
+            "/a.dmg",
+            "/a.scpt",
+            "/a.applescript",
         ] {
             assert!(
                 is_executable(Path::new(p), FILE, TargetOs::Macos, ""),
                 "{p}"
+            );
+        }
+        for bundle in [
+            "/A.prefPane",
+            "/A.saver",
+            "/A.workflow",
+            "/A.scptd",
+            "/A.pkg",
+        ] {
+            assert!(
+                is_executable(Path::new(bundle), DIR, TargetOs::Macos, ""),
+                "{bundle}"
             );
         }
         assert!(is_executable(
@@ -265,6 +378,12 @@ mod tests {
         assert!(is_executable(
             Path::new("/script"),
             EXEC,
+            TargetOs::Linux,
+            ""
+        ));
+        assert!(is_executable(
+            Path::new("/a.jar"),
+            FILE,
             TargetOs::Linux,
             ""
         ));

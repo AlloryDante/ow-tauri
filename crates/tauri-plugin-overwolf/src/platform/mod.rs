@@ -38,16 +38,41 @@ impl LocalTime {
     }
 }
 
-/// The macOS major version (for example 14), or `None` elsewhere or when it
-/// cannot be read.
+/// The macOS major version (for example 14), or `None` when it cannot be
+/// read. Reads the `kern.osproductversion` sysctl, which works in sandboxed
+/// and hardened processes (no child process).
 #[cfg(all(target_os = "macos", feature = "plugin"))]
 pub(crate) fn macos_major_version() -> Option<u32> {
-    let release = std::process::Command::new("/usr/bin/sw_vers")
-        .arg("-productVersion")
-        .output()
-        .ok()?;
-    let text = String::from_utf8(release.stdout).ok()?;
-    text.trim().split('.').next()?.parse().ok()
+    let mut buf = [0_u8; 32];
+    let mut len = buf.len();
+    // SAFETY: the name is a NUL-terminated C string; `buf` and `len`
+    // describe a writable buffer that outlives the call; no new value is
+    // set (null pointer, length 0).
+    let rc = unsafe {
+        libc::sysctlbyname(
+            c"kern.osproductversion".as_ptr(),
+            buf.as_mut_ptr().cast(),
+            &raw mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    parse_major_version(buf.get(..len)?)
+}
+
+/// The major version from `"14.5"` style text (a trailing NUL is ignored).
+#[cfg(any(test, all(target_os = "macos", feature = "plugin")))]
+fn parse_major_version(bytes: &[u8]) -> Option<u32> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    text.trim_end_matches('\0')
+        .trim()
+        .split('.')
+        .next()?
+        .parse()
+        .ok()
 }
 
 /// Whether `ow-main` can rely on `BackgroundThrottlingPolicy::Disabled`
@@ -101,6 +126,19 @@ mod tests {
         let now = local_time();
         assert!(now.year >= 2024);
         assert!((1..=12).contains(&now.month));
+    }
+
+    #[test]
+    fn major_version_parses() {
+        assert_eq!(parse_major_version(b"14.5\0"), Some(14));
+        assert_eq!(parse_major_version(b"26.0"), Some(26));
+        assert_eq!(parse_major_version(b"x"), None);
+    }
+
+    #[test]
+    #[cfg(all(target_os = "macos", feature = "plugin"))]
+    fn macos_version_is_read() {
+        assert!(macos_major_version().is_some_and(|v| v >= 11));
     }
 
     #[test]

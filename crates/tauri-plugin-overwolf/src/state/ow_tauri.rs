@@ -83,26 +83,103 @@ pub struct OwTauriFile {
     state: Mutex<OwTauriState>,
     /// Whether the file on disk could not be parsed at load.
     pub corrupt_at_load: bool,
+    /// Where an unparseable file was moved at load
+    /// (`ow-tauri.json.corrupt-<ms since 1970>`), when the move succeeded.
+    pub corrupt_backup: Option<PathBuf>,
+}
+
+/// Parses `ow-tauri.json` field by field: a known field with an unexpected
+/// type (for example from a newer schema) is kept unchanged in
+/// [`OwTauriState::extra`] instead of failing the whole file, so values such
+/// as the per-install muid survive. `None` when the text is not a JSON
+/// object.
+///
+/// ```
+/// use tauri_plugin_overwolf::state::ow_tauri::parse_lenient;
+/// let s = parse_lenient(br#"{"muid":"M","packageChannels":7}"#).unwrap();
+/// assert_eq!(s.muid.as_deref(), Some("M"));
+/// assert!(s.package_channels.is_empty());
+/// assert_eq!(s.extra["packageChannels"], 7);
+/// assert!(parse_lenient(b"garbage").is_none());
+/// ```
+#[must_use]
+pub fn parse_lenient(bytes: &[u8]) -> Option<OwTauriState> {
+    let Value::Object(object) = serde_json::from_slice::<Value>(bytes).ok()? else {
+        return None;
+    };
+    if let Ok(state) = serde_json::from_value::<OwTauriState>(Value::Object(object.clone())) {
+        return Some(state);
+    }
+    let empty = || serde_json::from_value::<OwTauriState>(Value::Object(Map::new()));
+    let mut state = empty().ok()?;
+    let mut kept = Map::new();
+    let mut mistyped = Map::new();
+    for (key, value) in object {
+        let mut one = Map::new();
+        one.insert(key.clone(), value.clone());
+        if serde_json::from_value::<OwTauriState>(Value::Object(one)).is_ok() {
+            kept.insert(key, value);
+        } else {
+            mistyped.insert(key, value);
+        }
+    }
+    if let Ok(parsed) = serde_json::from_value::<OwTauriState>(Value::Object(kept)) {
+        state = parsed;
+    }
+    state.extra.extend(mistyped);
+    Some(state)
+}
+
+/// The names the known fields of `state` serialise to.
+fn known_keys(state: &OwTauriState) -> Vec<String> {
+    let bare = OwTauriState {
+        extra: Map::new(),
+        ..state.clone()
+    };
+    match serde_json::to_value(bare) {
+        Ok(Value::Object(m)) => m.into_iter().map(|(k, _)| k).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Renames an unparseable state file to `<name>.corrupt-<ms since 1970>`
+/// so nothing is lost; returns the new path when the rename worked.
+fn move_aside(path: &Path) -> Option<PathBuf> {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let mut name = path.file_name()?.to_os_string();
+    name.push(format!(".corrupt-{millis}"));
+    let target = path.with_file_name(name);
+    std::fs::rename(path, &target).ok().map(|()| target)
 }
 
 impl OwTauriFile {
-    /// Loads `path`. A missing file starts from defaults; an unreadable or
-    /// invalid one also starts from defaults and is replaced on the next
-    /// write ([`OwTauriFile::corrupt_at_load`] is then `true`).
+    /// Loads `path`. A missing file starts from defaults. A file whose
+    /// known fields have unexpected types keeps them in `extra`
+    /// ([`parse_lenient`]). A file that is not a JSON object is moved to
+    /// `ow-tauri.json.corrupt-<ms>` and the state starts from defaults
+    /// ([`OwTauriFile::corrupt_at_load`] is then `true`).
     #[must_use]
     pub fn load(path: PathBuf) -> Self {
+        let mut backup = None;
         let (state, corrupt) = match std::fs::read(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (OwTauriState::default(), false),
             Err(_) => (OwTauriState::default(), true),
-            Ok(bytes) => match serde_json::from_slice::<OwTauriState>(&bytes) {
-                Ok(s) => (s, false),
-                Err(_) => (OwTauriState::default(), true),
-            },
+            Ok(bytes) => {
+                if let Some(s) = parse_lenient(&bytes) {
+                    (s, false)
+                } else {
+                    backup = move_aside(&path);
+                    (OwTauriState::default(), true)
+                }
+            }
         };
         OwTauriFile {
             path,
             state: Mutex::new(state),
             corrupt_at_load: corrupt,
+            corrupt_backup: backup,
         }
     }
 
@@ -133,6 +210,10 @@ impl OwTauriFile {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         edit(&mut guard);
+        // A known field that was kept in `extra` because it had an
+        // unexpected type yields to the value this build sets.
+        let known = known_keys(&guard);
+        guard.extra.retain(|k, _| !known.contains(k));
         guard.schema = guard.schema.max(SCHEMA);
         if guard.created_by.is_empty() {
             guard.created_by = format!("ow-tauri {}", env!("CARGO_PKG_VERSION"));
@@ -147,6 +228,30 @@ impl OwTauriFile {
 mod tests {
     use super::*;
     use crate::state::test_dir;
+
+    #[test]
+    fn mistyped_known_fields_are_kept_and_yield_to_new_values() {
+        let dir = test_dir("owt-lenient");
+        let path = dir.join("ow-tauri.json");
+        std::fs::write(
+            &path,
+            r#"{"schema":2,"muid":"M","stagingId":{"v":2},"futureKey":true}"#,
+        )
+        .unwrap();
+        let file = OwTauriFile::load(path.clone());
+        assert!(!file.corrupt_at_load);
+        assert_eq!(file.get().muid.as_deref(), Some("M"), "the muid survives");
+        file.update(|s| s.ad_optimization = Some(true)).unwrap();
+        let v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(v["stagingId"], serde_json::json!({"v":2}), "kept as found");
+        assert_eq!(v["futureKey"], true);
+        file.update(|s| s.staging_id = Some("S".into())).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.matches("stagingId").count(), 1, "{text}");
+        let v: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["stagingId"], "S");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn round_trip_and_newer_schema() {
@@ -183,6 +288,13 @@ mod tests {
         std::fs::write(&path, b"garbage").unwrap();
         let corrupt = OwTauriFile::load(path.clone());
         assert!(corrupt.corrupt_at_load);
+        let backup = corrupt.corrupt_backup.clone().unwrap();
+        assert_eq!(
+            std::fs::read(&backup).unwrap(),
+            b"garbage",
+            "the old file is kept"
+        );
+        assert!(!path.exists());
         corrupt.update(|s| s.muid = Some("X".into())).unwrap();
         let reloaded = OwTauriFile::load(path);
         assert_eq!(reloaded.get().muid.as_deref(), Some("X"));

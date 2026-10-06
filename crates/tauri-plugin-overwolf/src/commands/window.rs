@@ -211,7 +211,8 @@ pub(crate) async fn eval_result<R: Runtime>(
     state: State<'_, Overwolf<R>>,
     request: Request<'_>,
 ) -> Result<()> {
-    let window = require_ui(&webview)?;
+    let host = host(&state);
+    let window = require_ui(&webview, host)?;
     let args: EvalResultArgs = body(&request, "eval_result")?;
-    host(&state).eval_result(window, args.id, args.ok, args.value, args.error)
+    host.eval_result(window, args.id, args.ok, args.value, args.error)
 }

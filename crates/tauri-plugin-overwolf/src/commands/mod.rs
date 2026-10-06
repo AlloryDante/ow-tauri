@@ -40,17 +40,31 @@ pub(crate) fn require_main<R: Runtime>(webview: &Webview<R>) -> Result<(), Error
     }
 }
 
-/// The caller must be a `bw-*` UI or overlay webview; returns its window id.
-pub(crate) fn require_ui<R: Runtime>(webview: &Webview<R>) -> Result<u32, Error> {
+/// The caller must be the `bw-<id>` webview of a UI or overlay window the
+/// plugin created (`window_create`); returns its window id. A webview whose
+/// label merely looks like one (a child webview, or a window the app built
+/// itself) is refused, so the label stamped on IPC is always the sender.
+pub(crate) fn require_ui<R: Runtime>(
+    webview: &Webview<R>,
+    host: &Arc<Host<R>>,
+) -> Result<u32, Error> {
     match classify(webview.label()) {
-        WebviewClass::Ui(id) if webview.window().label() == webview.label() => Ok(id),
+        WebviewClass::Ui(id)
+            if webview.window().label() == webview.label()
+                && host.with_core(|c| c.windows.ipc_target(id).is_some()) =>
+        {
+            Ok(id)
+        }
         _ => Err(forbidden(webview.label())),
     }
 }
 
-/// The caller must be `ow-main` or a `bw-*` webview.
-pub(crate) fn require_main_or_ui<R: Runtime>(webview: &Webview<R>) -> Result<(), Error> {
-    if require_main(webview).is_ok() || require_ui(webview).is_ok() {
+/// The caller must be `ow-main` or a `bw-*` webview (as [`require_ui`]).
+pub(crate) fn require_main_or_ui<R: Runtime>(
+    webview: &Webview<R>,
+    host: &Arc<Host<R>>,
+) -> Result<(), Error> {
+    if require_main(webview).is_ok() || require_ui(webview, host).is_ok() {
         Ok(())
     } else {
         Err(forbidden(webview.label()))
@@ -89,6 +103,7 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         app::log,
         ipc::ipc_reply,
         ipc::ipc_emit,
+        ipc::ipc_emit_skip,
         app::disable_anonymous_analytics,
         app::disable_ads_optimization,
         app::disable_ads_fpd,

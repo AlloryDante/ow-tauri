@@ -12,7 +12,9 @@ categories.workspace = true
 # Tauri plugins declare `links` so tauri-build can find the permission files
 # this crate's build script generates (DEP_TAURI_PLUGIN_OVERWOLF_*).
 links = "tauri-plugin-overwolf"
-exclude = ["/tests/acl-app/target"]
+# `js/` holds the generated runtime bundle (`npm run build:injected
+# --workspace ow-tauri`); the published crate must carry it.
+include = ["/build.rs", "/src/**", "/permissions/**", "/js/**", "/README.md"]
 
 [features]
 # `plugin` is the Tauri plugin itself. Without it the crate is only the
@@ -33,8 +35,10 @@ plugin = [
 ]
 # Lets `window_devtools` open devtools in release builds (Tauri `devtools`).
 devtools = ["plugin", "tauri/devtools"]
-# Test hooks for the plugin's own mock-runtime suite and for apps that test
-# their IPC wiring: attach an in-process host-message sink to a webview.
+# Hooks for tests on Tauri's mock runtime (the plugin's own suite, and apps
+# that test their IPC wiring): `Builder::skip_os_queries`, and hidden
+# `Overwolf::test_*` methods that drive the window, navigation, page-load and
+# exit-request handlers the mock runtime never fires. Not a stable API.
 test-util = ["plugin"]
 
 [dependencies]

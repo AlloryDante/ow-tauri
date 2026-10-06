@@ -151,6 +151,53 @@ impl<R: Runtime> Overwolf<R> {
     }
 }
 
+/// Drives the plugin's Tauri event handlers directly, for tests on Tauri's
+/// mock runtime, which emits no window, navigation or page-load events. Not
+/// part of the stable API.
+#[cfg(feature = "test-util")]
+#[doc(hidden)]
+impl<R: Runtime> Overwolf<R> {
+    /// As if the window `label` sent `WindowEvent::Destroyed`.
+    pub fn test_window_destroyed(&self, label: &str) {
+        crate::plugin::window_event(&self.0, label, &tauri::WindowEvent::Destroyed);
+    }
+
+    /// As if the webview `label` asked to navigate to `url`; returns whether
+    /// the navigation may proceed.
+    #[must_use]
+    pub fn test_navigation(&self, label: &str, url: &url::Url) -> bool {
+        crate::plugin::navigation(&self.0, label, url)
+    }
+
+    /// As if the webview `label` reported a page load of `url`.
+    pub fn test_page_load(&self, label: &str, url: &url::Url, finished: bool) {
+        let event = if finished {
+            tauri::webview::PageLoadEvent::Finished
+        } else {
+            tauri::webview::PageLoadEvent::Started
+        };
+        crate::plugin::page_load(&self.0, label, event, url);
+    }
+
+    /// As if the OS asked the app to exit (`ExitRequested` without a code,
+    /// after the plugin prevented it).
+    pub fn test_exit_requested(&self) {
+        self.0.exit_requested();
+    }
+
+    /// Whether a soft restart of `ow-main` is in progress.
+    #[must_use]
+    pub fn test_soft_restart_pending(&self) -> bool {
+        self.0.with_core(|c| c.soft_restart.is_some())
+    }
+
+    /// Whether the app is exiting through the plugin.
+    #[must_use]
+    pub fn test_exiting(&self) -> bool {
+        self.0.with_core(|c| c.exiting)
+    }
+}
+
 /// Access to [`Overwolf`] from `App`, `AppHandle`, `Window`, `Webview` and
 /// `WebviewWindow`.
 ///

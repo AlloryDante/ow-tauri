@@ -38,7 +38,7 @@ use serde_json::Value;
 use super::messages::{HostMessage, IpcMessage, IpcSender};
 use super::reorder::{Reorder, ReorderError};
 use crate::config::IpcConfig;
-use crate::error::{Error, ErrorCode};
+use crate::error::Error;
 
 /// The main webview's label.
 pub const MAIN_LABEL: &str = "ow-main";
@@ -664,6 +664,10 @@ impl Router {
     /// remote, destroyed or unknown; the message is then dropped with a
     /// warning and `Ok` is returned.
     ///
+    /// A rejected message still uses up its `seq` (it is skipped), so later
+    /// messages and replies to the window are not held back for the gap
+    /// timeout.
+    ///
     /// # Errors
     ///
     /// `ipc-serialization` (size), `ipc-overloaded` (target queue full or
@@ -682,21 +686,28 @@ impl Router {
         size: usize,
         now: u64,
     ) -> Result<(), Error> {
-        if let Some(e) = channel_error(channel) {
-            return Err(e);
-        }
-        self.check_size(size)?;
         let Some(label) = target else {
             self.warn(format!(
                 "dropped webContents.send on '{channel}' to window {target_id}: not a local window"
             ));
+            self.emit_skip(target_id, false, seq, now);
             return Ok(());
         };
-        let held = self.outbound.get(&target_id).map_or(0, Reorder::held_len);
-        if self.queued(label) + held >= self.limits.max_queued_messages {
-            return Err(Error::ipc_overloaded(
-                "The target window has too many messages queued.",
-            ));
+        let checked = channel_error(channel)
+            .map_or_else(|| self.check_size(size), Err)
+            .and_then(|()| {
+                let held = self.outbound.get(&target_id).map_or(0, Reorder::held_len);
+                if self.queued(label) + held >= self.limits.max_queued_messages {
+                    Err(Error::ipc_overloaded(
+                        "The target window has too many messages queued.",
+                    ))
+                } else {
+                    Ok(())
+                }
+            });
+        if let Err(e) = checked {
+            self.emit_skip(target_id, true, seq, now);
+            return Err(e);
         }
         let item = Outbound::Message {
             label: label.to_owned(),
@@ -711,9 +722,28 @@ impl Router {
         Ok(())
     }
 
+    /// `ipc_emit_skip`: outbound `seq` to window `target_id` will never be
+    /// sent (the main runtime could not deliver the message or reply that
+    /// carried it). `local` says whether the window is a local window the
+    /// plugin knows; for other windows only an existing order is advanced.
+    /// Numbers already used, skipped, or out of window are ignored.
+    pub fn emit_skip(&mut self, target_id: u32, local: bool, seq: u64, now: u64) {
+        let order = if local {
+            Some(self.outbound_order(target_id))
+        } else {
+            self.outbound.get_mut(&target_id)
+        };
+        if let Some(order) = order {
+            let released = order.skip(seq, now);
+            self.deliver_outbound(released);
+        }
+    }
+
     /// `ipc_reply`: the answer to request `id` (C.2). Unknown ids are
     /// ignored; a reply to a request that already timed out still consumes
-    /// its `seq`.
+    /// its `seq`. When the reply cannot be ordered (duplicate `seq`, or too
+    /// far ahead), the invoke is settled at once with `ipc-overloaded`, so
+    /// it never hangs.
     pub fn reply(
         &mut self,
         id: u64,
@@ -742,12 +772,32 @@ impl Router {
             self.debug(format!("late or repeated ipc reply {id} dropped"));
             (window_id, Outbound::Consumed)
         } else {
-            self.debug(format!("ipc reply for unknown id {id} ignored"));
+            self.debug(format!("ipc reply {id} for unknown id ignored"));
             return;
         };
-        match self.outbound_order(window_id).insert(seq, item, now) {
-            Ok(released) => self.deliver_outbound(released),
-            Err(e) => self.warn(format!("ipc reply {id} with sequence {seq} dropped: {e:?}")),
+        let rejected = match self
+            .outbound_order(window_id)
+            .insert(seq, item.clone(), now)
+        {
+            Ok(released) => {
+                self.deliver_outbound(released);
+                return;
+            }
+            Err(e) => e,
+        };
+        self.warn(format!(
+            "ipc reply {id} with sequence {seq} could not be ordered: {rejected:?}"
+        ));
+        if let Outbound::Result { label, id, .. } = item
+            && let Some(peer) = self.peers.get_mut(&label)
+        {
+            let err = Error::ipc_overloaded("The reply could not be delivered in order.");
+            peer.outbox.push(HostMessage::IpcResult {
+                id,
+                ok: false,
+                value: None,
+                error: serde_json::to_value(&err).ok(),
+            });
         }
     }
 
@@ -841,19 +891,10 @@ impl Router {
     }
 }
 
-/// Maps an error code to whether a renderer should treat it as transient;
-/// used by the host when logging rejections.
-#[must_use]
-pub fn is_transient(code: ErrorCode) -> bool {
-    matches!(
-        code,
-        ErrorCode::NotReady | ErrorCode::IpcOverloaded | ErrorCode::IpcTimeout
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ErrorCode;
     use serde_json::json;
 
     fn sender(id: u32) -> SenderInfo {
@@ -1080,13 +1121,59 @@ mod tests {
         assert!(r.drain().is_empty(), "not subscribed yet");
         r.subscribe("bw-1", "e", 0);
         assert_eq!(channels(&r.drain(), "bw-1"), vec!["a", "b"]);
-        r.emit(1, Some("bw-1"), 3, "c", vec![], 1, 0).unwrap();
+        // The rejected message used up 3: 4 is not held back.
+        r.emit(1, Some("bw-1"), 4, "c", vec![], 1, 0).unwrap();
+        assert_eq!(channels(&r.drain(), "bw-1"), vec!["c"]);
+        r.emit(1, Some("bw-1"), 5, "d", vec![], 1, 0).unwrap();
         r.document_unloaded("bw-1");
         r.subscribe("bw-1", "e2", 0);
         assert!(r.drain().is_empty(), "the reload emptied the buffer");
         // Remote / destroyed targets drop silently.
         r.emit(9, None, 1, "x", vec![], 1, 0).unwrap();
         assert!(r.take_logs().iter().any(|l| l.warn));
+    }
+
+    #[test]
+    fn rejected_emits_and_reported_skips_do_not_hold_later_messages() {
+        let mut r = ready_router(&IpcConfig::default());
+        r.subscribe("bw-1", "e", 0);
+        // A channel error after the target is known uses up its number.
+        assert_eq!(
+            r.emit(1, Some("bw-1"), 1, "", vec![], 1, 0)
+                .unwrap_err()
+                .code(),
+            ErrorCode::InvalidArgument
+        );
+        r.emit(1, Some("bw-1"), 2, "two", vec![], 1, 0).unwrap();
+        assert_eq!(channels(&r.drain(), "bw-1"), vec!["two"]);
+        // The main runtime reports a number it never sent.
+        r.emit(1, Some("bw-1"), 4, "four", vec![], 1, 0).unwrap();
+        assert!(r.drain().is_empty(), "4 waits for 3");
+        r.emit_skip(1, true, 3, 0);
+        assert_eq!(channels(&r.drain(), "bw-1"), vec!["four"]);
+        // A repeated skip is ignored.
+        r.emit_skip(1, true, 3, 0);
+        // Unknown windows get no order state.
+        r.emit_skip(77, false, 1, 0);
+        assert!(!r.outbound.contains_key(&77));
+    }
+
+    #[test]
+    fn a_reply_that_cannot_be_ordered_still_settles_the_invoke() {
+        let mut r = ready_router(&IpcConfig::default());
+        r.subscribe("bw-1", "e", 0);
+        let id = r.invoke(&sender(1), "e", 1, "get", vec![], 1, 0).unwrap();
+        r.emit(1, Some("bw-1"), 1, "m", vec![], 1, 0).unwrap();
+        r.drain();
+        // `seq` 1 was already used by the emit.
+        r.reply(id, true, Some(json!(1)), None, 1, 0);
+        let out = r.drain();
+        let msgs = &out.iter().find(|(l, _)| l == "bw-1").unwrap().1;
+        assert_eq!(
+            Router::result_code(&msgs[0]).as_deref(),
+            Some("ipc-overloaded")
+        );
+        assert_eq!(r.in_flight("bw-1"), 0);
     }
 
     #[test]

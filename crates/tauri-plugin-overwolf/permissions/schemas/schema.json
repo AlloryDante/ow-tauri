@@ -535,6 +535,18 @@
           "markdownDescription": "Denies the ipc_emit command without any pre-configured scope."
         },
         {
+          "description": "Enables the ipc_emit_skip command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ipc-emit-skip",
+          "markdownDescription": "Enables the ipc_emit_skip command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ipc_emit_skip command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ipc-emit-skip",
+          "markdownDescription": "Denies the ipc_emit_skip command without any pre-configured scope."
+        },
+        {
           "description": "Enables the ipc_invoke command without any pre-configured scope.",
           "type": "string",
           "const": "allow-ipc-invoke",
@@ -769,10 +781,10 @@
           "markdownDescription": "Grants nothing; capabilities name `overwolf:main` or `overwolf:renderer` per webview class."
         },
         {
-          "description": "Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, windows, screen, shell, dialogs, global shortcuts and scoped files.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-bootstrap`\n- `allow-main-ready`\n- `allow-ipc-main-ready`\n- `allow-app-quit-reply`\n- `allow-app-relaunch`\n- `allow-app-quit`\n- `allow-app-exit`\n- `allow-app-focus`\n- `allow-log`\n- `allow-ipc-reply`\n- `allow-ipc-emit`\n- `allow-disable-anonymous-analytics`\n- `allow-disable-ads-optimization`\n- `allow-disable-ads-fpd`\n- `allow-window-create`\n- `allow-window-load`\n- `allow-window-close-reply`\n- `allow-window-destroy`\n- `allow-window-eval`\n- `allow-window-devtools`\n- `allow-window-set-name`\n- `allow-screen-snapshot`\n- `allow-shell-open-external`\n- `allow-shell-open-path`\n- `allow-shell-show-item-in-folder`\n- `allow-dialog-open`\n- `allow-dialog-save`\n- `allow-dialog-message`\n- `allow-global-shortcut-register`\n- `allow-global-shortcut-unregister`\n- `allow-fs-read-text`\n- `allow-fs-write-text`\n- `allow-fs-exists`\n- `allow-fs-mkdir`",
+          "description": "Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, windows, screen, shell, dialogs, global shortcuts and scoped files.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-bootstrap`\n- `allow-main-ready`\n- `allow-ipc-main-ready`\n- `allow-app-quit-reply`\n- `allow-app-relaunch`\n- `allow-app-quit`\n- `allow-app-exit`\n- `allow-app-focus`\n- `allow-log`\n- `allow-ipc-reply`\n- `allow-ipc-emit`\n- `allow-ipc-emit-skip`\n- `allow-disable-anonymous-analytics`\n- `allow-disable-ads-optimization`\n- `allow-disable-ads-fpd`\n- `allow-window-create`\n- `allow-window-load`\n- `allow-window-close-reply`\n- `allow-window-destroy`\n- `allow-window-eval`\n- `allow-window-devtools`\n- `allow-window-set-name`\n- `allow-screen-snapshot`\n- `allow-shell-open-external`\n- `allow-shell-open-path`\n- `allow-shell-show-item-in-folder`\n- `allow-dialog-open`\n- `allow-dialog-save`\n- `allow-dialog-message`\n- `allow-global-shortcut-register`\n- `allow-global-shortcut-unregister`\n- `allow-fs-read-text`\n- `allow-fs-write-text`\n- `allow-fs-exists`\n- `allow-fs-mkdir`",
           "type": "string",
           "const": "main",
-          "markdownDescription": "Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, windows, screen, shell, dialogs, global shortcuts and scoped files.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-bootstrap`\n- `allow-main-ready`\n- `allow-ipc-main-ready`\n- `allow-app-quit-reply`\n- `allow-app-relaunch`\n- `allow-app-quit`\n- `allow-app-exit`\n- `allow-app-focus`\n- `allow-log`\n- `allow-ipc-reply`\n- `allow-ipc-emit`\n- `allow-disable-anonymous-analytics`\n- `allow-disable-ads-optimization`\n- `allow-disable-ads-fpd`\n- `allow-window-create`\n- `allow-window-load`\n- `allow-window-close-reply`\n- `allow-window-destroy`\n- `allow-window-eval`\n- `allow-window-devtools`\n- `allow-window-set-name`\n- `allow-screen-snapshot`\n- `allow-shell-open-external`\n- `allow-shell-open-path`\n- `allow-shell-show-item-in-folder`\n- `allow-dialog-open`\n- `allow-dialog-save`\n- `allow-dialog-message`\n- `allow-global-shortcut-register`\n- `allow-global-shortcut-unregister`\n- `allow-fs-read-text`\n- `allow-fs-write-text`\n- `allow-fs-exists`\n- `allow-fs-mkdir`"
+          "markdownDescription": "Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, windows, screen, shell, dialogs, global shortcuts and scoped files.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-bootstrap`\n- `allow-main-ready`\n- `allow-ipc-main-ready`\n- `allow-app-quit-reply`\n- `allow-app-relaunch`\n- `allow-app-quit`\n- `allow-app-exit`\n- `allow-app-focus`\n- `allow-log`\n- `allow-ipc-reply`\n- `allow-ipc-emit`\n- `allow-ipc-emit-skip`\n- `allow-disable-anonymous-analytics`\n- `allow-disable-ads-optimization`\n- `allow-disable-ads-fpd`\n- `allow-window-create`\n- `allow-window-load`\n- `allow-window-close-reply`\n- `allow-window-destroy`\n- `allow-window-eval`\n- `allow-window-devtools`\n- `allow-window-set-name`\n- `allow-screen-snapshot`\n- `allow-shell-open-external`\n- `allow-shell-open-path`\n- `allow-shell-show-item-in-folder`\n- `allow-dialog-open`\n- `allow-dialog-save`\n- `allow-dialog-message`\n- `allow-global-shortcut-register`\n- `allow-global-shortcut-unregister`\n- `allow-fs-read-text`\n- `allow-fs-write-text`\n- `allow-fs-exists`\n- `allow-fs-mkdir`"
         },
         {
           "description": "Commands of UI and overlay webviews (`bw-*`): the IPC router and `executeJavaScript` results.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-ipc-invoke`\n- `allow-ipc-send`\n- `allow-ipc-skip`\n- `allow-eval-result`",

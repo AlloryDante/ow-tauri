@@ -19,6 +19,7 @@ permissions = [
   "allow-log",
   "allow-ipc-reply",
   "allow-ipc-emit",
+  "allow-ipc-emit-skip",
   "allow-disable-anonymous-analytics",
   "allow-disable-ads-optimization",
   "allow-disable-ads-fpd",
