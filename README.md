@@ -11,7 +11,8 @@ interface.
 > **Status: preview.** The contract and architecture are specified; the
 > implementation is in progress. Nothing here is endorsed by Overwolf yet.
 > Live ads in a Tauri host need Overwolf's approval for your app; until then,
-> run with test ads (`--test-ad`). See [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md).
+> run with test ads (`--test-ad` or `OW_TAURI_TEST_AD=1`). See
+> [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md).
 
 ## Why
 
@@ -69,14 +70,19 @@ cargo add tauri-plugin-overwolf
 # 2. Add the JS runtime
 npm install ow-tauri
 
-# 3. Alias electron in your bundler (webpack example)
+# 3. Alias electron in your bundler (webpack example) and in tsconfig paths
 #    resolve: { alias: { electron: 'ow-tauri/electron' } }
 
 # 4. Keep package.json "overwolf" and "build.overwolf" blocks as they are
 
 # 5. Run with test ads
-npm run tauri dev -- -- --test-ad
+OW_TAURI_TEST_AD=1 npm run tauri dev
 ```
+
+On Windows `cmd`, use `set OW_TAURI_TEST_AD=1` first. To pass `--test-ad` on
+the command line instead, put it in a package script (`"start-ad": "tauri dev
+-- -- --test-ad"`): typed directly after `npm run tauri dev`, npm consumes one
+`--` and the switch would reach Cargo instead of the app.
 
 ## Documentation
 
@@ -85,13 +91,20 @@ npm run tauri dev -- -- --test-ad
 - [docs/adr/](docs/adr/): architecture decision records
 - [docs/PORT-MAP.md](docs/PORT-MAP.md): every file of the upstream sample and where it goes
 - [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md): what we need Overwolf to confirm
+- [SECURITY.md](SECURITY.md): threat model and reporting
+
+Planned, tracked in [CONTRIBUTING.md](CONTRIBUTING.md#documentation-checklist):
+`docs/MIGRATION.md` (step-by-step guide and full mapping tables),
+`docs/PACKAGE-RUNTIME.md` (guide for package runtime authors) and
+`docs/api/` (reference per area).
 
 ## Requirements
 
 - Rust 1.90+ (edition 2024); developed on 1.98
 - Node.js 22.12+
-- Tauri 2.12.1+ with the `unstable` feature (child webviews)
-- Windows 10+, macOS 12+, or Linux with WebKitGTK 4.1
+- Tauri 2.12.1 or a newer 2.x; the plugin enables Tauri's `unstable` feature
+  (child webviews)
+- Windows 10+ (WebView2), macOS 12+, or Linux with WebKitGTK 4.1
 
 ## Contributing and security
 

@@ -28,12 +28,12 @@ in place; the note says what and why), **Replaced** (rewritten for Tauri).
 | `src-tauri/Cargo.toml` | thin app crate: `tauri` (with `unstable`), `tauri-build`, `tauri-plugin-overwolf`, all from `[workspace.dependencies]` |
 | `src-tauri/build.rs` | `tauri_plugin_overwolf::build::embed_manifest("../package.json")`, then `tauri_build::build()` |
 | `src-tauri/src/main.rs` | registers the plugin (`Builder::new().manifest_json(embedded_manifest!())`); no other logic |
-| `src-tauri/tauri.conf.json` | `productName` and `version` matching `package.json`; `frontendDist: ../dist`; no windows (the plugin creates `ow-main`, the app creates the rest); `plugins.overwolf` with `main.url: "browser/main.html"` and `fs.scope: ["$PICTURES/Overwolf/$APPNAME", "$VIDEOS/$APPNAME"]`; CSP allowing Google Fonts; NSIS bundle mirroring `build.win` and `build.nsis` where Tauri has an equivalent |
-| `src-tauri/capabilities/ui.json` | `bw-*` windows: `overwolf:renderer`, event listen/unlisten, start-dragging (ARCHITECTURE section 5.2) |
+| `src-tauri/tauri.conf.json` | `productName` and `version` matching `package.json`; `frontendDist: ../dist`; no windows (the plugin creates `ow-main`, the app creates the rest); `plugins.overwolf` with `main.url: "browser/main.html"` and `fs.scope: ["$PICTURES/Overwolf/$APPNAME", "$VIDEOS/$APPNAME"]`; `app.security.csp` from the ARCHITECTURE section 5.5 baseline plus `fonts.googleapis.com` (styles) and `fonts.gstatic.com` (fonts) for the renderer; `app.security.freezePrototype: true`; NSIS bundle mirroring `build.win` and `build.nsis` where Tauri has an equivalent |
+| `src-tauri/capabilities/ui.json` | `"webviews": ["bw-*"]` (no `windows` key, so ad guests and remote pages inside `bw-*` windows do not match), `"local": true`, permissions `overwolf:renderer` and `core:window:allow-start-dragging`; no `core:event:*` (ARCHITECTURE section 5.2) |
 | `src-tauri/icons/*` | generated from a neutral placeholder icon |
-| `scenarios/*.json` | simulated GEP, overlay and recorder scenarios for development (CONTRACT H.7) |
+| `scenarios/*.json` | simulated GEP, overlay and recorder scenarios for development (CONTRACT H.7); game ids limited to well-known public titles already in the status data (for example 5426) |
 | `CHANGES-FROM-UPSTREAM.md` | the change log against `8a27053` |
-| `.env.example` | names of the optional dev-mode variables, no values |
+| `.env.example` | names of the optional dev-mode variables (`OW_CLI_EMAIL`, `OW_CLI_API_KEY`, `OW_DEV_KEY`, `OW_TAURI_TEST_AD`, `OW_TAURI_REMOTE_DEBUGGING_PORT`), no values |
 
 ## 3. Node built-ins used by the main process
 
@@ -44,7 +44,8 @@ in place; the note says what and why), **Replaced** (rewritten for Tauri).
 | `__dirname` | webpack `DefinePlugin` `'/browser'`; `loadFile` resolves app-root paths to assets |
 | `fs` | `files` from `ow-tauri/main` (scoped, async; CONTRACT B.1.7) |
 | `child_process.exec('explorer.exe ...')` | `shell.openPath` (opener plugin) |
-| `process.argv`, `process.platform`, `process.versions` | `ow-tauri/electron` process shim |
+| global `process` (`process.argv`, `process.platform` in `index.ts`; `process.versions` in the preload), used without an import | the bootstrap installs a frozen `globalThis.process` shim in `ow-main` and every UI webview before app scripts run (CONTRACT B.2.5); no source change |
+| `process.env.NODE_ENV` | webpack 5 defines it from `mode` (`optimization.nodeEnv`); no source change |
 | `electron-updater` | `autoUpdater` from `ow-tauri/main` |
 
 ## 4. File-by-file map
@@ -57,7 +58,7 @@ path unless the note says otherwise.
 | `.eslintrc.json` | Unchanged | Upstream lint config; not part of ow-tauri's CI lint. |
 | `.gitignore` | Modified | Adds `src-tauri/target/` and `src-tauri/gen/`. |
 | `.prettierrc` | Unchanged |  |
-| `.vscode/launch.json` | Replaced | `ow-electron` launch replaced by `npm run start-ad` (Tauri dev with `--test-ad`); WebView2 debugging through `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222`; Rust debugging with CodeLLDB. Dev-mode credentials stay in `.env`, never in the file. |
+| `.vscode/launch.json` | Replaced | `ow-electron` launch replaced by `npm run start-ad` (Tauri dev with `--test-ad`); WebView2 debugging through `OW_TAURI_REMOTE_DEBUGGING_PORT=9222`, which the plugin adds to the one browser-argument set every webview shares (CONTRACT A.1.1; setting `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` directly would replace that set and re-enable background throttling); Rust debugging with CodeLLDB. Dev-mode credentials stay in `.env`, never in the file. |
 | `LICENSE` | Unchanged | Overwolf Ltd. MIT notice kept. |
 | `README.md` | Modified | New "Running on ow-tauri" section at the top; upstream text kept below it; `npm run start` now exists (defect 10). |
 | `dev-app-update.yml` | Unchanged | Read by the ow-tauri update client only when `forceDevUpdateConfig` is set in a debug build (defect 14). |
@@ -70,8 +71,8 @@ path unless the note says otherwise.
 | `docs/recorder/api-specification.md` | Unchanged | Upstream package documentation, kept for reference. |
 | `docs/recorder/recorder.md` | Unchanged | Upstream package documentation, kept for reference. |
 | `docs/recorder/types.md` | Unchanged | Upstream package documentation, kept for reference. |
-| `package.json` | Modified | `overwolf` and `build.overwolf` blocks, `name`, `productName`, `author`, `version` unchanged (uid continuity, CONTRACT G). Dev dependencies: `@overwolf/ow-electron` and `@overwolf/ow-electron-builder` removed; `ow-tauri`, `@tauri-apps/cli`, `events`, `path-browserify` added; `@overwolf/ow-electron-packages-types` stays on `latest`. `electron-updater` removed. Scripts: `start`, `start-ad` (`tauri dev -- -- --test-ad`), `build` (webpack then `tauri build`). |
-| `src/browser/application.ts` | Unchanged | `crashReporter.start` is a documented no-op (partial). Recommended replacement: a Rust crash handler in `src-tauri`. |
+| `package.json` | Modified | `overwolf` and `build.overwolf` blocks, `name`, `productName`, `author`, `version` unchanged (uid continuity, CONTRACT G). Dev dependencies: `@overwolf/ow-electron` and `@overwolf/ow-electron-builder` removed; `ow-tauri`, `@tauri-apps/api`, `@tauri-apps/cli`, `events`, `path-browserify` added; `@overwolf/ow-electron-packages-types` stays on `latest`; `@types/node` stays (`NodeJS.EventEmitter` in the typings). `electron-updater` removed. Scripts: `start`, `start-ad` (`tauri dev -- -- --test-ad`: inside an npm script the first `--` ends the Tauri CLI options and the second passes `--test-ad` to the app), `build` (webpack then `tauri build`). |
+| `src/browser/application.ts` | Modified | One entry of the overlay `registerGames` id list is removed, under the repository's naming policy (CONTRIBUTING.md, rule 4); the other ids are unchanged and the change is recorded in `CHANGES-FROM-UPSTREAM.md`. `crashReporter.start` is a documented no-op (partial). Recommended replacement: a Rust crash handler in `src-tauri`. |
 | `src/browser/controllers/base.controller.ts` | Unchanged | `events` resolves to the `events` npm polyfill. |
 | `src/browser/controllers/gep/game-events.controller.ts` | Modified | `gep-getInfo` returns the info it fetched (defect 7). |
 | `src/browser/controllers/main-window.controller.ts` | Modified | `fs.readFileSync/writeFileSync` -> `files.readText/writeText` from `ow-tauri/main` (prefs reads become async); `package.json` read -> `files.readText(app.getAppPath() + '/package.json')`; `open-folder` uses `shell.openPath` instead of `exec('explorer.exe ...')` (security); `get-utm-params` returns `app.overwolf.utmParams` (defect 13); new `disable-ads-optimization` handler (defect 1); `fs.promises.mkdir` -> `files.mkdir` with `$PICTURES/Overwolf/$APPNAME` in `fs.scope`. |
@@ -191,11 +192,11 @@ path unless the note says otherwise.
 | `src/renderer/osr/components/overlay-window-settings.tsx` | Unchanged | `ipcRenderer` through the alias. |
 | `src/renderer/osr/osr.html` | Unchanged |  |
 | `src/renderer/osr/osr.tsx` | Unchanged |  |
-| `tsconfig.json` | Modified | `typeRoots` moved into `compilerOptions` (defect 11). |
+| `tsconfig.json` | Modified | The misplaced top-level `typeRoots` is deleted (defect 11); `compilerOptions.paths` maps `electron` and `@overwolf/ow-electron` to ow-tauri's declarations and `types` gains `ow-tauri/types` (CONTRACT B.4). `moduleResolution` stays `node` (ow-tauri ships `typesVersions` for it). |
 | `webpack.base.config.js` | Modified | `plugins` no longer shared by reference between configs. |
 | `webpack.config.js` | Unchanged |  |
 | `webpack.main.config.js` | Modified | `target: 'web'`; `resolve.alias` `electron -> ow-tauri/electron`; `resolve.fallback` `path -> path-browserify`, `events -> events`, `fs`/`child_process` -> `false`; `DefinePlugin` `__dirname = '/browser'` so `path.join(__dirname, '../renderer/index.html')` resolves to the app asset; HtmlWebpackPlugin emits `dist/browser/main.html` (the main webview page, `plugins.overwolf.main.url`); the `electron-updater` external is removed. |
-| `webpack.renderer.config.js` | Modified | `target: 'web'`; `resolve.alias` `electron -> ow-tauri/electron` for the `renderer`, `preload`, `osr` and `exclusive` entries; outputs unchanged. |
+| `webpack.renderer.config.js` | Modified | `target: 'web'`; `resolve.alias` `electron -> ow-tauri/electron` for the `renderer`, `preload`, `osr` and `exclusive` entries (the preload's `require('electron')` resolves through the package's `default` export condition); outputs unchanged. |
 
 ## 5. Upstream defects and planned fixes
 
@@ -213,7 +214,7 @@ The numbering matches the issue list we intend to share with Overwolf.
 | 8 | `channels.ts` | `ZORDER_RESET = 'zorder-reset'` differs from the `'zOrder-reset'` actually sent; several constants unused. | Correct the constant, send through the constants, mark unused ones deprecated. |
 | 9 | `ad.tsx` | Every `<owadview>` gets `id="mainAd"`: duplicate DOM ids. | Derive a unique id from the container id. |
 | 10 | `README.md` | Documents `npm run start`, which does not exist. | Add a `start` script and update the README. |
-| 11 | `tsconfig.json` | `typeRoots` is outside `compilerOptions` and ignored. | Move it inside. |
+| 11 | `tsconfig.json` | `typeRoots` is outside `compilerOptions` and ignored. | Delete it. Moving it inside would break resolution: its entries are absolute (`/node_modules/...`), it would replace the default `./node_modules/@types` (losing `@types/node` and `@types/react`), and `@overwolf/ow-electron-packages-types` is a package, not a type root. The types are reached through explicit imports and the `types` field. |
 | 12 | `overlay.controller.ts` `toggle-osr-visibility` | Only shows windows, never hides them. | Hide when any window is visible, else show. |
 | 13 | `main-window.controller.ts` `get-utm-params` | Reads ow-electron's private JSON although `app.overwolf.utmParams` exists. | Return `app.overwolf.utmParams`. |
 | 14 | `updater.service.ts` | `forceDevUpdateConfig = true` defeats the "not packaged" guard, so development builds update too. | Set it only for unpackaged builds and keep the guard. |
@@ -232,7 +233,7 @@ Security fixes made during the port (beyond the list above):
 | Feature | Status | Reference |
 |---|---|---|
 | GEP, overlay injection, in-game hotkeys, exclusive mode, recorder, utility, CRN | Native runtime required; simulated in debug builds; `failed-to-initialize` in release builds without a runtime | ADR 0004, OQ-21 |
-| Offscreen-rendered overlay windows and shared textures | No WebView2 / WKWebView equivalent; simulated overlay windows are ordinary transparent windows | OQ-21 |
+| Offscreen-rendered overlay windows and shared textures | No WebView2 / WKWebView equivalent; simulated overlay windows are ordinary transparent windows | OQ-33 |
 | `owutility.dll` ad optimisation | Not shipped | OQ-14 |
 | Overwolf signing (`requireSigning`, `enableOWCertSigning`) | Build warning; nothing faked | OQ-09 |
 | `crashReporter` | No-op; use a Rust crash handler | CONTRACT B.2.5 |

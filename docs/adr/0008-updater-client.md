@@ -16,8 +16,12 @@ minisign signatures, so it cannot consume that feed.
 The plugin includes a small update client that:
 
 - reads the generic feed's `<channel>.yml` / `-mac.yml` / `-linux.yml`;
-- verifies size and SHA-512 of the download over HTTPS, with an optional
-  Windows Authenticode publisher check;
+- verifies size and SHA-512 of the download over HTTPS, then the publisher
+  signature, failing closed: on Windows the installer must be Authenticode
+  signed by the same publisher as the running executable (when that is
+  signed); on macOS the bundle must pass code-signature validation with the
+  running app's team id; with a configured minisign public key, a detached
+  `.sig` must verify (required on Linux);
 - installs per OS (NSIS or MSI on Windows, `.app` zip on macOS, AppImage on
   Linux);
 - exposes an electron-updater-shaped `autoUpdater` in `ow-tauri/main`.
@@ -25,9 +29,15 @@ The plugin includes a small update client that:
 ## Consequences
 
 - Apps keep their updater code with a one-line import change.
-- Integrity relies on TLS to Overwolf's CDN plus the feed's SHA-512, the same
-  trust model electron-updater uses for generic feeds; there is no detached
-  signature.
+- The SHA-512 in the feed only proves the file matches the feed; if the feed
+  or CDN were compromised, both would be replaced together. The publisher
+  check is what stops a compromised feed from becoming code execution. This
+  matches electron-updater, which verifies the Windows signature against the
+  publisher when the app is signed, and Squirrel.Mac, which checks the code
+  signature. Linux AppImages have no OS signature, so ow-tauri requires a
+  detached minisign signature there.
+- Apps that are not signed on Windows get only the hash check, with a
+  warning; signing the app is the fix.
 - Whether Overwolf's console accepts and serves Tauri installers is open
   (OQ-18). Until then the client works with any generic feed the developer
   hosts.
@@ -38,3 +48,9 @@ The plugin includes a small update client that:
   format and signatures. Kept as an option for apps that host their own
   updates; not the default.
 - **No updater.** Leaves apps without a supported update path. Rejected.
+
+## Amendments
+
+- 2026-10-06, contract review: the publisher check is mandatory when the app
+  is signed (it was optional), a detached signature is supported and required
+  on Linux, and the trust-model statement was corrected.

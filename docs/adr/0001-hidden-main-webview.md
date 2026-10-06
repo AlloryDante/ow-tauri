@@ -39,6 +39,9 @@ Rust (CONTRACT B.1.6).
 - Everything privileged sits in one webview with a local origin, which makes
   the capability model simple to audit (ARCHITECTURE section 5).
 - Startup gains one hop: UI windows exist only after the main webview has run.
+- Hidden webviews are throttled by every engine, and `ow-main` must not be.
+  How it stays alive, and what happens on reload, crash and quit, is
+  [ADR 0009](0009-main-webview-liveness-and-lifecycle.md).
 
 ## Alternatives considered
 
@@ -50,3 +53,8 @@ Rust (CONTRACT B.1.6).
   apps can still use `OverwolfExt` directly.
 - **Run main-process code inside the first UI window.** Couples app lifetime to
   a visible window and gives a renderer the main permission set. Rejected.
+
+## Amendments
+
+- 2026-10-06, contract review: liveness and lifecycle moved to ADR 0009
+  (consequence added above).

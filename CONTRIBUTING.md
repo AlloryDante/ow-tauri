@@ -20,6 +20,9 @@ pull request.
    and add it to [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md).
 4. **Vendor neutral.** No app-specific names, ids or branding in code, docs,
    fixtures or commit messages. Use the upstream sample's identity in examples.
+   Game fixtures and scenarios use well-known public game ids that are already
+   in Overwolf's public game-events status data (for example 5426); adding
+   another title needs a reviewer's agreement.
 5. **Test ads only.** Never commit a configuration that loads live ads, and never
    click ad creatives in automated tests. Headless tests only; no test opens an
    app window.
@@ -30,12 +33,12 @@ pull request.
 # Rust (rustup users get the pinned toolchain from rust-toolchain.toml)
 cargo check --workspace -j 4
 
-# JavaScript
-npm install
+# JavaScript (the lockfile is committed; CI uses npm ci)
+npm ci --workspace ow-tauri --include-workspace-root
 ```
 
-Linux additionally needs the WebKitGTK 4.1 development packages; see the
-`apt-get` line in `.github/workflows/ci.yml`.
+Linux additionally needs Tauri's prerequisites (WebKitGTK 4.1, libssl,
+libxdo and friends); see the `apt-get` line in `.github/workflows/ci.yml`.
 
 ## Quality gates
 
@@ -55,6 +58,14 @@ npm test
 npm run docs
 ```
 
+CI also runs cargo-deny, `npm audit`, a check that every `@overwolf/*`
+package is on its `latest` dist-tag (`node scripts/check-overwolf-dist-tags.mjs`),
+an MSRV build, and, weekly, the newest stable Rust with the newest tauri 2.x
+and a main-webview liveness soak. Once the injected scripts exist, CI also
+rebuilds `crates/tauri-plugin-overwolf/js/` and fails if the committed output
+differs: run `npm run build:injected` and commit the result whenever you
+change `packages/ow-tauri/src/{bootstrap,guest}`.
+
 Keep heavy jobs serial on small machines: `-j 4` for cargo, two Vitest workers
 (set in `vitest.config.ts`).
 
@@ -68,7 +79,10 @@ Keep heavy jobs serial on small machines: `-j 4` for cargo, two Vitest workers
 - No `unwrap()`, `expect()` or `panic!` outside tests. Every `unsafe` block has
   a `// SAFETY:` comment.
 - Unit tests sit next to the code; IPC and permission tests use Tauri's mock
-  runtime (`tauri::test`).
+  runtime (`tauri::test`). The permission matrix covers every command against
+  every webview class, including a child webview inside a `bw-*` window and a
+  remote page in a `bw-*` window; the router tests include property tests for
+  ordering (CONTRACT C.3).
 
 ### TypeScript standards
 
@@ -77,6 +91,9 @@ Keep heavy jobs serial on small machines: `-j 4` for cargo, two Vitest workers
   before validation), with a justified inline disable.
 - TSDoc on every export; TypeDoc treats warnings as errors.
 - Tests use Vitest and `@tauri-apps/api/mocks` instead of a real Tauri host.
+  The bootstrap and guest scripts are tested the same way (happy-dom).
+- A bundler fixture builds a CommonJS `require('electron')` through webpack
+  with the alias, so the package's export conditions stay compatible.
 
 ### Lint exceptions
 
@@ -88,12 +105,21 @@ so a stale exception fails the build.
 
 - Latest stable releases only; no alpha, beta or rc versions. Shared Rust
   versions live in `[workspace.dependencies]`.
-- Overwolf npm packages track the `latest` dist-tag, never `beta` or `next`.
-- Tauri must stay at 2.12.0 or newer (GHSA-w28w-mhc8-qvjv binds channel data
-  to the webview that requested it; ow-tauri places remote pages next to app
-  webviews).
+- Overwolf npm packages track the `latest` dist-tag, never `beta` or `next`;
+  CI enforces it.
+- Tauri must stay at 2.12.1 or newer. GHSA-w28w-mhc8-qvjv (fixed in 2.11.6
+  and 2.12.0): Tauri's channel-data fetch command skipped the ACL, so queued
+  channel payloads and large invoke responses could be fetched by other
+  webviews; ow-tauri sends all host traffic over channels and places remote
+  pages next to app webviews.
 - TypeScript stays on the newest release that typescript-eslint and TypeDoc
   support (currently 6.0).
+- `@types/node` follows the minimum supported Node major (22), not the newest.
+- Rust: the toolchain pin (`rust-toolchain.toml`) matches the reference
+  development compiler so local and CI lint results agree; the weekly CI job
+  covers the newest stable.
+- Third-party GitHub Actions are pinned by commit SHA; Dependabot proposes
+  updates for Cargo, npm and Actions weekly.
 
 ## Commits and pull requests
 
@@ -104,3 +130,23 @@ so a stale exception fails the build.
 - Small, focused commits. Update `CHANGELOG.md` under `[Unreleased]`.
 - Changes to the example that differ from upstream are listed in
   `examples/packages-sample/CHANGES-FROM-UPSTREAM.md`.
+
+## Documentation checklist
+
+The project is not complete until each of these exists and is current. The
+final review before a release checks the list.
+
+| Document | Content | Status |
+|---|---|---|
+| `README.md` | overview, quick start, requirements | present |
+| `docs/ARCHITECTURE.md` | components, process model, flows, security design | present |
+| `docs/CONTRACT.md` | wire, JS API, IPC, guest shim, analytics, state, manifest, package runtime, updater | present |
+| `docs/adr/` | decision records | present |
+| `docs/OPEN-QUESTIONS.md` | questions for Overwolf with interim behaviour | present |
+| `docs/PORT-MAP.md` | the sample's port, file by file | present |
+| `docs/MIGRATION.md` | step-by-step guide: pre-flight audit (Node built-ins and Electron-only libraries, each with its replacement), bundler recipes (webpack, Vite, esbuild), typings (`tsconfig` paths), network (`fetch` and CORS, scoped HTTP), sync-to-async checklist, capability and CSP templates, debugging `ow-main`, what changes for users; full Electron to ow-tauri mapping tables | **to write** |
+| `docs/PACKAGE-RUNTIME.md` | guide for package runtime authors: trait, sidecar, C ABI, remote values, conformance tests | **to write** |
+| `docs/api/` | reference per area (main, electron, renderer, plugin Rust API), generated from TypeDoc and rustdoc plus hand-written overviews | **to write** |
+| `examples/packages-sample/CHANGES-FROM-UPSTREAM.md` | every change against upstream `8a27053` | **to write** (with the port) |
+| `examples/packages-sample/.env.example` | dev-mode variable names, no values | **to write** (with the port) |
+| `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE` | | present |

@@ -27,19 +27,23 @@ renders test creatives and reports events.
 
 ## Decision
 
-- `ow-tauri/renderer` watches the document with a `MutationObserver` and
-  upgrades each `OWADVIEW` element in place (properties and methods defined on
-  the instance). It tracks the element's rect (`ResizeObserver`, scroll,
+- `ow-tauri/renderer` wraps `document.createElement` and watches the document
+  with a `MutationObserver`, and upgrades each `OWADVIEW` element in place
+  (properties and methods defined on the instance). It tracks the element's rect (`ResizeObserver`, scroll,
   resize) and visibility (`IntersectionObserver` at 0.5, a 500 ms
   `checkVisibility` poll, document visibility).
 - The plugin creates one native child webview per mounted element, labelled
   `owad-<embedder>-<n>`, positioned over the element, with `adview-host.js`
   injected as an initialization script.
-- Guest events come back as `overwolf://adview-event` and are dispatched on
-  the element as non-bubbling `CustomEvent`s, in both spellings where the
+- A zero-specificity default style (`:where(owadview) { display: block;
+  width: 100%; height: 100% }`) makes the element fill its container, as the
+  sample expects; `performance` elements cover the embedder viewport.
+- Guest events come back as `adview-event` host messages and are dispatched
+  on the element as non-bubbling `CustomEvent`s, in both spellings where the
   ecosystem uses two (`ad-clicked` / `ad_clicked`, `house_ad_action` /
   `house-ad-action`).
-- The plugin requires Tauri's `unstable` feature and documents it.
+- The plugin enables Tauri's `unstable` feature itself (`add_child` needs it
+  on every platform); Cargo feature unification turns it on for the app.
 
 ## Consequences
 
@@ -49,7 +53,12 @@ renders test creatives and reports events.
 - CSS transforms and clipping on ancestors are not reflected.
 - Geometry updates are asynchronous (one IPC hop per animation frame at most),
   so very fast scrolling can show the ad a frame late.
-- Every consuming app enables `tauri/unstable`.
+- `unstable` APIs may change in a Tauri 2.x minor release. The workspace
+  allows the newest 2.x, so a scheduled CI job builds against it to catch
+  breakage early; the supported range is documented in `Cargo.toml`.
+- Guest mute on macOS uses WebKit's private `_setPageMuted:` selector, guarded
+  by `respondsToSelector:`. It can disappear in a macOS release and may draw
+  App Store review questions; without it guests stay unmuted on macOS.
 
 ## Alternatives considered
 
@@ -63,3 +72,8 @@ renders test creatives and reports events.
 - **The reference implementation's explicit layout call (`ad_layout` with a
   list of rects).** Works, but every app would have to replace its
   `<owadview>` code. Kept only as the internal mechanism.
+
+## Amendments
+
+- 2026-10-06, contract review: default element style; the plugin (not each
+  app) enables `unstable`; the `unstable` and macOS private-selector risks.

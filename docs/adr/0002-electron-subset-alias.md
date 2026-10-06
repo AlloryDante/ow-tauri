@@ -32,8 +32,13 @@ defines frozen globals.
 - The subset grows only on demand and every addition updates CONTRACT B.2.
 - Preload code shares the page's JavaScript world (Tauri has no isolated
   world for initialization scripts). Frozen, non-configurable globals keep the
-  exposed API from being replaced, but page scripts can see everything the
-  preload defines in its own scope if it leaks it onto `window`.
+  exposed API from being replaced, but that is not isolation:
+  `__TAURI_INTERNALS__.invoke` is a page global, so **any script in a UI
+  window, including injected or XSS code, can call
+  `plugin:overwolf|ipc_invoke` on any channel and reach every `ipcMain`
+  handler**, whatever the preload chose to expose. `ipcMain` handlers must
+  validate their arguments as they would for untrusted input, UI windows need
+  a strict CSP (ARCHITECTURE section 5.5), and SECURITY.md says so.
 - Electron types still describe the API; `OverlayWindowOptions extends BrowserWindowConstructorOptions`
   keeps compiling.
 
@@ -47,3 +52,8 @@ defines frozen globals.
 - **Silently ignoring unsupported members.** Hides bugs. Rejected in favour of
   typed errors; options and properties that are safe to ignore are documented
   as partial.
+
+## Amendments
+
+- 2026-10-06, contract review: the preload-isolation consequence now states
+  plainly that every script in a UI window can reach every `ipcMain` handler.
