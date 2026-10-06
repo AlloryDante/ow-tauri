@@ -6,6 +6,8 @@ coverage/
 packages/*/docs-out/
 Cargo.lock
 package-lock.json
+# Built by `npm run build:injected --workspace ow-tauri` (minified, committed).
+crates/tauri-plugin-overwolf/js/
 
 # The upstream sample keeps its own formatting (see its .prettierrc).
 examples/packages-sample/

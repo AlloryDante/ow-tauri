@@ -104,6 +104,9 @@ jobs:
         run: npm test
       - name: docs
         run: npm run docs
+      - name: injected scripts match their sources (crates/tauri-plugin-overwolf/js)
+        if: runner.os == 'Linux'
+        run: npm run check:injected --workspace ow-tauri
 
   supply-chain:
     name: Supply chain

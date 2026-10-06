@@ -66,6 +66,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/copy-types.mjs",
     "build:injected": "rolldown -c rolldown.config.mjs",
+    "check:injected": "node scripts/check-injected.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.types.json",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",

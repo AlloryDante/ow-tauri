@@ -12,9 +12,10 @@ The surface is specified member by member in
 [docs/CONTRACT.md](../../docs/CONTRACT.md) section B.
 
 Status: the IPC core (section C), the state cache, `ow-tauri/electron`
-(B.2), `ipcRenderer` / `contextBridge` in `ow-tauri/renderer`, `files` and
-`whenHostReady` in `ow-tauri/main`, `ow-tauri/testing` and the typings (B.4)
-are implemented. `app.overwolf`, `autoUpdater` and `<owadview>` are not yet.
+(B.2), `ipcRenderer` / `contextBridge` and the `<owadview>` runtime (B.3) in
+`ow-tauri/renderer`, `app.overwolf` with its packages manager (B.1.1 to
+B.1.3), `files` and `whenHostReady` in `ow-tauri/main`, `ow-tauri/testing`
+and the typings (B.4) are implemented. `autoUpdater` is not yet.
 
 ## Runtime and facades
 
@@ -77,7 +78,8 @@ setHostContext('ui');                             // act as a UI window
 | Script | Does |
 |---|---|
 | `npm run build` | `tsc` to `dist/`, then copies `src/types/*.d.ts` to `dist/types/` |
-| `npm run build:injected` | bundles `src/bootstrap/` into the IIFE the plugin injects (`crates/tauri-plugin-overwolf/js/bootstrap.js`) |
+| `npm run build:injected` | bundles the injected scripts (`src/bootstrap/`, and `src/guest/` when present) into the IIFEs the plugin embeds, in `crates/tauri-plugin-overwolf/js/`; the output is committed |
+| `npm run check:injected` | rebuilds them into a temporary directory and fails when the committed copies are stale (CI, Linux) |
 | `npm run typecheck` | the package, then the B.4 declarations against `test-d/` |
 | `npm test`, `npm run test:coverage` | vitest (2 workers) |
 | `npm run docs` | typedoc, warnings are errors |
