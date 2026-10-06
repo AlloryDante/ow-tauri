@@ -43,9 +43,19 @@ the npm package share one version number.
   (G.2); signing with `ow-tauri sign` (G.4); Overwolf's update feed and the
   NSIS hooks (I.1, I.6).
 - Configuration: `analytics.hostLabel`, `analytics.hostVersion`,
-  `ads.owVersionOverride`, `ads.legacyHostMessages`,
-  `ads.macPrivateHeaderApi`, `consent.hostCookieFallback`,
-  `logging.enabled`; `Builder::uid` and `Builder::host_label`.
+  `ads.owVersionOverride`, `ads.macPrivateHeaderApi`,
+  `consent.hostCookieFallback`, `logging.enabled`; `Builder::uid` and
+  `Builder::host_label`.
+- Harness round 2 in the contract: ow-electron's four host-to-guest messages
+  (`consent`, `customTracking`, `eHashes`, `window-hidden`) and the guest
+  visibility and focus signals (D.5); `setExternalPaymentUserId` reporting
+  `<label>_sub_info` (E.2); the guest crash report and Kind 400024 shape
+  (E.1, E.2); the settings window's shape, query and promise, and the hidden
+  default-consent window `ow-cmp-default` (D.6.4); `<owadview>` `pageUrl`,
+  `setPageUrl` and `sendCommand`, and the `pageurl` attribute (B.3);
+  `render-process-gone`, navigation and console events on the element
+  (B.3.5); `__settings__.adsOptimization` (B.1.1); OQ-38.
+- `docs/PARITY.md`: round-2 results, round-3 list, a deviations table.
 
 ### Changed
 
@@ -72,6 +82,17 @@ the npm package share one version number.
 - ADR 0007: the state file uses ow-electron's exact encoding.
 - OPEN-QUESTIONS: every question now states whether it is answered, decided
   or still open, with its source.
+- Harness round 2 corrections: the startup consent window opens when the
+  `cmp-eu-only` request completes, `isCMPRequired()` resolves at its page's
+  load and has no timeout (D.6.1, D.6.2); the settings-window promise
+  resolves on creation (A.2.2); `window_closed` is sent per visible period
+  and the window name comes from the URL at first show, ignoring the `name`
+  option (E.2); guest recovery has no cap (`ads.maxRecoveries` defaults to
+  `null`) and load errors retry every 5 s on the main frame only (D.7);
+  `getIsAdOptimizationEnabled()` defaults to `false` (D.6.6); package-manager
+  rejections are asynchronous (H.1); `app_cuid` stays the computed uid when
+  `overwolf.uid` is set (G.2); the 3 s ad wait is measured from the mount
+  (D.6.5). The test-mode `unit` guard is now a documented deviation.
 
 ### Removed
 
@@ -81,7 +102,8 @@ the npm package share one version number.
 - Configuration keys `analytics.hostFields`, `ads.experimentalElementApi`,
   `ads.exposeEmailHashesToGuest`, `consent.gateAdsOnConsent` and
   `consent.cmpRequired`.
-- `adview_command` actions `setPageUrl` and `sendCommand`.
+- Configuration key `ads.legacyHostMessages` (the observed messages are
+  always sent).
 - The consent cookie write from the ad shim (the consent page writes them).
 
 ### Planned documentation

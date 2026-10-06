@@ -22,7 +22,7 @@ is listed in its "Amendments" section.
 | [0012](0012-js-runtime-singleton.md) | One injected JS runtime per webview, with thin npm facades | Accepted |
 | [0013](0013-request-shaping-per-os.md) | Shape ad guest requests like ow-electron, per OS | Accepted |
 | [0014](0014-machine-id-parity.md) | Derive the machine id exactly as ow-electron does | Accepted |
-| [0015](0015-startup-consent-window.md) | Run ow-electron's hidden startup consent window on every launch | Accepted |
+| [0015](0015-startup-consent-window.md) | Run ow-electron's hidden startup consent window on every launch | Accepted (amended) |
 | [0016](0016-signing-approach.md) | Sign Tauri builds with Overwolf's published flow, never fake integrity | Accepted |
 
 Template: copy any record, keep the headings (Status, Date, Context, Decision,

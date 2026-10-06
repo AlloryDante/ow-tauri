@@ -82,3 +82,13 @@ renders test creatives and reports events.
   properties instead of `CustomEvent`s; the element gets ow-electron's open
   shadow root; guests run in the ads environment with ow-electron's request
   shaping ([ADR 0013](0013-request-shaping-per-os.md)).
+- 2026-10-06, harness round 2: ow-electron upgrades the element after attach
+  (an `OwAdViewElement` prototype with Electron's `<webview>` methods,
+  `setPageUrl`, `sendCommand`, and own properties such as `pageUrl`). ow-tauri
+  keeps instance members and adds `pageUrl`, `setPageUrl` and `sendCommand`;
+  the `pageurl` attribute now feeds the guest's `pageUrl`. Electron's generic
+  `<webview>` methods are not provided (undocumented for `<owadview>`, and they
+  would hand app code control of remote content). The element also receives
+  `render-process-gone`, navigation and console events. The host passes the
+  guest ow-electron's four message types and its visibility and focus
+  signals; guests are recovered without a cap (CONTRACT B.3, D.5, D.7).

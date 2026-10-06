@@ -9,7 +9,8 @@ The original draft wrote the consent cookies from the ad guest's shim and
 opened a consent window only when the app called `openCMPWindow`. The parity
 harness shows something different (CONTRACT D.6):
 
-- on **every launch**, ow-electron opens a hidden 1 x 32 window on
+- on **every launch**, once its `cmp-eu-only` feature request has completed,
+  ow-electron opens a hidden 1 x 32 window on
   `https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/ow-cmp-v2.html`
   with the query `unifiedcmp, muid, uid, muidv2, oweVersion, appVersion`;
 - on the first launch the page generates a default Full consent and reports
@@ -24,9 +25,10 @@ The owner's decision: behave exactly like ow-electron's consent flow.
 
 ## Decision
 
-- The plugin opens the startup consent window `ow-cmp-startup` at
-  `RunEvent::Ready` on every launch: never shown, not focusable, in the ads
-  data store, with the composed user agent and the observed URL and query.
+- The plugin starts the `cmp-eu-only` request at `RunEvent::Ready` and opens
+  the startup consent window `ow-cmp-startup` as soon as it completes, on
+  every launch: never shown, not focusable, in the ads data store, with the
+  composed user agent and the observed URL and query.
 - The consent shim provides the same globals; Rust stores what the page saves
   in `ow-electron.json` with ow-electron's encoding (ADR 0007).
 - Consent cookies are written by the page only. Rust writes them, with the
@@ -34,11 +36,15 @@ The owner's decision: behave exactly like ow-electron's consent flow.
   (`consent.hostCookieFallback: "auto"`), for platforms whose cookie policy
   blocks the page.
 - Each ad guest's first navigation waits until the startup window has closed
-  or 3 s have passed, which makes ow-electron's observed ordering
-  deterministic. `consent.gateAdsOnConsent` and the ad shim's cookie write are
-  removed.
-- `isCMPRequired()` follows the observed source (`cmp-eu-only`), and the
-  window opens whether or not it has resolved, as in ow-electron.
+  or 3 s have passed since the guest was mounted, which makes ow-electron's
+  observed ordering deterministic. `consent.gateAdsOnConsent` and the ad
+  shim's cookie write are removed.
+- `isCMPRequired()` follows the observed source (`cmp-eu-only`): one request
+  per launch, no client timeout, resolved when the startup page has loaded,
+  `true` for every response observed; a `{}` body disables the cache and
+  opens a new window per call, as in ow-electron.
+- Each consent save also sends the guests ow-electron's `consent` messages
+  (CONTRACT D.5).
 
 ## Consequences
 
@@ -48,6 +54,8 @@ The owner's decision: behave exactly like ow-electron's consent flow.
   does; it costs about a second of background work.
 - The first ad may wait up to 3 s for the consent window on a slow network;
   in ow-electron the same ordering happened by timing.
+- A hung feature request delays the consent window and `isCMPRequired()` as
+  long as it hangs, as in ow-electron; the ads are bounded by the 3 s rule.
 - If WebKit's tracking prevention blocks the page's cookie write, the
   fallback keeps ads consented; the lab check records whether it fired.
 
@@ -57,5 +65,15 @@ The owner's decision: behave exactly like ow-electron's consent flow.
   ow-electron does; the cookie values, expiry and timing would differ, and the
   consent page's own logic and analytics would never run. Rejected.
 - **Open the consent page only when `isCMPRequired()` is true.** Plausible,
-  but not observed; ow-electron opened it before the answer arrived. Kept as
-  an open item (R2-7).
+  but not observable: every response served to ow-electron resolved `true`.
+  Asked of Overwolf (OQ-06, OQ-07).
+
+## Amendments
+
+- 2026-10-06, harness round 2: the window opens after the `cmp-eu-only` response,
+  not in parallel with it; `isCMPRequired()` resolves at the page's load and
+  has no timeout; the `{}` body case; the 3 s bound is measured from the guest
+  mount; consent saves send `consent` messages. The settings window's first
+  call also opens a hidden default-consent window (`ow-cmp-default`) that
+  writes a fresh default consent, copied from ow-electron and asked of
+  Overwolf (OQ-38).

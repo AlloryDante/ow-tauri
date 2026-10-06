@@ -27,14 +27,18 @@ changes [OBS].
 - Test and live mode use the same wire behaviour (CONTRACT D.8); test mode
   only sets `testAd: true` in `__overwolf__`.
 - As a safety guard, test mode also rewrites a non-empty `unit` to
-  `"testAd"`, so a test build cannot request a live performance ad. This was
-  not observed in ow-electron (R2-13) and is ow-tauri's own guard.
+  `"testAd"`, so a test build cannot request a live performance ad.
+  ow-electron passes `unit` through unchanged in test mode (observed), so
+  this is a documented deviation
+  ([PARITY.md](../PARITY.md#deviations)) that the project keeps on purpose.
 - Live mode does not touch the guest's `localStorage`.
 - **Labs** (owner decision, 2026-10-06): agents and automated labs may load
   live ads to verify parity, under fixed rules: at most 10 live loads per
   run, each one logged; ads are never clicked and no input is sent to a
   guest; windows are never visible (hidden, or shown at alpha 0 when an ad
-  must fill, with the dock icon hidden). Test ads remain the default for
+  must fill, with the dock icon hidden). A window that must get live fill
+  stays inside the screen bounds: ow-electron got no live fill at all for an
+  alpha-0 window placed off-screen, while test ads still filled there. Test ads remain the default for
   every lab run that does not need live demand.
 - The example keeps a `start-ad` script, and the README and the example's
   scripts default to `--test-ad` for development.
@@ -67,3 +71,7 @@ changes [OBS].
 - 2026-10-06, owner round 2: labs may load live ads under the rules above
   (previously: test ads only in every lab); test and live are documented as
   identical on the wire, as observed.
+- 2026-10-06, harness round 2: the `unit` guard is confirmed as a deviation
+  (ow-electron does not rewrite `unit`); live lab windows stay on-screen at
+  alpha 0; live runs are measured by fill impressions, because ow-electron's
+  live runs on macOS emitted no `display_ad_loaded`.

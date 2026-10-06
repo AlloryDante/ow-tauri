@@ -78,3 +78,7 @@ single setting Overwolf can change.
   `hostLabel` setting drives every self-naming value including the user
   agent; the `hostFields` option is removed; the muid default follows
   ow-electron (ADR 0014).
+- 2026-10-06, harness round 2: two more labelled names were observed,
+  `electron_owadview_crashed` (now confirmed, with Kind 400024) and
+  `electron_sub_info` (`setExternalPaymentUserId`); both follow the label
+  (`<label>_owadview_crashed`, `<label>_sub_info`).

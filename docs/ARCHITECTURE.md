@@ -174,8 +174,9 @@ pattern, what it may load and what it may call ([section 5](#5-security-model)).
 | overlay | reserved | none: `overlay.createWindow` needs a package runtime (CONTRACT H, Appendix P) | | Kept so a future runtime does not change the class table. |
 | remote | webview `bwr-<id>` in window `bw-<id>` | `loadURL('http(s)://...')` on a `BrowserWindow` | any URL | No IPC, no initialization scripts, no capability. Loading a remote URL closes the app webview and creates this fresh child webview in the same window, because Tauri cannot remove initialization scripts from a webview. Never moves back. |
 | adview-guest | `owad-<embedder>-<n>` | the ads host, per `<owadview>` | `https://www.overwolf.com/monsdk/electron/latest/adview.html` | Child webview inside the embedder's window; ads environment; requests shaped (CONTRACT D.8). |
-| cmp-startup | `ow-cmp-startup` | the plugin, at `RunEvent::Ready`, on every launch | `https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/ow-cmp-v2.html` | 1 x 32, never shown, not focusable; ads environment; closes itself (CONTRACT D.6.1). |
-| cmp | `ow-cmp` | `openCMPWindow` / `openAdPrivacySettingsWindow` | `https://content.overwolf.com/monsdk/electron/latest/cmp/...` | One at a time; ads environment. |
+| cmp-startup | `ow-cmp-startup` | the plugin, on every launch, when the `cmp-eu-only` request started at `RunEvent::Ready` completes | `https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/ow-cmp-v2.html` | 1 x 32, never shown, not focusable; ads environment; closes itself (CONTRACT D.6.1). |
+| cmp | `ow-cmp` | `openCMPWindow` / `openAdPrivacySettingsWindow` | `https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/cmp.html` | Title `CMP`, 800 x 800; one at a time; ads environment (CONTRACT D.6.4). |
+| cmp-default | `ow-cmp-default` | the first `openAdPrivacySettingsWindow` / `openCMPWindow` call of a launch | `https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/ow-cmp-v2.html?unifiedcmp=&firstRun=true` | 1 x 32, never shown; writes a fresh default consent, as ow-electron does (CONTRACT D.6.4). |
 
 ### 3.2 Startup sequence
 
@@ -193,7 +194,7 @@ sequenceDiagram
   P->>M: create hidden window with init script __OW_TAURI_BOOTSTRAP__ (snapshot)
   T->>P: RunEvent::Ready
   P->>P: GET features.overwolf.com/experiments/cmp-eu-only (isCMPRequired)
-  P->>C: open ow-cmp-v2.html in the ads environment
+  P->>C: when it completes: open ow-cmp-v2.html in the ads environment
   M->>M: bootstrap installs the runtime; app.overwolf built from the snapshot
   M->>P: ipc_subscribe(channel) -> epoch
   M->>M: app code runs top level (pre-ready calls, ipcMain.handle, ...)
@@ -280,7 +281,7 @@ sequenceDiagram
   P->>G: add child webview at rect (ads environment), init script adview-host.js + config
   P->>R: channel: adview-event {did-attach}
   P->>P: analytics: InsertStats 400025
-  P->>P: first navigation waits for ow-cmp-startup to close (at most 3 s)
+  P->>P: first navigation waits for ow-cmp-startup to close (at most 3 s after mount)
   P->>G: load adview.html with Referer / Origin (request shaping, D.8)
   G->>P: adview_event {name: impression}
   P->>R: channel: adview-event {elementId, name}
@@ -300,9 +301,12 @@ sequenceDiagram
 Visibility: the element is "visible" when its window is shown, it is
 connected, at least half of it intersects the viewport, no ancestor hides it,
 and the document is visible. When it is not visible, the guest webview is
-hidden (not destroyed). Window minimize and hide messages to the guest are an
-ow-tauri option (`ads.legacyHostMessages`), off by default, because
-ow-electron was not seen sending them (CONTRACT D.5).
+hidden (not destroyed), and the guest is told so the way ow-electron tells
+it (its `document.visibilityState`, plus a `window-hidden` message when the
+window hides); the ad page then reloads itself until it is visible again.
+Guests also receive ow-electron's `consent`, `customTracking` and `eHashes`
+messages (CONTRACT D.5). A crashed guest is reloaded at once, without a cap
+(CONTRACT D.7).
 
 ### 4.3 Consent
 
@@ -319,22 +323,27 @@ sequenceDiagram
   participant K as ads data store (cookies)
   participant G as ad guests
   P->>F: GET /experiments/cmp-eu-only
+  F-->>P: response (any outcome; no client timeout)
   P->>C: open hidden 1 x 32 window (unifiedcmp, muid, uid, muidv2, oweVersion, appVersion)
   C->>C: first launch: default Full consent; later: stored consent
   C->>P: cmp.saveUnifiedConsent / privacy.* (cmp_event)
   P->>S: write cmp.* with ow-electron's encoding (ow-electron.json)
   C->>K: euconsent-v2, acconsent on .overwolf.com (365 days)
   C->>P: cmp_event {name: close}
+  P->>G: consent message x2 to existing guests (TCF, then unified string)
   P->>K: only if both cookies are missing: write them (hostCookieFallback)
-  P->>G: release first navigations (or after 3 s)
+  P->>G: release first navigations (or 3 s after mount)
   G->>K: ad page reads consent from the cookies
 ```
 
 `openAdPrivacySettingsWindow()` and `openCMPWindow()` open the settings window
-`ow-cmp` the same way; the page saves through the same globals and rewrites
-the cookies. The host sends guests no consent message (that is the
-`ads.legacyHostMessages` option); the ad page reads the cookies. `isCMPRequired()`
-awaits the `cmp-eu-only` request and resolves `true` on any failure.
+`ow-cmp` (title `CMP`, a preloader, then `cmp.html`) and resolve once it
+exists; the first call of a launch also opens the hidden `ow-cmp-default`
+window, which writes a fresh default consent exactly as ow-electron does
+(OQ-38). Pages save through the same globals, rewrite the cookies, and each
+save sends the guests a `consent` message; the ad page also reads the
+cookies. `isCMPRequired()` awaits the `cmp-eu-only` request and the startup
+page's load, with no timeout, and resolves `true` (CONTRACT D.6).
 
 ### 4.4 Analytics
 
@@ -468,7 +477,7 @@ the plugin grants nothing to a webview unless a capability below names it.
 | ui | the app (template in `examples/packages-sample/src-tauri/capabilities/ui.json`) | `bw-*` | `overwolf:renderer`, `core:window:allow-start-dragging` | `local: true` |
 | remote | none | `bwr-*` | none | |
 | adview-guest | `ow-tauri-adview-guest` (plugin) | `owad-*` | `overwolf:adview-guest` (one command: `adview_event`) | `https://www.overwolf.com/monsdk/electron/*` |
-| cmp-startup, cmp | `ow-tauri-cmp` (plugin) | `ow-cmp-startup`, `ow-cmp` | `overwolf:cmp-window` (one command: `cmp_event`) | `https://content.overwolf.com/monsdk/electron/*` |
+| cmp-startup, cmp-default, cmp | `ow-tauri-cmp` (plugin) | `ow-cmp-startup`, `ow-cmp-default`, `ow-cmp` | `overwolf:cmp-window` (one command: `cmp_event`) | `https://content.overwolf.com/monsdk/electron/*` |
 
 The opener, dialog and global-shortcut plugins are called from Rust only; no
 webview holds their permissions. The plugin registers them in its setup hook
@@ -491,8 +500,8 @@ webview inside a `bw-*` window and a remote page in a `bw-*` window.
   per-minute cap; started muted; per-guest rate limits on events and bytes
   (CONTRACT D.4, D.7).
 - Consent windows: navigation limited to Overwolf hosts; `window.close()` is
-  routed to the host; a page that never closes itself is closed after
-  `consent.readyTimeoutMs`.
+  routed to the host; a hidden consent page that never closes itself is
+  closed after `consent.readyTimeoutMs`.
 - **Web security off in the ads environment.** ow-electron runs its guests
   with web security disabled and insecure content allowed; ow-tauri does the
   same for ad guests and consent windows only (on Windows through the ads
