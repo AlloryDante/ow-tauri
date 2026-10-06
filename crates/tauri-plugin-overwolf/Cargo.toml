@@ -32,6 +32,12 @@ plugin = [
   "dep:uuid",
   "dep:sys-locale",
   "dep:log",
+  "dep:reqwest",
+  "dep:objc2",
+  "dep:objc2-foundation",
+  "dep:webview2-com",
+  "dep:windows",
+  "dep:webkit2gtk",
 ]
 # Lets `window_devtools` open devtools in release builds (Tauri `devtools`).
 devtools = ["plugin", "tauri/devtools"]
@@ -55,6 +61,8 @@ url = { workspace = true }
 tauri = { workspace = true, optional = true, features = ["unstable"] }
 tauri-plugin-opener = { workspace = true, optional = true }
 tauri-plugin-dialog = { workspace = true, optional = true }
+# Host analytics and the consent request (CONTRACT E.1).
+reqwest = { workspace = true, optional = true, features = ["gzip", "deflate", "brotli", "zstd"] }
 tauri-plugin-global-shortcut = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
@@ -65,7 +73,21 @@ log = { workspace = true, optional = true }
 libc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true }
+windows-sys = { workspace = true, features = ["Win32_System_Registry"] }
+# Guest webview hooks (mute, request shaping, crash and load-failure
+# reports, D.7, D.8.3): the versions Tauri 2.12's wry uses.
+webview2-com = { version = "0.39.1", optional = true }
+windows = { version = "0.62.2", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Guest mute and the shaped first navigation (D.8.3); wry's versions.
+objc2 = { version = "0.6.5", optional = true }
+objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "NSString", "NSURL", "NSURLRequest"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Guest mute, the shaped first navigation, crash and load-failure reports;
+# wry's version and feature level.
+webkit2gtk = { version = "=2.0.2", optional = true, features = ["v2_38"] }
 
 [build-dependencies]
 tauri-plugin = { workspace = true, features = ["build"] }

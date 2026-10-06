@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-adview-update"
+description = "Enables the adview_update command without any pre-configured scope."
+commands.allow = ["adview_update"]
+
+[[permission]]
+identifier = "deny-adview-update"
+description = "Denies the adview_update command without any pre-configured scope."
+commands.deny = ["adview_update"]

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-packages-set-channel"
+description = "Enables the packages_set_channel command without any pre-configured scope."
+commands.allow = ["packages_set_channel"]
+
+[[permission]]
+identifier = "deny-packages-set-channel"
+description = "Denies the packages_set_channel command without any pre-configured scope."
+commands.deny = ["packages_set_channel"]

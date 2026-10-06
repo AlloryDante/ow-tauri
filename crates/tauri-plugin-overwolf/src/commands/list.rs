@@ -22,6 +22,20 @@ pub const COMMANDS: &[&str] = &[
     "disable_anonymous_analytics",
     "disable_ads_optimization",
     "disable_ads_fpd",
+    "is_cmp_required",
+    "open_cmp_window",
+    "open_ad_privacy_settings_window",
+    "set_user_email_hashes",
+    "set_external_payment_user_id",
+    "analytics_set_user_enabled",
+    // A.1.1 browser switches recorded after main_ready
+    "app_record_browser_args",
+    // A.2.4 packages
+    "packages_snapshot",
+    "packages_relaunch",
+    "packages_set_channel",
+    "packages_get_available_channels",
+    "packages_get_channel",
     // A.2.3 windows, screen, shell, dialogs, files
     "window_create",
     "window_load",
@@ -48,4 +62,12 @@ pub const COMMANDS: &[&str] = &[
     "ipc_send",
     "ipc_skip",
     "eval_result",
+    "adview_mount",
+    "adview_update",
+    "adview_unmount",
+    "adview_command",
+    // A.2.6 ad guests
+    "adview_event",
+    // A.2.7 consent windows
+    "cmp_event",
 ];

@@ -5,7 +5,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use serde_json::Value;
 use tauri::{AppHandle, Manager, Runtime};
 use url::Url;
 
@@ -19,8 +18,9 @@ use crate::identity::{muid_from_bytes, phase_percent, resolve_uid};
 use crate::ipc::router::Router;
 use crate::lifecycle::QuitSequence;
 use crate::manifest::EmbeddedManifest;
-use crate::packages::{PackageRuntime, PackagesBackend, PackagesSnapshot};
+use crate::packages::{PackagesBackend, PackagesSnapshot, logs_folder_path};
 use crate::paths::{BaseDirs, TargetOs, electron_paths, node_arch, user_data_dir};
+use crate::platform::machine::{MachineIds, machine_ids};
 use crate::screen::ElectronDisplay;
 use crate::snapshot::{Flags, HostSnapshot, IdentityInfo, StateHub, SwitchesInfo, Versions};
 use crate::state::StateDir;
@@ -38,7 +38,8 @@ use crate::window::WindowRegistry;
 pub(crate) struct SetupOptions {
     pub(crate) manifest_json: Option<&'static str>,
     pub(crate) packages_backend: Option<PackagesBackend>,
-    pub(crate) package_runtime: Option<Arc<dyn PackageRuntime>>,
+    pub(crate) host_label: Option<(String, Option<String>)>,
+    pub(crate) transport: Option<Arc<dyn crate::analytics::Transport>>,
     pub(crate) test_ad: Option<bool>,
     pub(crate) uid: Option<String>,
     pub(crate) companion_plugins: bool,
@@ -53,7 +54,8 @@ impl std::fmt::Debug for SetupOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SetupOptions")
             .field("packages_backend", &self.packages_backend)
-            .field("package_runtime", &self.package_runtime.is_some())
+            .field("host_label", &self.host_label)
+            .field("transport", &self.transport.is_some())
             .field("test_ad", &self.test_ad)
             .field("companion_plugins", &self.companion_plugins)
             .field("runtime_capabilities", &self.runtime_capabilities)
@@ -138,6 +140,10 @@ pub(crate) fn setup<R: Runtime>(
     if let Some(t) = options.test_ad {
         config.ads.test_ad = t;
     }
+    if let Some((label, version)) = &options.host_label {
+        config.analytics.host_label.clone_from(label);
+        config.analytics.host_version.clone_from(version);
+    }
     let (env, env_warnings) = EnvOverrides::read(|k| std::env::var(k).ok(), debug);
     warnings.extend(env_warnings);
     warnings.extend(apply_overrides(&mut config, &env, &switches));
@@ -154,7 +160,12 @@ pub(crate) fn setup<R: Runtime>(
         None => app.path().config_dir()?,
     };
     let state_dir = StateDir::new(&app_data, &identity.uid);
-    let logger = Logger::open(state_dir.log_file());
+    let ads_data_dir = app_data.join(&manifest.product_name).join("EBWebView-ow");
+    let logger = if config.logging.enabled {
+        Logger::open(state_dir.log_file())
+    } else {
+        Logger::disabled(state_dir.log_file())
+    };
     logger.write(
         LogLevel::Info,
         &format!(
@@ -180,22 +191,40 @@ pub(crate) fn setup<R: Runtime>(
             None => "ow-tauri.json could not be read; starting from defaults".into(),
         });
     }
-    if config.analytics.muid_strategy == MuidStrategy::MachineId {
-        warnings.push(
-            "analytics.muidStrategy \"machine-id\" is not available yet (OQ-02); using per-install"
-                .into(),
-        );
-    }
     let stored = ow_tauri.get();
-    let muid = if let Some(m) = stored.muid.filter(|m| crate::identity::is_valid_muid(m)) {
-        m
+    let machine = match config.analytics.muid_strategy {
+        MuidStrategy::MachineId if options.os_queries => match machine_ids() {
+            Ok(ids) => Some(ids),
+            Err(reason) => {
+                warnings.push(format!(
+                    "machine id unavailable ({reason}); using a per-install muid"
+                ));
+                None
+            }
+        },
+        _ => None,
+    };
+    let MachineIds { muid, muid_v2 } = if let Some(ids) = machine {
+        ids
+    } else if let Some(m) = stored
+        .muid
+        .clone()
+        .filter(|m| crate::identity::is_valid_muid(m))
+    {
+        MachineIds {
+            muid_v2: m.clone(),
+            muid: m,
+        }
     } else {
         let m = random_muid();
         let value = m.clone();
         if let Err(err) = ow_tauri.update(|s| s.muid = Some(value)) {
             warnings.push(format!("could not write ow-tauri.json: {}", err.kind()));
         }
-        m
+        MachineIds {
+            muid_v2: m.clone(),
+            muid: m,
+        }
     };
     let phase = phase_percent(&muid);
 
@@ -204,7 +233,7 @@ pub(crate) fn setup<R: Runtime>(
     if shared.status == FileStatus::Invalid {
         warnings.push("ow-electron.json is not valid JSON; it is left untouched".into());
     }
-    let utm_params = shared.state.utm_params.clone().unwrap_or(Value::Null);
+    let utm_params = shared.state.utm_params.clone();
 
     let os = TargetOs::current();
     let base = base_dirs(app, app_data.clone());
@@ -234,7 +263,7 @@ pub(crate) fn setup<R: Runtime>(
         })
         .collect();
     let fs_scope = FsScope::new(
-        user_data,
+        user_data.clone(),
         state_dir.root().to_path_buf(),
         &crate::paths::app_path(&base.resources),
         extra,
@@ -253,17 +282,23 @@ pub(crate) fn setup<R: Runtime>(
         );
     }
 
-    let backend = config
-        .packages_backend
-        .resolve(options.package_runtime.is_some());
-    let packages = PackagesSnapshot::initial(
-        backend,
+    if config.packages_backend == PackagesBackend::Native {
+        warnings.push(
+            "packagesBackend \"native\" is reserved: no package runtime exists, so it behaves as \"none\""
+                .into(),
+        );
+    }
+    if env.package_runtime.is_some() {
+        warnings.push("OW_TAURI_PACKAGE_RUNTIME is reserved (Appendix P); ignored".into());
+    }
+    let packages = PackagesSnapshot::new(
+        config.packages_backend,
         &manifest.overwolf.packages,
-        state_dir.logs_dir().to_string_lossy().into_owned(),
+        logs_folder_path(&user_data.to_string_lossy(), &identity.uid),
         phase,
-        stored.package_channels.clone(),
     );
 
+    let locale = sys_locale::get_locale().unwrap_or_else(|| "en-US".to_owned());
     let (displays, primary) = super::main_webview::read_displays(app, options.os_queries);
     let snapshot = HostSnapshot {
         seq: 0,
@@ -279,7 +314,7 @@ pub(crate) fn setup<R: Runtime>(
             uid: identity.uid.clone(),
             cuid: identity.cuid.clone(),
             muid: muid.clone(),
-            muid_v2: muid.clone(),
+            muid_v2: muid_v2.clone(),
             phase_percent: phase,
         },
         utm_params: utm_params.clone(),
@@ -289,7 +324,7 @@ pub(crate) fn setup<R: Runtime>(
         },
         paths,
         is_packaged: !debug,
-        locale: sys_locale::get_locale().unwrap_or_else(|| "en-US".to_owned()),
+        locale: locale.clone(),
         displays,
         primary_display_id: primary,
         packages,
@@ -322,7 +357,41 @@ pub(crate) fn setup<R: Runtime>(
         restart_stale_windows: std::collections::BTreeSet::new(),
         urls: HashMap::new(),
         ticks: 0,
+        ads: super::ads::AdsCore::default(),
+        consent: super::consent::ConsentCore::default(),
     };
+
+    let label = super::analytics::host_label(&config.analytics);
+    let reporter = crate::analytics::Reporter {
+        user_agent: crate::analytics::compose_user_agent(
+            &super::analytics::fallback_platform_ua(&tauri::webview_version().unwrap_or_default()),
+            &manifest.product_name,
+            &manifest.version,
+            &label,
+        ),
+        label,
+        app_version: manifest.version.clone(),
+        uid: identity.uid.clone(),
+        cuid: identity.cuid.clone(),
+        os: os.node_platform().to_owned(),
+        os_version: crate::platform::os_release(),
+        app_name: manifest.product_name.clone(),
+        muid: muid.clone(),
+        muid_v2: muid_v2.clone(),
+        locale: crate::analytics::accept_language(&locale),
+    };
+    let transport = options
+        .transport
+        .clone()
+        .unwrap_or_else(|| Arc::new(crate::analytics::transport::ReqwestTransport::new()));
+    let user_enabled =
+        !config.analytics.user_switch || stored.analytics_user_enabled != Some(false);
+    let analytics = super::analytics::AnalyticsHost::new(
+        crate::analytics::transport::Dispatcher::new(transport),
+        reporter,
+        user_enabled,
+        !shared.state.first_launch,
+    );
 
     let host = Arc::new(Host {
         app: app.clone(),
@@ -331,9 +400,11 @@ pub(crate) fn setup<R: Runtime>(
             browser_args: webview_args,
             argv,
             switches,
+            ads_data_dir,
             debug,
             os,
             muid,
+            muid_v2,
             phase_percent: phase,
             utm_params,
             state_dir,
@@ -345,6 +416,7 @@ pub(crate) fn setup<R: Runtime>(
         logger,
         ow_tauri,
         ow_electron,
+        analytics,
         options,
         core: Mutex::new(core),
         started: Instant::now(),

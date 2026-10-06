@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-cmp-event"
+description = "Enables the cmp_event command without any pre-configured scope."
+commands.allow = ["cmp_event"]
+
+[[permission]]
+identifier = "deny-cmp-event"
+description = "Denies the cmp_event command without any pre-configured scope."
+commands.deny = ["cmp_event"]

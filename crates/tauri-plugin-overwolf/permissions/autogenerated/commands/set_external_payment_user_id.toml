@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-set-external-payment-user-id"
+description = "Enables the set_external_payment_user_id command without any pre-configured scope."
+commands.allow = ["set_external_payment_user_id"]
+
+[[permission]]
+identifier = "deny-set-external-payment-user-id"
+description = "Denies the set_external_payment_user_id command without any pre-configured scope."
+commands.deny = ["set_external_payment_user_id"]

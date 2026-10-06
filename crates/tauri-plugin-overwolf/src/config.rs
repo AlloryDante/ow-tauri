@@ -16,7 +16,8 @@
 
 use std::path::PathBuf;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::identity::{HashEncoding, is_valid_uid};
 use crate::packages::PackagesBackend;
@@ -34,7 +35,7 @@ pub struct Config {
     pub webview: WebviewConfig,
     /// Console-assigned uid; overrides the computed uid (G.2).
     pub uid: Option<String>,
-    /// Which package runtime to use (H.1).
+    /// `none` or the reserved `native` (H.2).
     pub packages_backend: PackagesBackend,
     /// Ads host options.
     pub ads: AdsConfig,
@@ -44,6 +45,8 @@ pub struct Config {
     pub consent: ConsentConfig,
     /// Email hash options.
     pub email_hashes: EmailHashesConfig,
+    /// Log file options (F.4).
+    pub logging: LoggingConfig,
     /// IPC router limits.
     pub ipc: IpcConfig,
     /// Update client options.
@@ -93,25 +96,23 @@ pub struct WebviewConfig {
 /// `plugins.overwolf.ads`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "independent contract switches, each documented in CONTRACT A.1"
-)]
 pub struct AdsConfig {
     /// Test inventory (same as `--test-ad`).
     pub test_ad: bool,
+    /// Request shaping (D.8); always on, the switch exists for debugging.
+    pub request_shaping: bool,
+    /// Value given to the guest `owVersion` and the consent `oweVersion`
+    /// instead of `<owVersion>` (section 0).
+    pub ow_version_override: Option<String>,
+    /// ow-tauri option: the macOS private header SPI prototype (D.8.3).
+    pub mac_private_header_api: bool,
     /// User-gesture window for guest top-level navigation.
     pub gesture_window_ms: u64,
-    /// Guest reloads after crashes, per element.
-    pub max_recoveries: u32,
-    /// Reload delay after a failed guest load.
+    /// Guest reloads after crashes, per element; `None` = no cap, as
+    /// ow-electron (D.7).
+    pub max_recoveries: Option<u32>,
+    /// Reload interval after a failed main-frame load (D.7).
     pub load_error_retry_ms: u64,
-    /// OQ-11.
-    pub expose_email_hashes_to_guest: bool,
-    /// Extra guest request headers, OQ-05.
-    pub request_shaping: bool,
-    /// `pageUrl`, `setPageUrl()`, `sendCommand()` (OQ-32).
-    pub experimental_element_api: bool,
     /// Per-guest limits (D.4).
     pub guest_limits: GuestLimits,
 }
@@ -120,12 +121,12 @@ impl Default for AdsConfig {
     fn default() -> Self {
         AdsConfig {
             test_ad: false,
+            request_shaping: true,
+            ow_version_override: None,
+            mac_private_header_api: false,
             gesture_window_ms: 1500,
-            max_recoveries: 10,
+            max_recoveries: None,
             load_error_retry_ms: 5000,
-            expose_email_hashes_to_guest: false,
-            request_shaping: false,
-            experimental_element_api: false,
             guest_limits: GuestLimits::default(),
         }
     }
@@ -157,103 +158,82 @@ impl Default for GuestLimits {
 }
 
 /// `plugins.overwolf.analytics`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct AnalyticsConfig {
-    /// Append `host`, `hostVersion`, `platform` (OQ-03).
-    pub host_fields: bool,
-    /// How the muid is derived (OQ-02).
+    /// The host label (section 0, "Host label"), default `tauri`.
+    pub host_label: String,
+    /// The host version; `None` = the Tauri crate version.
+    pub host_version: Option<String>,
+    /// How the muid is derived (E.4).
     pub muid_strategy: MuidStrategy,
-    /// Expose `analytics_set_user_enabled`.
+    /// ow-tauri option: expose `analytics_set_user_enabled`.
     pub user_switch: bool,
+}
+
+impl Default for AnalyticsConfig {
+    fn default() -> Self {
+        AnalyticsConfig {
+            host_label: "tauri".into(),
+            host_version: None,
+            muid_strategy: MuidStrategy::MachineId,
+            user_switch: false,
+        }
+    }
 }
 
 /// `analytics.muidStrategy` (E.4).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MuidStrategy {
-    /// Random UUID v4, upper-case, stored in `ow-tauri.json`.
+    /// Derived from the OS machine identifier, as ow-electron (default).
     #[default]
-    PerInstall,
-    /// Derived from the OS machine identifier; unavailable until Overwolf
-    /// specifies the derivation (falls back to `per-install` with a warning).
     MachineId,
+    /// ow-tauri option, non-parity: a random upper-case UUID v4 stored in
+    /// `ow-tauri.json`.
+    PerInstall,
 }
 
 /// `plugins.overwolf.consent`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub struct ConsentConfig {
-    /// What `isCMPRequired()` returns (OQ-06).
-    pub cmp_required: CmpRequired,
-    /// Default consent page URL override (D.6 scope only).
+    /// Settings window page override; any `https:` URL (D.6.4).
     pub cmp_url: Option<String>,
-    /// The first ad mount waits for consent readiness.
-    pub gate_ads_on_consent: bool,
-    /// The consent page must send `ready` within this time.
+    /// The hidden consent windows are closed after this if still open.
     pub ready_timeout_ms: u64,
+    /// Whether the host writes the consent cookies itself (D.6.3).
+    pub host_cookie_fallback: CookieFallback,
 }
 
 impl Default for ConsentConfig {
     fn default() -> Self {
         ConsentConfig {
-            cmp_required: CmpRequired::Always,
             cmp_url: None,
-            gate_ads_on_consent: true,
             ready_timeout_ms: 30_000,
+            host_cookie_fallback: CookieFallback::Auto,
         }
     }
 }
 
-/// `consent.cmpRequired`: `"always"`, `"never"` or `{ "url": "https://..." }`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum CmpRequired {
-    /// `isCMPRequired()` resolves `true`.
+/// `consent.hostCookieFallback` (D.6.3).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CookieFallback {
+    /// Write the cookies when the page did not (default).
     #[default]
-    Always,
-    /// `isCMPRequired()` resolves `false`.
+    Auto,
+    /// Never write cookies from the host.
     Never,
-    /// Fetched once per session from this HTTPS URL.
-    Url(String),
 }
 
-impl Serialize for CmpRequired {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        match self {
-            CmpRequired::Always => s.serialize_str("always"),
-            CmpRequired::Never => s.serialize_str("never"),
-            CmpRequired::Url(url) => {
-                use serde::ser::SerializeMap;
-                let mut map = s.serialize_map(Some(1))?;
-                map.serialize_entry("url", url)?;
-                map.end()
-            }
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for CmpRequired {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct UrlForm {
-            url: String,
-        }
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Raw {
-            Word(String),
-            Url(UrlForm),
-        }
-        match Raw::deserialize(d)? {
-            Raw::Word(w) if w == "always" => Ok(CmpRequired::Always),
-            Raw::Word(w) if w == "never" => Ok(CmpRequired::Never),
-            Raw::Word(w) => Err(serde::de::Error::custom(format!(
-                "cmpRequired must be \"always\", \"never\" or {{ \"url\": ... }}, got \"{w}\""
-            ))),
-            Raw::Url(u) => Ok(CmpRequired::Url(u.url)),
-        }
-    }
+/// `plugins.overwolf.logging` (F.4).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+pub struct LoggingConfig {
+    /// Append to `logs/ow-tauri.log`; off by default, as ow-electron writes
+    /// no log.
+    pub enabled: bool,
 }
 
 /// `plugins.overwolf.emailHashes`.
@@ -388,6 +368,85 @@ pub fn is_allowed_cmp_url(url: &str) -> bool {
             .any(|s| s == "..")
 }
 
+/// Whether `url` parses as an absolute `https:` URL.
+///
+/// ```
+/// use tauri_plugin_overwolf::config::is_https_url;
+/// assert!(is_https_url("https://example.com/cmp.html"));
+/// assert!(!is_https_url("http://example.com/"));
+/// assert!(!is_https_url("cmp.html"));
+/// ```
+#[must_use]
+pub fn is_https_url(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| u.scheme() == "https" && u.host().is_some())
+}
+
+/// Whether `label` is a valid `analytics.hostLabel`: 1 to 32 lower-case ASCII
+/// letters, digits or `_`, starting with a letter. It becomes part of
+/// Counter names and the user agent token.
+///
+/// ```
+/// use tauri_plugin_overwolf::config::is_valid_host_label;
+/// assert!(is_valid_host_label("tauri"));
+/// assert!(is_valid_host_label("electron"));
+/// assert!(!is_valid_host_label("Tauri"));
+/// assert!(!is_valid_host_label("a b"));
+/// ```
+#[must_use]
+pub fn is_valid_host_label(label: &str) -> bool {
+    (1..=32).contains(&label.len())
+        && label.starts_with(|c: char| c.is_ascii_lowercase())
+        && label
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Configuration keys removed by the parity revision (A.1), as dot paths
+/// below `plugins.overwolf`. The plugin rejects them; the build helper
+/// names them in a build warning.
+pub const REMOVED_KEYS: [&str; 6] = [
+    "analytics.hostFields",
+    "ads.experimentalElementApi",
+    "ads.exposeEmailHashesToGuest",
+    "ads.legacyHostMessages",
+    "consent.gateAdsOnConsent",
+    "consent.cmpRequired",
+];
+
+/// Warnings for removed keys and removed `packagesBackend` values in a raw
+/// `plugins.overwolf` object (A.1).
+///
+/// ```
+/// use tauri_plugin_overwolf::config::removed_key_warnings;
+/// let raw = serde_json::json!({ "packagesBackend": "auto", "consent": { "cmpRequired": "always" } });
+/// let w = removed_key_warnings(&raw);
+/// assert_eq!(w.len(), 2);
+/// assert!(w[0].contains("consent.cmpRequired"));
+/// ```
+#[must_use]
+pub fn removed_key_warnings(raw: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    for path in REMOVED_KEYS {
+        let mut cur = Some(raw);
+        for part in path.split('.') {
+            cur = cur.and_then(|v| v.get(part));
+        }
+        if cur.is_some() {
+            out.push(format!(
+                "plugins.overwolf.{path} was removed by the parity revision; remove it (the plugin rejects it)"
+            ));
+        }
+    }
+    if let Some(v) = raw.get("packagesBackend").and_then(Value::as_str)
+        && (v == "auto" || v == "simulated")
+    {
+        out.push(format!(
+            "plugins.overwolf.packagesBackend \"{v}\" was removed; use \"none\" (the plugin rejects it)"
+        ));
+    }
+    out
+}
+
 impl Config {
     /// Checks every field against the contract's rules.
     ///
@@ -402,6 +461,7 @@ impl Config {
     /// c.main.url = "https://example.com/main.html".into();
     /// assert!(c.validate().is_err());
     /// ```
+    #[expect(clippy::too_many_lines, reason = "one check per configuration field")]
     pub fn validate(&self) -> Result<(), ConfigError> {
         let main_url = self.main.url.trim();
         if main_url.is_empty() {
@@ -454,18 +514,32 @@ impl Config {
                 return Err(invalid(name, "must be greater than 0"));
             }
         }
-        if let CmpRequired::Url(url) = &self.consent.cmp_required
-            && !url.starts_with("https://")
-        {
-            return Err(invalid("consent.cmpRequired.url", "must be an https URL"));
-        }
         if let Some(url) = &self.consent.cmp_url
-            && !is_allowed_cmp_url(url)
+            && !is_https_url(url)
         {
+            return Err(invalid("consent.cmpUrl", "must be an https URL"));
+        }
+        if !is_valid_host_label(&self.analytics.host_label) {
             return Err(invalid(
-                "consent.cmpUrl",
-                format!("must start with {CMP_URL_SCOPE}"),
+                "analytics.hostLabel",
+                "must be 1 to 32 lower-case ASCII letters, digits or _",
             ));
+        }
+        for (name, value) in [
+            (
+                "analytics.hostVersion",
+                self.analytics.host_version.as_ref(),
+            ),
+            (
+                "ads.owVersionOverride",
+                self.ads.ow_version_override.as_ref(),
+            ),
+        ] {
+            if let Some(v) = value
+                && (v.is_empty() || v.len() > 64 || !v.chars().all(|c| c.is_ascii_graphic()))
+            {
+                return Err(invalid(name, "must be 1 to 64 printable ASCII characters"));
+            }
         }
         if self.consent.ready_timeout_ms == 0 {
             return Err(invalid("consent.readyTimeoutMs", "must be greater than 0"));
@@ -663,10 +737,10 @@ impl EnvOverrides {
 /// use tauri_plugin_overwolf::PackagesBackend;
 /// let mut cfg = Config::default();
 /// let env = EnvOverrides { packages_backend: Some("none".into()), ..Default::default() };
-/// let sw = Switches::parse(["app", "--ow-tauri-packages-backend=simulated"]);
+/// let sw = Switches::parse(["app", "--ow-tauri-packages-backend=native"]);
 /// let warnings = apply_overrides(&mut cfg, &env, &sw);
 /// assert!(warnings.is_empty());
-/// assert_eq!(cfg.packages_backend, PackagesBackend::Simulated);
+/// assert_eq!(cfg.packages_backend, PackagesBackend::Native);
 /// ```
 pub fn apply_overrides(
     config: &mut Config,
@@ -691,7 +765,7 @@ pub fn apply_overrides(
             match value.trim().parse::<PackagesBackend>() {
                 Ok(b) => config.packages_backend = b,
                 Err(_) => warnings.push(format!(
-                    "{source}=\"{value}\" is not auto, native, simulated or none; ignored"
+                    "{source}=\"{value}\" is not none or native; ignored"
                 )),
             }
         }
@@ -770,11 +844,16 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(cfg.main.url, "main.html");
         assert_eq!(cfg.main.crash_restart_limit, 3);
-        assert_eq!(cfg.packages_backend, PackagesBackend::Auto);
+        assert_eq!(cfg.packages_backend, PackagesBackend::None);
         assert_eq!(cfg.ads.gesture_window_ms, 1500);
+        assert!(cfg.ads.request_shaping);
+        assert_eq!(cfg.ads.max_recoveries, None);
         assert_eq!(cfg.ads.guest_limits.bytes_per_second, 262_144);
-        assert_eq!(cfg.consent.cmp_required, CmpRequired::Always);
-        assert!(cfg.consent.gate_ads_on_consent);
+        assert_eq!(cfg.analytics.host_label, "tauri");
+        assert_eq!(cfg.analytics.host_version, None);
+        assert_eq!(cfg.analytics.muid_strategy, MuidStrategy::MachineId);
+        assert_eq!(cfg.consent.host_cookie_fallback, CookieFallback::Auto);
+        assert!(!cfg.logging.enabled);
         assert_eq!(cfg.ipc.max_message_bytes, 8 * 1024 * 1024);
         assert_eq!(cfg.ipc.max_queued_messages, 4096);
         assert!(cfg.updater.enabled);
@@ -792,12 +871,13 @@ mod tests {
           "main": { "url": "main.html", "devtools": false, "crashRestartLimit": 3 },
           "webview": { "disableGpu": false, "remoteDebuggingPort": null, "additionalBrowserArgs": [] },
           "uid": null,
-          "packagesBackend": "auto",
-          "ads": { "testAd": false, "gestureWindowMs": 1500, "maxRecoveries": 10, "loadErrorRetryMs": 5000,
-                   "exposeEmailHashesToGuest": false, "requestShaping": false, "experimentalElementApi": false,
+          "packagesBackend": "none",
+          "ads": { "testAd": false, "requestShaping": true, "owVersionOverride": null, "macPrivateHeaderApi": false,
+                   "gestureWindowMs": 1500, "maxRecoveries": null, "loadErrorRetryMs": 5000,
                    "guestLimits": { "eventsPerSecond": 50, "eventBurst": 100, "bytesPerSecond": 262144, "externalOpensPerMinute": 5 } },
-          "analytics": { "hostFields": false, "muidStrategy": "per-install", "userSwitch": false },
-          "consent": { "cmpRequired": "always", "cmpUrl": null, "gateAdsOnConsent": true, "readyTimeoutMs": 30000 },
+          "analytics": { "hostLabel": "tauri", "hostVersion": null, "muidStrategy": "machine-id", "userSwitch": false },
+          "consent": { "cmpUrl": null, "readyTimeoutMs": 30000, "hostCookieFallback": "auto" },
+          "logging": { "enabled": false },
           "emailHashes": { "encoding": "hex" },
           "ipc": { "invokeTimeoutMs": 0, "startupQueueMax": 1024, "startupTimeoutMs": 30000, "maxMessageBytes": 8388608,
                    "maxInFlightInvokes": 256, "maxQueuedMessages": 4096 },
@@ -817,17 +897,22 @@ mod tests {
     }
 
     #[test]
-    fn cmp_required_forms() {
-        let parse = |s: &str| serde_json::from_str::<CmpRequired>(s);
-        assert_eq!(parse(r#""never""#).unwrap(), CmpRequired::Never);
-        assert_eq!(
-            parse(r#"{"url":"https://example.com/x"}"#).unwrap(),
-            CmpRequired::Url("https://example.com/x".into())
-        );
-        assert!(parse(r#""sometimes""#).is_err());
-        assert!(parse(r#"{"url":"x","extra":1}"#).is_err());
-        let back = serde_json::to_string(&CmpRequired::Url("https://a".into())).unwrap();
-        assert_eq!(back, r#"{"url":"https://a"}"#);
+    fn removed_keys_are_rejected_and_named() {
+        for json in [
+            r#"{"analytics":{"hostFields":true}}"#,
+            r#"{"ads":{"experimentalElementApi":true}}"#,
+            r#"{"ads":{"exposeEmailHashesToGuest":true}}"#,
+            r#"{"ads":{"legacyHostMessages":true}}"#,
+            r#"{"consent":{"gateAdsOnConsent":true}}"#,
+            r#"{"consent":{"cmpRequired":"always"}}"#,
+            r#"{"packagesBackend":"auto"}"#,
+            r#"{"packagesBackend":"simulated"}"#,
+        ] {
+            assert!(serde_json::from_str::<Config>(json).is_err(), "{json}");
+            let raw: Value = serde_json::from_str(json).unwrap();
+            assert_eq!(removed_key_warnings(&raw).len(), 1, "{json}");
+        }
+        assert!(removed_key_warnings(&serde_json::json!({"ads":{"testAd":true}})).is_empty());
     }
 
     #[test]
@@ -870,12 +955,21 @@ mod tests {
             "ads.guestLimits.eventBurst",
         );
         check(
-            r#"{"consent":{"cmpRequired":{"url":"http://x"}}}"#,
-            "consent.cmpRequired.url",
+            r#"{"consent":{"cmpUrl":"http://example.com/cmp.html"}}"#,
+            "consent.cmpUrl",
         );
         check(
-            r#"{"consent":{"cmpUrl":"https://example.com/cmp.html"}}"#,
-            "consent.cmpUrl",
+            r#"{"analytics":{"hostLabel":"Tauri"}}"#,
+            "analytics.hostLabel",
+        );
+        check(r#"{"analytics":{"hostLabel":""}}"#, "analytics.hostLabel");
+        check(
+            r#"{"analytics":{"hostVersion":"1 2"}}"#,
+            "analytics.hostVersion",
+        );
+        check(
+            r#"{"ads":{"owVersionOverride":""}}"#,
+            "ads.owVersionOverride",
         );
         check(
             r#"{"consent":{"readyTimeoutMs":0}}"#,
@@ -984,7 +1078,16 @@ mod tests {
         let warnings = apply_overrides(&mut cfg, &env, &sw);
         assert_eq!(warnings.len(), 1);
         assert!(cfg.ads.test_ad);
-        assert_eq!(cfg.packages_backend, PackagesBackend::Auto);
+        assert_eq!(cfg.packages_backend, PackagesBackend::None);
+        let env = EnvOverrides {
+            packages_backend: Some("simulated".into()),
+            ..EnvOverrides::default()
+        };
+        let warnings = apply_overrides(&mut cfg, &env, &Switches::default());
+        assert_eq!(
+            warnings,
+            ["OW_TAURI_PACKAGES_BACKEND=\"simulated\" is not none or native; ignored"]
+        );
     }
 
     #[test]

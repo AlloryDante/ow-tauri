@@ -18,7 +18,8 @@
 //!   "overwolf": { "packages": ["gep", "utility"] },
 //!   "build": { "productName": "My App", "overwolf": { "disableAdOptimization": true } }
 //! }"#).unwrap();
-//! assert_eq!(parsed.manifest.product_name, "My App");
+//! // `build.productName` is ignored at runtime, as ow-electron ignores it (G.1).
+//! assert_eq!(parsed.manifest.product_name, "my-app");
 //! assert_eq!(parsed.manifest.author, "Example Studio");
 //! assert!(parsed.manifest.build_overwolf.disable_ad_optimization);
 //! ```
@@ -38,7 +39,8 @@ pub const KNOWN_PACKAGES: [&str; 5] = ["gep", "overlay", "recorder", "utility", 
 pub struct EmbeddedManifest {
     /// `package.json` `name`, or the app name when `name` is absent.
     pub name: String,
-    /// The app name (G.1): `build.productName`, else `productName`, else `name`.
+    /// The app name `<PN>` (G.1): `productName` if it is a non-empty string,
+    /// else `name`. `build.productName` is ignored, as ow-electron ignores it.
     pub product_name: String,
     /// `package.json` `version`.
     pub version: String,
@@ -233,7 +235,7 @@ fn optional_bool(
 /// Parses and validates `package.json` text (CONTRACT G.1, G.3).
 ///
 /// Validation errors (the build fails): the file is not a JSON object; both
-/// `name` and `productName` are missing (and no `build.productName`);
+/// `name` and `productName` are missing;
 /// `overwolf.packages` is not an array of strings; a `build.overwolf` flag is
 /// not a boolean; a string field has another type.
 ///
@@ -277,12 +279,17 @@ pub fn parse_package_json(text: &str) -> Result<ParsedManifest, ManifestError> {
         Some(b) => optional_string(b, "productName", "build.productName")?,
         None => None,
     };
-    let app_name = build_product_name
-        .clone()
-        .or(product_name)
+    let app_name = product_name
+        .filter(|s| !s.is_empty())
         .or_else(|| name.clone())
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| err("name", "name or productName is required"))?;
+    if build_product_name.as_deref().is_some_and(|b| b != app_name) {
+        warnings.push(warn(
+            "build.productName",
+            "build.productName is ignored at runtime, as ow-electron ignores it; the app name and uid use productName or name",
+        ));
+    }
 
     let version = match optional_string(&root, "version", "version")? {
         Some(v) if !v.trim().is_empty() => v,
@@ -299,7 +306,7 @@ pub fn parse_package_json(text: &str) -> Result<ParsedManifest, ManifestError> {
         None | Some(Value::Null) => {
             warnings.push(warn(
                 "author",
-                "missing; the computed uid uses an empty author, set it before the first release",
+                "missing; the computed uid uses the author \"unknown\", set it before the first release",
             ));
             String::new()
         }
@@ -383,7 +390,7 @@ pub fn parse_package_json(text: &str) -> Result<ParsedManifest, ManifestError> {
 
     if app_name.to_ascii_lowercase().contains("bot") {
         warnings.push(warn(
-            if build_product_name.is_some() { "build.productName" } else { "productName" },
+            "productName",
             "the app name contains \"bot\"; Overwolf refuses such names because ad partners see them",
         ));
     }
@@ -499,6 +506,11 @@ pub fn tauri_conf_warnings(manifest: &EmbeddedManifest, conf: &Value) -> Vec<Man
             ),
         ));
     }
+    if let Some(plugin) = conf.pointer("/plugins/overwolf") {
+        for message in crate::config::removed_key_warnings(plugin) {
+            out.push(warn("plugins.overwolf", message));
+        }
+    }
     out
 }
 
@@ -526,7 +538,8 @@ mod tests {
         let parsed = parse_package_json(SAMPLE).unwrap();
         let m = &parsed.manifest;
         assert_eq!(m.name, "overwolf-official-sample-app");
-        assert_eq!(m.product_name, "Overwolf Electron Official Sample App");
+        // `build.productName` is electron-builder's; the runtime name is `name` (G.1).
+        assert_eq!(m.product_name, "overwolf-official-sample-app");
         assert_eq!(m.author, "Overwolf Ltd.");
         assert_eq!(m.version, "1.0.0");
         assert_eq!(
@@ -542,14 +555,16 @@ mod tests {
         assert!(!m.raw.contains_key("scripts"));
         assert!(!m.raw.contains_key("devDependencies"));
         assert!(m.raw.contains_key("main"));
-        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        let paths: Vec<&str> = parsed.warnings.iter().map(|w| w.path.as_str()).collect();
+        assert_eq!(paths, ["build.productName"]);
     }
 
     #[test]
     fn product_name_precedence() {
         let p = parse_package_json(r#"{"name":"n","productName":"P","build":{"productName":"B"}}"#)
             .unwrap();
-        assert_eq!(p.manifest.product_name, "B");
+        assert_eq!(p.manifest.product_name, "P");
+        assert!(p.warnings.iter().any(|w| w.path == "build.productName"));
         let p = parse_package_json(r#"{"name":"n","productName":"P"}"#).unwrap();
         assert_eq!(p.manifest.product_name, "P");
         let p = parse_package_json(r#"{"name":"n"}"#).unwrap();

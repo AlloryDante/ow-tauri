@@ -82,7 +82,13 @@ pub struct AppIdentity {
 /// ```
 #[must_use]
 pub fn resolve_uid(config_uid: Option<&str>, manifest: &EmbeddedManifest) -> AppIdentity {
-    let cuid = computed_uid(&manifest.author, &manifest.product_name);
+    // G.2: a missing or empty author hashes as `unknown`.
+    let author = if manifest.author.is_empty() {
+        "unknown"
+    } else {
+        manifest.author.as_str()
+    };
+    let cuid = computed_uid(author, &manifest.product_name);
     let config_uid = config_uid.map(str::trim).filter(|s| is_valid_uid(s));
     let manifest_uid = manifest
         .overwolf
@@ -156,6 +162,33 @@ pub fn is_valid_muid(s: &str) -> bool {
         })
 }
 
+/// The machine-id muid (E.4, matches ow-electron, observed on macOS): the
+/// lower-case hex SHA-256 of the lower-cased platform id, cut into the
+/// 8-4-4-4-12 UUID layout, with no version or variant bits forced.
+///
+/// ```
+/// use tauri_plugin_overwolf::identity::{machine_muid, phase_percent};
+/// let m = machine_muid("2D59BF70-9641-826A-F003-C362834EC045");
+/// assert_eq!(m, "5bd79133-f3bf-be27-e448-a4581ab5f3cd");
+/// assert_eq!(phase_percent(&m), 80);
+/// ```
+#[must_use]
+pub fn machine_muid(platform_id: &str) -> String {
+    let digest = sha2::Sha256::digest(platform_id.trim().to_lowercase().as_bytes());
+    let hex: String = digest.iter().fold(String::with_capacity(64), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    });
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
 /// Formats 16 random bytes as an upper-case UUID v4 muid (E.4 `per-install`).
 ///
 /// ```
@@ -193,19 +226,27 @@ pub enum HashEncoding {
     Base64,
 }
 
-/// `overwolf.EmailHashes`: `{ sha1?, sha256?, md5? }`.
+/// `overwolf.EmailHashes`: `{ sha1?, sha256?, md5? }`, serialised in
+/// ow-electron's key order `sha1`, `md5`, `sha256` (A.2.2).
+///
+/// ```
+/// use tauri_plugin_overwolf::identity::{email_hashes, HashEncoding};
+/// let json = serde_json::to_string(&email_hashes("a@b.c", HashEncoding::Hex)).unwrap();
+/// let (sha1, md5, sha256) = (json.find("sha1").unwrap(), json.find("md5").unwrap(), json.find("sha256").unwrap());
+/// assert!(sha1 < md5 && md5 < sha256);
+/// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmailHashes {
     /// SHA-1 of the normalised address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha1: Option<String>,
-    /// SHA-256 of the normalised address.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sha256: Option<String>,
     /// MD5 of the normalised address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub md5: Option<String>,
+    /// SHA-256 of the normalised address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
 }
 
 impl EmailHashes {
@@ -219,7 +260,7 @@ impl EmailHashes {
     /// ```
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        [&self.sha1, &self.sha256, &self.md5]
+        [&self.sha1, &self.md5, &self.sha256]
             .iter()
             .all(|h| h.as_deref().is_none_or(str::is_empty))
     }
@@ -279,8 +320,8 @@ pub fn email_hashes(email: &str, encoding: HashEncoding) -> EmailHashes {
     };
     EmailHashes {
         sha1: Some(encode(&sha1)),
-        sha256: Some(encode(&sha256)),
         md5: Some(encode(&md5)),
+        sha256: Some(encode(&sha256)),
     }
 }
 
@@ -289,30 +330,144 @@ mod tests {
     use super::*;
     use crate::manifest::EmbeddedManifest;
 
+    /// CONTRACT G.2 vectors 1 to 13, through the package.json parser.
     #[test]
+    #[expect(clippy::too_many_lines, reason = "one table of contract vectors")]
     fn uid_vectors() {
-        // (author, app name, uid): the upstream sample with build.productName and
-        // with its npm name, a neutral example, and the empty edge case.
-        let vectors = [
+        let uid_of = |fields: &str| {
+            let text = format!(r#"{{"version":"1.0.0",{fields}}}"#);
+            let parsed = crate::manifest::parse_package_json(&text).unwrap();
+            resolve_uid(None, &parsed.manifest).uid
+        };
+        let vectors: [(&str, &str); 22] = [
             (
-                "Overwolf Ltd.",
-                "Overwolf Electron Official Sample App",
-                "djpddhibpjddgdpcfkbooljealnjnamkhlihgbab",
+                r#""name":"parity-harness","author":{"name":"Example Studio"}"#,
+                "binaioonkjpolnojeenpbmjmbfkbmffcekndbmdk",
             ),
             (
-                "Overwolf Ltd.",
-                "overwolf-official-sample-app",
-                "nihmfahfaloahhjpignlkjlkfemlnlnndmgjcfbh",
+                r#""name":"parity-harness","author":"Example Studio""#,
+                "binaioonkjpolnojeenpbmjmbfkbmffcekndbmdk",
             ),
             (
-                "Example Studio",
-                "Example App",
-                "cbcpjpfokndifakfgkfmgepmdbhaipkabdadkjnn",
+                r#""name":"parity-harness","author":"Example Studio","build":{"productName":"Parity Build Name"}"#,
+                "binaioonkjpolnojeenpbmjmbfkbmffcekndbmdk",
             ),
-            ("", "", "infekmdkkifnlpbanpiolmenifiddcgfchceimhc"),
+            (
+                r#""name":"parity-harness","productName":"Parity Harness","author":{"name":"Example Studio"}"#,
+                "bijigndkghcikkfmhgkmicdkjpdehpjafgpmdhcc",
+            ),
+            (
+                r#""name":"parity-harness","author":"Overwolf Ltd.""#,
+                "djaoacjhpjaenfddlfmkeoiklmccgcgcgeknhmgj",
+            ),
+            (
+                r#""name":"parity-harness","productName":"Parity Harness","author":"Overwolf Ltd.""#,
+                "aejkligdodglhcjinbhdcnlohocenfkpdihjacdg",
+            ),
+            (
+                r#""name":"parity-harness","author":"Example Studio <dev@example.com> (https://example.com)""#,
+                "agmekflfehlhfcnofnhghbgohnigngnkddpkdbnc",
+            ),
+            (
+                r#""name":"parity-harness","productName":"Parity Harness","author":"Example Studio <dev@example.com> (https://example.com)""#,
+                "cmbaaahkhdbkbbfcmenfbmmngmommpjjacllbgan",
+            ),
+            (
+                r#""name":"parity-harness","author":"Example Studio <dev@example.com>""#,
+                "mcfopdapolegaeddgbbfedginnmcnmjldgdcbcjo",
+            ),
+            (
+                r#""name":"parity-harness""#,
+                "nbhlaphlggihmjefpjdelbobckfhklbfkiicjaja",
+            ),
+            (
+                r#""name":"parity-harness","author":{}"#,
+                "nbhlaphlggihmjefpjdelbobckfhklbfkiicjaja",
+            ),
+            (
+                r#""name":"parity-harness","author":"""#,
+                "nbhlaphlggihmjefpjdelbobckfhklbfkiicjaja",
+            ),
+            (
+                r#""name":"parity-harness","author":null"#,
+                "nbhlaphlggihmjefpjdelbobckfhklbfkiicjaja",
+            ),
+            (
+                r#""name":"parity-harness","author":{"email":"dev@example.com"}"#,
+                "nbhlaphlggihmjefpjdelbobckfhklbfkiicjaja",
+            ),
+            (
+                r#""name":"parity-harness","productName":"Parity Harness""#,
+                "fifpcfmoobnjlimjhefehejankadpajlfgbmpheo",
+            ),
+            (
+                r#""name":"parity-harness","productName":"Parity Harness","author":{}"#,
+                "fifpcfmoobnjlimjhefehejankadpajlfgbmpheo",
+            ),
+            (
+                r#""name":"parity-harness","productName":"Parity Harness","author":"""#,
+                "fifpcfmoobnjlimjhefehejankadpajlfgbmpheo",
+            ),
+            (
+                r#""name":"parity-harness","productName":"Pârity Ünicode","author":{"name":"Exämple"}"#,
+                "mmfoflmmchoacblhjlimpanaijdnhgoalaloihjd",
+            ),
+            (
+                r#""name":"parity-harness","productName":"O'Brien Tools","author":{"name":"D'Arcy"}"#,
+                "khalfglcmeemfnjoldckbfmeeidgkoabeebkpbbl",
+            ),
+            (
+                r#""name":"parity-harness","productName":" Parity Harness ","author":{"name":" Example Studio "}"#,
+                "cppaiialckdbmhdojecejpjafcblbingfdiffkdi",
+            ),
+            (
+                r#""name":"parity-harness","author":"Example Studio","overwolf":{"uid":"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjj"}"#,
+                "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjj",
+            ),
+            (
+                r#""name":"other","productName":"Other","author":"Someone","overwolf":{"uid":"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjj"}"#,
+                "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjj",
+            ),
         ];
-        for (author, name, uid) in vectors {
-            assert_eq!(computed_uid(author, name), uid, "{author} / {name}");
+        for (fields, uid) in vectors {
+            assert_eq!(uid_of(fields), uid, "{fields}");
+        }
+        // The cuid stays the computed value when the manifest uid wins.
+        let text = r#"{"version":"1.0.0","name":"parity-harness","author":"Overwolf Ltd.","overwolf":{"uid":"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjj"}}"#;
+        let parsed = crate::manifest::parse_package_json(text).unwrap();
+        assert_eq!(
+            resolve_uid(None, &parsed.manifest).cuid,
+            "djaoacjhpjaenfddlfmkeoiklmccgcgcgeknhmgj"
+        );
+    }
+
+    #[test]
+    fn machine_muid_vectors() {
+        for (id, muid, phase) in [
+            (
+                "2D59BF70-9641-826A-F003-C362834EC045",
+                "5bd79133-f3bf-be27-e448-a4581ab5f3cd",
+                80,
+            ),
+            (
+                "DA3889E5-CB8A-8A15-CD1B-DCE6B5A71203",
+                "601860a3-90c7-b77b-a42e-636035921a81",
+                51,
+            ),
+            (
+                "D668AFF2-C8FD-39A3-6B92-D57DED8E5461",
+                "5d841b98-54cb-5f57-73bc-297706f34221",
+                62,
+            ),
+            (
+                "58468E7A-3E77-8816-5D62-7371174B102C",
+                "cbec68c3-9e97-b465-f479-f8493f973f32",
+                24,
+            ),
+        ] {
+            assert_eq!(machine_muid(id), muid, "{id}");
+            assert_eq!(machine_muid(&id.to_lowercase()), muid, "case-insensitive");
+            assert_eq!(phase_percent(muid), phase, "{muid}");
         }
     }
 

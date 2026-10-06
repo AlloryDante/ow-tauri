@@ -22,8 +22,13 @@ use crate::ipc::messages::WindowEventName;
 
 /// The main webview's label.
 pub const MAIN_LABEL: &str = crate::ipc::router::MAIN_LABEL;
-/// The consent window's label.
+/// The consent settings window's label (D.6.4).
 pub const CMP_LABEL: &str = "ow-cmp";
+/// The first startup consent window's label (D.6.1); later ones of the same
+/// launch are `ow-cmp-startup-<n>` (D.6.2, `{}` body).
+pub const CMP_STARTUP_LABEL: &str = "ow-cmp-startup";
+/// The default-consent window's label (D.6.4).
+pub const CMP_DEFAULT_LABEL: &str = "ow-cmp-default";
 
 /// The class of a webview, from its label alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -36,7 +41,8 @@ pub enum WebviewClass {
     Remote(u32),
     /// `owad-<embedder>-<n>`.
     AdviewGuest,
-    /// `ow-cmp`.
+    /// `ow-cmp`, `ow-cmp-default`, `ow-cmp-startup` or
+    /// `ow-cmp-startup-<n>`: the consent windows (D.6).
     Cmp,
     /// Anything else (app-created webviews).
     Other,
@@ -58,7 +64,14 @@ fn parse_id(s: &str) -> Option<u32> {
 pub fn classify(label: &str) -> WebviewClass {
     if label == MAIN_LABEL {
         WebviewClass::Main
-    } else if label == CMP_LABEL {
+    } else if label == CMP_LABEL
+        || label == CMP_DEFAULT_LABEL
+        || label == CMP_STARTUP_LABEL
+        || label
+            .strip_prefix("ow-cmp-startup-")
+            .and_then(parse_id)
+            .is_some()
+    {
         WebviewClass::Cmp
     } else if let Some(id) = label.strip_prefix("bwr-").and_then(parse_id) {
         WebviewClass::Remote(id)
@@ -124,6 +137,105 @@ pub struct WindowEntry {
     pub state: WindowState,
     /// `ready-to-show` was sent.
     pub shown_ready: bool,
+    /// The `title` constructor option, else `<PN>` (E.2 #7).
+    pub title: String,
+    /// A page load has finished in the window.
+    pub loaded: bool,
+    /// The analytics name, fixed the first time the window is visible with
+    /// a loaded page (E.2 #7).
+    pub analytics_name: Option<String>,
+    /// Start of the current visible period, in host milliseconds.
+    pub visible_since: Option<u64>,
+}
+
+/// What a visibility observation changed (E.2 #5, #7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VisibilityChange {
+    /// Nothing.
+    None,
+    /// A visible period started.
+    Shown,
+    /// A visible period ended.
+    Ended(VisiblePeriod),
+}
+
+/// One finished visible period of a window (E.2 #7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisiblePeriod {
+    /// The analytics name.
+    pub name: String,
+    /// The constructor title.
+    pub title: String,
+    /// Milliseconds visible.
+    pub visible_ms: u64,
+}
+
+impl WindowEntry {
+    fn fix_name(&mut self, url: Option<&str>) {
+        if self.analytics_name.is_none()
+            && self.loaded
+            && let Some(url) = url
+        {
+            self.analytics_name = Some(crate::analytics::window_analytics_name(url));
+        }
+    }
+
+    /// Records whether the window is visible now; `url` is the document
+    /// it shows.
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::window::{VisibilityChange, WindowKind, WindowRegistry, WindowState};
+    /// let mut r = WindowRegistry::new();
+    /// r.insert(1, WindowKind::Ui, WindowState::default());
+    /// let e = r.get_mut(1).unwrap();
+    /// e.title = "Example".into();
+    /// e.page_finished(false, Some("tauri://localhost/index.html"));
+    /// assert_eq!(e.observe_visibility(true, 1_000, Some("tauri://localhost/index.html")), VisibilityChange::Shown);
+    /// let VisibilityChange::Ended(p) = e.observe_visibility(false, 2_600, None) else { panic!() };
+    /// assert_eq!((p.name.as_str(), p.title.as_str(), p.visible_ms), ("index", "Example", 1_600));
+    /// ```
+    pub fn observe_visibility(
+        &mut self,
+        visible: bool,
+        now_ms: u64,
+        url: Option<&str>,
+    ) -> VisibilityChange {
+        match (visible, self.visible_since) {
+            (true, None) => {
+                self.visible_since = Some(now_ms);
+                self.fix_name(url);
+                VisibilityChange::Shown
+            }
+            (false, Some(_)) => self
+                .end_visible_period(now_ms, url)
+                .map_or(VisibilityChange::None, VisibilityChange::Ended),
+            _ => VisibilityChange::None,
+        }
+    }
+
+    /// A page load finished; fixes the name when the window is visible.
+    pub fn page_finished(&mut self, visible: bool, url: Option<&str>) {
+        self.loaded = true;
+        if visible || self.visible_since.is_some() {
+            self.fix_name(url);
+        }
+    }
+
+    /// Ends the current visible period (hide, close or quit), if any.
+    pub fn end_visible_period(&mut self, now_ms: u64, url: Option<&str>) -> Option<VisiblePeriod> {
+        let since = self.visible_since.take()?;
+        let name = self.analytics_name.clone().unwrap_or_else(|| {
+            url.map_or_else(
+                || "blank".to_owned(),
+                crate::analytics::window_analytics_name,
+            )
+        });
+        Some(VisiblePeriod {
+            name,
+            title: self.title.clone(),
+            visible_ms: now_ms.saturating_sub(since),
+        })
+    }
 }
 
 /// The windows the plugin created for `BrowserWindow`s.
@@ -162,6 +274,10 @@ impl WindowRegistry {
                 name: None,
                 state,
                 shown_ready: false,
+                title: String::new(),
+                loaded: false,
+                analytics_name: None,
+                visible_since: None,
             },
         );
     }
@@ -328,8 +444,62 @@ mod tests {
         assert_eq!(classify("bwr-12"), WebviewClass::Remote(12));
         assert_eq!(classify("owad-"), WebviewClass::Other);
         assert_eq!(classify("main"), WebviewClass::Other);
+        assert_eq!(classify("ow-cmp-startup-0"), WebviewClass::Other);
+        assert_eq!(classify("ow-cmp-startup-x"), WebviewClass::Other);
         assert_eq!(ui_label(7), "bw-7");
         assert_eq!(remote_label(7), "bwr-7");
+    }
+
+    #[test]
+    fn visible_periods() {
+        let mut r = WindowRegistry::new();
+        r.insert(1, WindowKind::Ui, WindowState::default());
+        let e = r.get_mut(1).unwrap();
+        e.title = "T".into();
+        // Shown before any load: the name waits for the load.
+        assert_eq!(
+            e.observe_visibility(true, 0, Some("about:blank")),
+            VisibilityChange::Shown
+        );
+        assert_eq!(e.analytics_name, None);
+        e.page_finished(true, Some("tauri://localhost/pages/Main%20View.html?x=1"));
+        assert_eq!(e.analytics_name.as_deref(), Some("MainView"));
+        // Later navigations never rename it.
+        e.page_finished(true, Some("tauri://localhost/other.html"));
+        assert_eq!(
+            e.observe_visibility(true, 500, None),
+            VisibilityChange::None
+        );
+        // hide() ends the period; a later close sends nothing more.
+        let VisibilityChange::Ended(p) = e.observe_visibility(false, 90_400, None) else {
+            panic!("period ended")
+        };
+        assert_eq!(
+            p,
+            VisiblePeriod {
+                name: "MainView".into(),
+                title: "T".into(),
+                visible_ms: 90_400
+            }
+        );
+        assert_eq!(e.end_visible_period(91_000, None), None);
+        // Shown again and closed while visible: another period.
+        assert_eq!(
+            e.observe_visibility(true, 100_000, None),
+            VisibilityChange::Shown
+        );
+        assert_eq!(
+            e.end_visible_period(101_500, None).map(|p| p.visible_ms),
+            Some(1_500)
+        );
+        // A window shown but never loaded reports its current URL.
+        r.insert(2, WindowKind::Ui, WindowState::default());
+        let e = r.get_mut(2).unwrap();
+        e.observe_visibility(true, 0, None);
+        assert_eq!(
+            e.end_visible_period(2_000, None).map(|p| p.name),
+            Some("blank".into())
+        );
     }
 
     #[test]

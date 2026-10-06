@@ -8,10 +8,11 @@ use tauri::webview::{PageLoadEvent, PageLoadPayload};
 use tauri::{AppHandle, Manager, RunEvent, Runtime, Webview, WindowEvent};
 use url::Url;
 
+use crate::analytics::Transport;
 use crate::config::Config;
 use crate::ext::Overwolf;
 use crate::host::{Host, SetupOptions};
-use crate::packages::{PackageRuntime, PackagesBackend};
+use crate::packages::PackagesBackend;
 use crate::state::log::LogLevel;
 use crate::window::{WebviewClass, classify};
 
@@ -23,7 +24,7 @@ pub use crate::commands::list::COMMANDS;
 /// # fn manifest() -> &'static str { "{}" }
 /// let plugin = tauri_plugin_overwolf::Builder::new()
 ///     .manifest_json(manifest()) // tauri_plugin_overwolf::embedded_manifest!() in an app
-///     .packages_backend(tauri_plugin_overwolf::PackagesBackend::Auto)
+///     .packages_backend(tauri_plugin_overwolf::PackagesBackend::None)
 ///     .build::<tauri::Wry>();
 /// # let _ = plugin;
 /// ```
@@ -71,8 +72,8 @@ impl Builder {
         self
     }
 
-    /// Which package runtime to use (H.1); overrides `packagesBackend` in
-    /// the configuration.
+    /// `packagesBackend` (H.2): `None` (default) or the reserved `Native`;
+    /// overrides the configuration.
     ///
     /// ```rust
     /// use tauri_plugin_overwolf::{Builder, PackagesBackend};
@@ -84,17 +85,32 @@ impl Builder {
         self
     }
 
-    /// Registers a native package runtime (H.2).
+    /// `analytics.hostLabel` and `analytics.hostVersion` (CONTRACT section
+    /// 0); `None` keeps the Tauri crate version.
+    ///
+    /// ```rust
+    /// // Reproduce ow-electron's analytics labels exactly.
+    /// let builder = tauri_plugin_overwolf::Builder::new()
+    ///     .host_label("electron", Some("42.11.4".into()));
+    /// # let _ = builder;
+    /// ```
+    pub fn host_label(mut self, label: impl Into<String>, version: Option<String>) -> Self {
+        self.options.host_label = Some((label.into(), version));
+        self
+    }
+
+    /// Replaces the HTTP client of every host request (analytics and the
+    /// consent request), for tests that capture requests (E.3).
     ///
     /// ```no_run
     /// use std::sync::Arc;
-    /// use tauri_plugin_overwolf::packages::PackageRuntime;
-    /// fn with_runtime(runtime: Arc<dyn PackageRuntime>) -> tauri_plugin_overwolf::Builder {
-    ///     tauri_plugin_overwolf::Builder::new().package_runtime(runtime)
+    /// use tauri_plugin_overwolf::analytics::Transport;
+    /// fn with_capture(t: Arc<dyn Transport>) -> tauri_plugin_overwolf::Builder {
+    ///     tauri_plugin_overwolf::Builder::new().analytics_transport(t)
     /// }
     /// ```
-    pub fn package_runtime(mut self, runtime: Arc<dyn PackageRuntime>) -> Self {
-        self.options.package_runtime = Some(runtime);
+    pub fn analytics_transport(mut self, transport: Arc<dyn Transport>) -> Self {
+        self.options.transport = Some(transport);
         self
     }
 
@@ -229,6 +245,8 @@ fn setup<R: Runtime>(
     if host.options.runtime_capabilities {
         let capability = crate::capabilities::main_capability()?;
         app.add_capability(capability)?;
+        app.add_capability(crate::capabilities::adview_guest_capability()?)?;
+        app.add_capability(crate::capabilities::cmp_capability()?)?;
     }
     if host.options.companion_plugins {
         register_companions(app);
@@ -309,6 +327,8 @@ fn on_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
             }
         }
         RunEvent::Exit => host.on_exit(),
+        // D.6.1, D.6.2: the consent request and startup window of the launch.
+        RunEvent::Ready => host.start_consent(),
         RunEvent::WindowEvent { label, event, .. } => window_event(&host, label, event),
         #[cfg(target_os = "macos")]
         RunEvent::Reopen {
@@ -339,7 +359,17 @@ pub(crate) fn window_event<R: Runtime>(host: &Arc<Host<R>>, label: &str, event: 
             WindowEvent::Destroyed => host.main_destroyed(),
             _ => {}
         },
-        WebviewClass::Ui(id) => host.window_event(id, event),
+        WebviewClass::Ui(id) => {
+            if let WindowEvent::Focused(focused) = event {
+                host.ads_window_focus(id, *focused);
+            }
+            host.window_event(id, event);
+        }
+        WebviewClass::Cmp => {
+            if matches!(event, WindowEvent::Destroyed) {
+                host.consent_window_gone(label);
+            }
+        }
         _ => {}
     }
 }
@@ -353,6 +383,8 @@ pub(crate) fn navigation<R: Runtime>(host: &Arc<Host<R>>, label: &str, url: &Url
     match classify(label) {
         WebviewClass::Main => host.main_navigation(url),
         WebviewClass::Ui(id) => host.ui_navigation(id, url),
+        WebviewClass::AdviewGuest => host.guest_navigation(label, url),
+        WebviewClass::Cmp => host.cmp_navigation(label, url),
         _ => true,
     }
 }
@@ -374,7 +406,9 @@ pub(crate) fn page_load<R: Runtime>(
         WebviewClass::Main => host.main_page_load(event, url),
         WebviewClass::Ui(id) => host.window_page_load(id, true, label, event, url),
         WebviewClass::Remote(id) => host.window_page_load(id, false, label, event, url),
-        _ => {}
+        WebviewClass::AdviewGuest => host.guest_page_load(label, event, url),
+        WebviewClass::Cmp => host.consent_page_load(label, event, url),
+        WebviewClass::Other => {}
     }
 }
 

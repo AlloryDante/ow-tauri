@@ -4,11 +4,15 @@
 # capability file, matched by webview label only.
 [[set]]
 identifier = "renderer"
-description = "Commands of UI and overlay webviews (`bw-*`): the IPC router and `executeJavaScript` results."
+description = "Commands of UI and overlay webviews (`bw-*`): the IPC router, `executeJavaScript` results and `<owadview>` guests."
 permissions = [
   "allow-ipc-subscribe",
   "allow-ipc-invoke",
   "allow-ipc-send",
   "allow-ipc-skip",
   "allow-eval-result",
+  "allow-adview-mount",
+  "allow-adview-update",
+  "allow-adview-unmount",
+  "allow-adview-command",
 ]

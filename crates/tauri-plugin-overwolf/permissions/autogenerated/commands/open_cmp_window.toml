@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-open-cmp-window"
+description = "Enables the open_cmp_window command without any pre-configured scope."
+commands.allow = ["open_cmp_window"]
+
+[[permission]]
+identifier = "deny-open-cmp-window"
+description = "Denies the open_cmp_window command without any pre-configured scope."
+commands.deny = ["open_cmp_window"]

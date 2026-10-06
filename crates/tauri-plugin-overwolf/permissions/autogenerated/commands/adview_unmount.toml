@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-adview-unmount"
+description = "Enables the adview_unmount command without any pre-configured scope."
+commands.allow = ["adview_unmount"]
+
+[[permission]]
+identifier = "deny-adview-unmount"
+description = "Denies the adview_unmount command without any pre-configured scope."
+commands.deny = ["adview_unmount"]

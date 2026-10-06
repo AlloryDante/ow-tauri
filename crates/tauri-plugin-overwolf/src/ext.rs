@@ -70,18 +70,18 @@ impl<R: Runtime> Overwolf<R> {
         &self.0.info.muid
     }
 
-    /// Equals [`Overwolf::muid`] (OQ-02).
+    /// `muidV2` (E.4): equal to [`Overwolf::muid`] except on Windows when the
+    /// shared registry values differ.
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::OverwolfExt;
     /// # fn example(app: &tauri::AppHandle) {
-    /// let ow = app.overwolf();
-    /// assert_eq!(ow.muid_v2(), ow.muid());
+    /// assert_eq!(app.overwolf().muid_v2().len(), 36);
     /// # }
     /// ```
     #[must_use]
     pub fn muid_v2(&self) -> &str {
-        &self.0.info.muid
+        &self.0.info.muid_v2
     }
 
     /// The phase percent derived from the muid.
@@ -97,19 +97,19 @@ impl<R: Runtime> Overwolf<R> {
         self.0.info.phase_percent
     }
 
-    /// `ow-electron.json` `utmParams`, or `null`.
+    /// `ow-electron.json` `utmParams`, or `None` when there are none.
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::OverwolfExt;
     /// # fn example(app: &tauri::AppHandle) {
-    /// if let Some(source) = app.overwolf().utm_params().get("utm_source") {
+    /// if let Some(source) = app.overwolf().utm_params().and_then(|u| u.get("utm_source")) {
     ///     println!("installed from {source}");
     /// }
     /// # }
     /// ```
     #[must_use]
-    pub fn utm_params(&self) -> &Value {
-        &self.0.info.utm_params
+    pub fn utm_params(&self) -> Option<&Value> {
+        self.0.info.utm_params.as_ref()
     }
 
     /// The embedded manifest.
@@ -188,6 +188,7 @@ impl<R: Runtime> Overwolf<R> {
         self.set_flag("anonymousAnalyticsDisabled", |f| {
             f.anonymous_analytics_disabled = true;
         });
+        self.0.disable_anonymous_analytics();
     }
 
     /// `disableAdsOptimization()` (A.2.2).
@@ -268,6 +269,29 @@ impl<R: Runtime> Overwolf<R> {
         self.0.main_crashed();
     }
 
+    /// Reports that the web content process of a webview ended. Apps forward
+    /// every `tauri::Builder::on_web_content_process_terminate` call (macOS)
+    /// here: for `ow-main` it is [`Self::report_main_webview_crash`], for an
+    /// ad guest (`owad-*`) the crash recovery of D.7, for a consent window
+    /// (`ow-cmp*`) its failure path (D.6.1). Other labels are ignored.
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(webview: &tauri::Webview) {
+    /// // From `tauri::Builder::on_web_content_process_terminate`:
+    /// webview.overwolf().report_web_content_terminated(webview.label());
+    /// # }
+    /// ```
+    pub fn report_web_content_terminated(&self, label: &str) {
+        match crate::window::classify(label) {
+            crate::window::WebviewClass::Main => self.0.main_crashed(),
+            crate::window::WebviewClass::AdviewGuest | crate::window::WebviewClass::Cmp => {
+                self.0.web_content_terminated(label);
+            }
+            _ => {}
+        }
+    }
+
     /// Starts the graceful quit sequence (A.6), as `app.quit()` does.
     ///
     /// ```no_run
@@ -338,6 +362,69 @@ impl<R: Runtime> Overwolf<R> {
     #[must_use]
     pub fn test_exiting(&self) -> bool {
         self.0.with_core(|c| c.exiting)
+    }
+
+    /// Milliseconds since setup on the host clock.
+    #[must_use]
+    pub fn test_now(&self) -> u64 {
+        self.0.now()
+    }
+
+    /// As `RunEvent::Ready`: starts this launch's consent round (D.6.1).
+    pub fn test_start_consent(&self) {
+        self.0.start_consent();
+    }
+
+    /// Whether ad guests may start their first navigation (D.6.5).
+    #[must_use]
+    pub fn test_consent_gate_open(&self) -> bool {
+        self.0.consent_gate_open()
+    }
+
+    /// The hidden consent windows that are still open.
+    #[must_use]
+    pub fn test_hidden_consent_windows(&self) -> Vec<String> {
+        self.0
+            .with_core(|c| c.consent.hidden.keys().cloned().collect())
+    }
+
+    /// `isCMPRequired()` (D.6.2).
+    pub async fn test_is_cmp_required(&self) -> bool {
+        self.0.is_cmp_required().await
+    }
+
+    /// One ads timer step at `now_ms` on the host clock (a fake clock).
+    pub fn test_ads_tick(&self, now_ms: u64) {
+        self.0.ads_tick(now_ms);
+    }
+
+    /// One consent timer step at `now_ms` on the host clock.
+    pub fn test_consent_tick(&self, now_ms: u64) {
+        self.0.consent_tick(now_ms);
+    }
+
+    /// The state of the ad guest `label`: `{ embedder, elementId, navigated,
+    /// ready, loads, recoveries, visible }`, or `None` when it is gone.
+    #[must_use]
+    pub fn test_guest(&self, label: &str) -> Option<Value> {
+        self.0.with_core(|c| {
+            c.ads.guests.get(label).map(|g| {
+                serde_json::json!({
+                    "embedder": g.embedder,
+                    "elementId": g.element_id,
+                    "navigated": g.navigated,
+                    "ready": g.ready,
+                    "loads": g.loads,
+                    "recoveries": g.recoveries,
+                    "visible": g.visible,
+                })
+            })
+        })
+    }
+
+    /// As if the platform reported a crash of the ad guest `label`.
+    pub fn test_guest_crashed(&self, label: &str, reason: crate::ads::GoneReason) {
+        self.0.guest_crashed(label, reason, 0);
     }
 }
 

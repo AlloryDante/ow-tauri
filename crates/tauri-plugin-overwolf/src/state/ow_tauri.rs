@@ -2,11 +2,10 @@
 //!
 //! ```
 //! use tauri_plugin_overwolf::state::ow_tauri::OwTauriState;
-//! let state: OwTauriState = serde_json::from_str(r#"{ "schema": 1, "packageChannels": { "gep": "beta" } }"#).unwrap();
-//! assert_eq!(state.package_channels["gep"], "beta");
+//! let state: OwTauriState = serde_json::from_str(r#"{ "schema": 1, "pendingBrowserArgs": ["--disable-gpu"] }"#).unwrap();
+//! assert_eq!(state.pending_browser_args, ["--disable-gpu"]);
 //! ```
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -25,24 +24,21 @@ pub struct OwTauriState {
     /// Schema version; a newer value is kept on write (never downgraded).
     #[serde(default = "default_schema")]
     pub schema: u32,
-    /// The `per-install` muid (E.4).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub muid: Option<String>,
     /// Updater staging bucket seed (I.2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staging_id: Option<String>,
-    /// `setChannel` persistence.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub package_channels: BTreeMap<String, String>,
-    /// Consent page ad-optimisation toggle.
+    /// Consent page ad-optimisation toggle (D.6.6).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ad_optimization: Option<bool>,
-    /// App-level analytics switch (`analytics.userSwitch` only).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub analytics_user_enabled: Option<bool>,
     /// Browser switches recorded by app code, applied from the next launch (A.1.1).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_browser_args: Vec<String>,
+    /// App-level analytics switch (`analytics.userSwitch` only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analytics_user_enabled: Option<bool>,
+    /// The `per-install` muid (E.4, ow-tauri option).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub muid: Option<String>,
     /// Shared `ow-electron.json` values kept here when that file is not valid
     /// JSON (F.2); never read back into `ow-electron.json`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -63,12 +59,11 @@ impl Default for OwTauriState {
     fn default() -> Self {
         OwTauriState {
             schema: SCHEMA,
-            muid: None,
             staging_id: None,
-            package_channels: BTreeMap::new(),
             ad_optimization: None,
-            analytics_user_enabled: None,
             pending_browser_args: Vec::new(),
+            analytics_user_enabled: None,
+            muid: None,
             ow_electron_fallback: None,
             created_by: format!("ow-tauri {}", env!("CARGO_PKG_VERSION")),
             extra: Map::new(),
@@ -96,10 +91,10 @@ pub struct OwTauriFile {
 ///
 /// ```
 /// use tauri_plugin_overwolf::state::ow_tauri::parse_lenient;
-/// let s = parse_lenient(br#"{"muid":"M","packageChannels":7}"#).unwrap();
+/// let s = parse_lenient(br#"{"muid":"M","pendingBrowserArgs":7}"#).unwrap();
 /// assert_eq!(s.muid.as_deref(), Some("M"));
-/// assert!(s.package_channels.is_empty());
-/// assert_eq!(s.extra["packageChannels"], 7);
+/// assert!(s.pending_browser_args.is_empty());
+/// assert_eq!(s.extra["pendingBrowserArgs"], 7);
 /// assert!(parse_lenient(b"garbage").is_none());
 /// ```
 #[must_use]
@@ -265,14 +260,11 @@ mod tests {
         let file = OwTauriFile::load(path.clone());
         assert!(!file.corrupt_at_load);
         assert_eq!(file.get().schema, 3);
-        file.update(|s| {
-            s.package_channels.insert("gep".into(), "beta".into());
-        })
-        .unwrap();
+        file.update(|s| s.ad_optimization = Some(true)).unwrap();
         let v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(v["schema"], 3, "never downgraded");
         assert_eq!(v["futureKey"], serde_json::json!({"a":1}));
-        assert_eq!(v["packageChannels"]["gep"], "beta");
+        assert_eq!(v["adOptimization"], true);
         assert_eq!(v["createdBy"], "ow-tauri 9.0.0");
         assert_eq!(v["muid"], "M");
         let _ = std::fs::remove_dir_all(&dir);

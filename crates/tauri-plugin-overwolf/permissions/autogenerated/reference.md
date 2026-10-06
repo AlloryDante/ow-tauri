@@ -14,6 +14,188 @@ Grants nothing; capabilities name `overwolf:main` or `overwolf:renderer` per web
 <tr>
 <td>
 
+`overwolf:adview-guest`
+
+</td>
+<td>
+
+The one command of an ad guest (`owad-*`) on https://www.overwolf.com/monsdk/electron/: `adview_event`.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:cmp-window`
+
+</td>
+<td>
+
+The one command of a consent window (`ow-cmp*`) on https://content.overwolf.com/monsdk/electron/: `cmp_event`.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:allow-adview-command`
+
+</td>
+<td>
+
+Enables the adview_command command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-adview-command`
+
+</td>
+<td>
+
+Denies the adview_command command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:allow-adview-event`
+
+</td>
+<td>
+
+Enables the adview_event command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-adview-event`
+
+</td>
+<td>
+
+Denies the adview_event command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:allow-adview-mount`
+
+</td>
+<td>
+
+Enables the adview_mount command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-adview-mount`
+
+</td>
+<td>
+
+Denies the adview_mount command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:allow-adview-unmount`
+
+</td>
+<td>
+
+Enables the adview_unmount command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-adview-unmount`
+
+</td>
+<td>
+
+Denies the adview_unmount command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:allow-adview-update`
+
+</td>
+<td>
+
+Enables the adview_update command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-adview-update`
+
+</td>
+<td>
+
+Denies the adview_update command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:allow-analytics-set-user-enabled`
+
+</td>
+<td>
+
+Enables the analytics_set_user_enabled command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-analytics-set-user-enabled`
+
+</td>
+<td>
+
+Denies the analytics_set_user_enabled command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `overwolf:allow-app-exit`
 
 </td>
@@ -118,6 +300,32 @@ Denies the app_quit_reply command without any pre-configured scope.
 <tr>
 <td>
 
+`overwolf:allow-app-record-browser-args`
+
+</td>
+<td>
+
+Enables the app_record_browser_args command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-app-record-browser-args`
+
+</td>
+<td>
+
+Denies the app_record_browser_args command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `overwolf:allow-app-relaunch`
 
 </td>
@@ -163,6 +371,32 @@ Enables the bootstrap command without any pre-configured scope.
 <td>
 
 Denies the bootstrap command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:allow-cmp-event`
+
+</td>
+<td>
+
+Enables the cmp_event command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-cmp-event`
+
+</td>
+<td>
+
+Denies the cmp_event command without any pre-configured scope.
 
 </td>
 </tr>
@@ -716,6 +950,32 @@ Denies the ipc_subscribe command without any pre-configured scope.
 <tr>
 <td>
 
+`overwolf:allow-is-cmp-required`
+
+</td>
+<td>
+
+Enables the is_cmp_required command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-is-cmp-required`
+
+</td>
+<td>
+
+Denies the is_cmp_required command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `overwolf:allow-log`
 
 </td>
@@ -768,6 +1028,188 @@ Denies the main_ready command without any pre-configured scope.
 <tr>
 <td>
 
+`overwolf:allow-open-ad-privacy-settings-window`
+
+</td>
+<td>
+
+Enables the open_ad_privacy_settings_window command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-open-ad-privacy-settings-window`
+
+</td>
+<td>
+
+Denies the open_ad_privacy_settings_window command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:allow-open-cmp-window`
+
+</td>
+<td>
+
+Enables the open_cmp_window command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-open-cmp-window`
+
+</td>
+<td>
+
+Denies the open_cmp_window command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:allow-packages-get-available-channels`
+
+</td>
+<td>
+
+Enables the packages_get_available_channels command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-packages-get-available-channels`
+
+</td>
+<td>
+
+Denies the packages_get_available_channels command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:allow-packages-get-channel`
+
+</td>
+<td>
+
+Enables the packages_get_channel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-packages-get-channel`
+
+</td>
+<td>
+
+Denies the packages_get_channel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:allow-packages-relaunch`
+
+</td>
+<td>
+
+Enables the packages_relaunch command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-packages-relaunch`
+
+</td>
+<td>
+
+Denies the packages_relaunch command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:allow-packages-set-channel`
+
+</td>
+<td>
+
+Enables the packages_set_channel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-packages-set-channel`
+
+</td>
+<td>
+
+Denies the packages_set_channel command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:allow-packages-snapshot`
+
+</td>
+<td>
+
+Enables the packages_snapshot command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-packages-snapshot`
+
+</td>
+<td>
+
+Denies the packages_snapshot command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `overwolf:allow-screen-snapshot`
 
 </td>
@@ -787,6 +1229,58 @@ Enables the screen_snapshot command without any pre-configured scope.
 <td>
 
 Denies the screen_snapshot command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:allow-set-external-payment-user-id`
+
+</td>
+<td>
+
+Enables the set_external_payment_user_id command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-set-external-payment-user-id`
+
+</td>
+<td>
+
+Denies the set_external_payment_user_id command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:allow-set-user-email-hashes`
+
+</td>
+<td>
+
+Enables the set_user_email_hashes command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-set-user-email-hashes`
+
+</td>
+<td>
+
+Denies the set_user_email_hashes command without any pre-configured scope.
 
 </td>
 </tr>
@@ -1059,7 +1553,7 @@ Denies the window_set_name command without any pre-configured scope.
 </td>
 <td>
 
-Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, windows, screen, shell, dialogs, global shortcuts and scoped files.
+Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, the Overwolf API, packages, windows, screen, shell, dialogs, global shortcuts and scoped files.
 
 </td>
 </tr>
@@ -1072,7 +1566,7 @@ Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing
 </td>
 <td>
 
-Commands of UI and overlay webviews (`bw-*`): the IPC router and `executeJavaScript` results.
+Commands of UI and overlay webviews (`bw-*`): the IPC router, `executeJavaScript` results and `<owadview>` guests.
 
 </td>
 </tr>

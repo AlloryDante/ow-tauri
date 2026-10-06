@@ -66,6 +66,7 @@ struct Sink {
 pub struct Logger {
     path: PathBuf,
     sink: Mutex<Option<Sink>>,
+    enabled: bool,
 }
 
 /// Formats one log line (without the trailing newline).
@@ -102,7 +103,33 @@ impl Logger {
         Logger {
             path,
             sink: Mutex::new(sink),
+            enabled: true,
         }
+    }
+
+    /// A logger that never creates or writes the file (`logging.enabled`
+    /// false, the default, F.4).
+    ///
+    /// ```
+    /// # let dir = std::env::temp_dir().join(format!("owlog-off-{}", std::process::id()));
+    /// use tauri_plugin_overwolf::state::log::{LogLevel, Logger};
+    /// let logger = Logger::disabled(dir.join("logs/ow-tauri.log"));
+    /// logger.write(LogLevel::Info, "dropped");
+    /// assert!(!dir.join("logs").exists());
+    /// ```
+    #[must_use]
+    pub fn disabled(path: PathBuf) -> Self {
+        Logger {
+            path,
+            sink: Mutex::new(None),
+            enabled: false,
+        }
+    }
+
+    /// Whether entries are written.
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
     }
 
     /// The current log file.
@@ -118,6 +145,9 @@ impl Logger {
     }
 
     fn write_line(&self, line: &str) {
+        if !self.enabled {
+            return;
+        }
         let mut guard = self
             .sink
             .lock()

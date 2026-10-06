@@ -21,17 +21,9 @@ use crate::ipc::router::MAIN_LABEL;
 
 /// Identifier of the main webview's capability.
 pub(crate) const MAIN_CAPABILITY: &str = "ow-tauri-main";
-/// Identifier of the ad guests' capability (added once `adview_event` exists).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used once the ads lane registers adview_event")
-)]
+/// Identifier of the ad guests' capability.
 pub(crate) const ADVIEW_GUEST_CAPABILITY: &str = "ow-tauri-adview-guest";
-/// Identifier of the consent window's capability (added once `cmp_event` exists).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used once the consent lane registers cmp_event")
-)]
+/// Identifier of the consent windows' capability.
 pub(crate) const CMP_CAPABILITY: &str = "ow-tauri-cmp";
 
 /// Core permissions of `ow-main`: the default sets plus the window and
@@ -121,13 +113,6 @@ pub(crate) fn main_capability() -> Result<Built, String> {
 
 /// A capability for remote Overwolf pages: `webviews` and exact URL
 /// patterns, `local: false`. Used by the ads and consent modules.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "added once the ads and consent lanes register their commands"
-    )
-)]
 pub(crate) fn remote_capability(
     identifier: &str,
     webview_pattern: &str,
@@ -146,6 +131,28 @@ pub(crate) fn remote_capability(
         permissions: entries(sets)?,
         platforms: None,
     }))
+}
+
+/// `ow-tauri-adview-guest`: `owad-*` webviews on Overwolf's ad page get
+/// `adview_event` only (A.2.6, ADR 0011).
+pub(crate) fn adview_guest_capability() -> Result<Built, String> {
+    remote_capability(
+        ADVIEW_GUEST_CAPABILITY,
+        "owad-*",
+        "https://www.overwolf.com/monsdk/electron/*",
+        &["overwolf:adview-guest"],
+    )
+}
+
+/// `ow-tauri-cmp`: the consent windows on Overwolf's consent pages get
+/// `cmp_event` only (A.2.7, D.6.4).
+pub(crate) fn cmp_capability() -> Result<Built, String> {
+    remote_capability(
+        CMP_CAPABILITY,
+        "ow-cmp*",
+        "https://content.overwolf.com/monsdk/electron/*",
+        &["overwolf:cmp-window"],
+    )
 }
 
 #[cfg(test)]
@@ -198,6 +205,12 @@ mod tests {
         );
         assert_eq!(c.webviews, vec!["owad-*"]);
         assert!(c.windows.is_empty());
+        let Built(g) = adview_guest_capability().unwrap();
+        assert_eq!(g.webviews, vec!["owad-*"]);
+        assert_eq!(g.permissions.len(), 1);
+        let Built(m) = cmp_capability().unwrap();
+        assert_eq!(m.webviews, vec!["ow-cmp*"]);
+        assert!(!m.local);
         assert!(
             remote_capability(
                 CMP_CAPABILITY,

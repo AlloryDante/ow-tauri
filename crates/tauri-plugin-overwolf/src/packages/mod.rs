@@ -1,47 +1,50 @@
 //! The package manager: `app.overwolf.packages` (CONTRACT A.2.4, B.1.3, H).
 //!
-//! This milestone provides backend selection (H.1) and the
-//! [`PackagesSnapshot`] that the host snapshot carries, so the JavaScript side
-//! sees every listed package from the first frame. Loading packages, the
-//! commands of A.2.4, the [`PackageRuntime`] contract with its JSON-RPC
-//! sidecar and C-ABI adapters are a later milestone.
-//!
-//! This release ships no simulated backends: without a registered native
-//! runtime every listed package (gep, overlay, recorder, utility, crn)
-//! reports as unavailable, as ow-electron reports a package it cannot load.
+//! No package runtime exists (CONTRACT H), so ow-tauri behaves on every OS
+//! exactly as ow-electron behaves where packages are not available: no
+//! package events, no package objects, `getChannel` resolves `{}`,
+//! `setChannel` and `getAvailableChannels` reject with ow-electron's error
+//! text, and `relaunch` does nothing. The interface a future runtime would
+//! implement is the deferred design of CONTRACT Appendix P.1.
 //!
 //! ```
-//! use tauri_plugin_overwolf::packages::{PackagesBackend, ResolvedBackend};
-//! assert_eq!(PackagesBackend::Auto.resolve(false), ResolvedBackend::Failed("unsupported-host"));
-//! assert_eq!(PackagesBackend::Auto.resolve(true), ResolvedBackend::Native);
+//! use tauri_plugin_overwolf::packages::{PackagesBackend, PackagesSnapshot};
+//! let s = PackagesSnapshot::new(PackagesBackend::None, &["gep".into()], "/logs".into(), 7);
+//! assert_eq!(serde_json::to_value(&s).unwrap()["backend"], "none");
+//! assert_eq!(
+//!     tauri_plugin_overwolf::packages::set_channel_error("gep").to_string(),
+//!     "setChannel - package 'gep' is not registered in this app"
+//! );
 //! ```
 
-use std::collections::BTreeMap;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 
-/// `packagesBackend` (A.1, H.1).
+use crate::error::Error;
+
+/// `packagesBackend` (A.1, H.2).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PackagesBackend {
-    /// Native if registered; else every listed package fails with
-    /// `unsupported-host`.
+    /// No package runtime: the H.1 behaviour (default).
     #[default]
-    Auto,
-    /// The registered native runtime.
-    Native,
-    /// Accepted for configuration compatibility. No simulated backends ship
-    /// in this release, so it resolves like `auto` without a runtime.
-    Simulated,
-    /// Every listed package fails with `packages-disabled`.
     None,
+    /// Reserved for a package runtime that implements Appendix P. No such
+    /// runtime exists, so it behaves as `none` and logs one warning.
+    Native,
 }
 
 /// An unknown `packagesBackend` string.
+///
+/// ```
+/// use tauri_plugin_overwolf::packages::PackagesBackend;
+/// let err = "simulated".parse::<PackagesBackend>().unwrap_err();
+/// assert_eq!(err.to_string(), "unknown packages backend \"simulated\"; expected none or native");
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("unknown packages backend \"{0}\"; expected auto, native, simulated or none")]
+#[error("unknown packages backend \"{0}\"; expected none or native")]
 pub struct UnknownBackend(pub String);
 
 impl FromStr for PackagesBackend {
@@ -49,110 +52,43 @@ impl FromStr for PackagesBackend {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "auto" => Ok(PackagesBackend::Auto),
-            "native" => Ok(PackagesBackend::Native),
-            "simulated" => Ok(PackagesBackend::Simulated),
             "none" => Ok(PackagesBackend::None),
+            "native" => Ok(PackagesBackend::Native),
             other => Err(UnknownBackend(other.to_owned())),
         }
     }
 }
 
-/// The outcome of backend selection (H.1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResolvedBackend {
-    /// Use the registered native runtime.
-    Native,
-    /// Every listed package fails with this reason.
-    Failed(&'static str),
-}
-
 impl PackagesBackend {
-    /// Applies the H.1 table (owner scope cut: no simulated backends).
-    ///
-    /// ```
-    /// use tauri_plugin_overwolf::packages::{PackagesBackend, ResolvedBackend};
-    /// assert_eq!(PackagesBackend::Auto.resolve(true), ResolvedBackend::Native);
-    /// assert_eq!(PackagesBackend::Auto.resolve(false), ResolvedBackend::Failed("unsupported-host"));
-    /// assert_eq!(PackagesBackend::None.resolve(true), ResolvedBackend::Failed("packages-disabled"));
-    /// ```
-    #[must_use]
-    pub fn resolve(self, native_registered: bool) -> ResolvedBackend {
-        match self {
-            PackagesBackend::Native | PackagesBackend::Auto if native_registered => {
-                ResolvedBackend::Native
-            }
-            PackagesBackend::Native => ResolvedBackend::Failed("no-native-runtime"),
-            PackagesBackend::None => ResolvedBackend::Failed("packages-disabled"),
-            PackagesBackend::Auto | PackagesBackend::Simulated => {
-                ResolvedBackend::Failed("unsupported-host")
-            }
-        }
-    }
-}
-
-impl ResolvedBackend {
     /// The `PackagesSnapshot.backend` value.
     ///
     /// ```
-    /// use tauri_plugin_overwolf::packages::ResolvedBackend;
-    /// assert_eq!(ResolvedBackend::Native.wire_name(), "native");
-    /// assert_eq!(ResolvedBackend::Failed("unsupported-host").wire_name(), "none");
+    /// use tauri_plugin_overwolf::packages::PackagesBackend;
+    /// assert_eq!(PackagesBackend::Native.wire_name(), "native");
     /// ```
     #[must_use]
     pub fn wire_name(self) -> &'static str {
         match self {
-            ResolvedBackend::Native => "native",
-            ResolvedBackend::Failed(_) => "none",
+            PackagesBackend::None => "none",
+            PackagesBackend::Native => "native",
         }
     }
 }
 
 /// `PackagesSnapshot` (A.2.4), part of the host snapshot.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackagesSnapshot {
-    /// `native` or `none`.
+    /// `none` or `native` (reserved).
     pub backend: String,
-    /// The native runtime's name and version.
-    pub runtime: Option<RuntimeInfo>,
-    /// `packages.logsFolderPath` (F.4).
+    /// `packages.logsFolderPath`: the literal ow-electron string (F.4).
     pub logs_folder_path: String,
-    /// `packages.phasePercent`.
+    /// `packages.phasePercent` (E.4).
     pub phase_percent: u8,
     /// Manifest `overwolf.packages`.
     pub listed: Vec<String>,
-    /// Per-package state.
-    pub packages: BTreeMap<String, PackageEntry>,
-    /// `hasPendingUpdates()`.
+    /// `hasPendingUpdates()`: always `{ hasPendingUpdate: false, details: [] }`.
     pub pending_updates: PendingUpdates,
-    /// Persisted channel choices (`ow-tauri.json` `packageChannels`).
-    pub channels: BTreeMap<String, String>,
-    /// Per package: member paths the runtime provides.
-    pub members: BTreeMap<String, Vec<String>>,
-    /// Per-package sync caches (H.4).
-    pub package_state: BTreeMap<String, Value>,
-}
-
-/// A runtime's name and version.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RuntimeInfo {
-    /// Runtime name.
-    pub name: String,
-    /// Runtime version.
-    pub version: String,
-}
-
-/// One listed package in [`PackagesSnapshot`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PackageEntry {
-    /// `pending`, `loading`, `ready` or `failed`.
-    pub state: String,
-    /// Loaded version.
-    pub version: Option<String>,
-    /// Failure details.
-    pub failure: Option<Value>,
 }
 
 /// `PendingUpdatesResult`.
@@ -161,72 +97,101 @@ pub struct PackageEntry {
 pub struct PendingUpdates {
     /// Whether any package has an update waiting for a restart.
     pub has_pending_update: bool,
-    /// `{ name, version }` per pending package.
-    pub details: Vec<PendingDetail>,
-}
-
-/// One pending package update.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PendingDetail {
-    /// Package name.
-    pub name: String,
-    /// Version waiting for the restart.
-    pub version: String,
+    /// `{ name, version }` per pending package; always empty.
+    pub details: Vec<Value>,
 }
 
 impl PackagesSnapshot {
-    /// The snapshot at setup: every listed package `pending`.
+    /// The snapshot for this session.
     ///
     /// ```
-    /// use tauri_plugin_overwolf::packages::{PackagesSnapshot, ResolvedBackend};
-    /// let s = PackagesSnapshot::initial(ResolvedBackend::Native, &["gep".into()], "/logs".into(), 7, Default::default());
-    /// assert_eq!(s.packages["gep"].state, "pending");
-    /// assert_eq!(s.backend, "native");
+    /// use tauri_plugin_overwolf::packages::{PackagesBackend, PackagesSnapshot};
+    /// let s = PackagesSnapshot::new(PackagesBackend::None, &["gep".into()], "/l".into(), 3);
+    /// assert!(!s.pending_updates.has_pending_update);
+    /// assert_eq!(s.listed, ["gep"]);
     /// ```
     #[must_use]
-    pub fn initial(
-        backend: ResolvedBackend,
+    pub fn new(
+        backend: PackagesBackend,
         listed: &[String],
         logs_folder_path: String,
         phase_percent: u8,
-        channels: BTreeMap<String, String>,
     ) -> Self {
         PackagesSnapshot {
             backend: backend.wire_name().to_owned(),
-            runtime: None,
             logs_folder_path,
             phase_percent,
             listed: listed.to_vec(),
-            packages: listed
-                .iter()
-                .map(|name| {
-                    (
-                        name.clone(),
-                        PackageEntry {
-                            state: "pending".into(),
-                            version: None,
-                            failure: None,
-                        },
-                    )
-                })
-                .collect(),
             pending_updates: PendingUpdates::default(),
-            channels,
-            members: BTreeMap::new(),
-            package_state: BTreeMap::new(),
         }
     }
 }
 
-/// A component that runs Overwolf packages for the host (CONTRACT H.2).
+/// `packages.logsFolderPath` as ow-electron builds it (F.4): the userData
+/// path, the literal `/..\ow-electron/`, the uid and `/logs`, with mixed
+/// separators on every OS (matches ow-electron, observed).
 ///
-/// Only the identity method exists in this milestone; the full contract
-/// (initialize, load, call, handles, events, channels) is implemented in a
-/// later milestone, so registering a runtime today only makes `auto` and
-/// `native` select it.
-pub trait PackageRuntime: Send + Sync + 'static {
-    /// Name and version reported in `PackagesSnapshot.runtime`.
-    fn info(&self) -> RuntimeInfo;
+/// ```
+/// use tauri_plugin_overwolf::packages::logs_folder_path;
+/// assert_eq!(
+///     logs_folder_path("/Users/a/Library/Application Support/My App", "abc"),
+///     "/Users/a/Library/Application Support/My App/..\\ow-electron/abc/logs"
+/// );
+/// ```
+#[must_use]
+pub fn logs_folder_path(user_data: &str, uid: &str) -> String {
+    format!("{user_data}/..\\ow-electron/{uid}/logs")
+}
+
+fn not_registered(method: &str, name: &str) -> Error {
+    let message = format!("{method} - package '{name}' is not registered in this app");
+    Error::NotFound {
+        message: message.clone(),
+        data: Some(json!({ "message": message })),
+    }
+}
+
+/// The `packages_set_channel` error (H.1): `not-found` whose message and
+/// `data.message` are ow-electron's text.
+///
+/// ```
+/// let e = tauri_plugin_overwolf::packages::set_channel_error("overlay");
+/// assert_eq!(serde_json::to_value(&e).unwrap()["data"]["message"],
+///     "setChannel - package 'overlay' is not registered in this app");
+/// ```
+#[must_use]
+pub fn set_channel_error(name: &str) -> Error {
+    not_registered("setChannel", name)
+}
+
+/// The result of `packages_get_available_channels` (H.1): `not-found` with
+/// the first name, or `{}` when no name is given (interim, R3-9).
+///
+/// # Errors
+///
+/// Always, when `names` is not empty.
+///
+/// ```
+/// use tauri_plugin_overwolf::packages::get_available_channels;
+/// assert_eq!(get_available_channels(&[]).unwrap(), serde_json::json!({}));
+/// let e = get_available_channels(&["gep".into(), "overlay".into()]).unwrap_err();
+/// assert_eq!(e.to_string(), "getAvailableChannels - package 'gep' is not registered in this app");
+/// ```
+pub fn get_available_channels(names: &[String]) -> Result<Value, Error> {
+    match names.first() {
+        Some(first) => Err(not_registered("getAvailableChannels", first)),
+        None => Ok(Value::Object(Map::new())),
+    }
+}
+
+/// The result of `packages_get_channel` (H.1): `{}` for any arguments.
+///
+/// ```
+/// assert_eq!(tauri_plugin_overwolf::packages::get_channel(&["gep".into()]), serde_json::json!({}));
+/// ```
+#[must_use]
+pub fn get_channel(_names: &[String]) -> Value {
+    Value::Object(Map::new())
 }
 
 #[cfg(test)]
@@ -234,63 +199,57 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backend_table() {
-        use PackagesBackend::{Auto, Native, None, Simulated};
-        use ResolvedBackend as R;
-        let cases = [
-            (Native, true, R::Native),
-            (Native, false, R::Failed("no-native-runtime")),
-            (Simulated, false, R::Failed("unsupported-host")),
-            (Simulated, true, R::Failed("unsupported-host")),
-            (None, true, R::Failed("packages-disabled")),
-            (Auto, true, R::Native),
-            (Auto, false, R::Failed("unsupported-host")),
-        ];
-        for (b, native, want) in cases {
-            assert_eq!(b.resolve(native), want, "{b:?} {native}");
-        }
-    }
-
-    #[test]
     fn parse_and_serde() {
         for (s, b) in [
-            ("auto", PackagesBackend::Auto),
-            ("native", PackagesBackend::Native),
-            ("simulated", PackagesBackend::Simulated),
             ("none", PackagesBackend::None),
+            ("native", PackagesBackend::Native),
         ] {
             assert_eq!(s.parse::<PackagesBackend>().unwrap(), b);
             assert_eq!(serde_json::to_value(b).unwrap(), s);
         }
-        assert!("Auto".parse::<PackagesBackend>().is_err());
+        for removed in ["auto", "simulated", "None", ""] {
+            assert!(removed.parse::<PackagesBackend>().is_err(), "{removed}");
+            assert!(serde_json::from_value::<PackagesBackend>(json!(removed)).is_err());
+        }
+        assert_eq!(PackagesBackend::default(), PackagesBackend::None);
     }
 
     #[test]
     fn snapshot_shape() {
-        let s = PackagesSnapshot::initial(
-            ResolvedBackend::Failed("unsupported-host"),
+        let s = PackagesSnapshot::new(
+            PackagesBackend::None,
             &["gep".into(), "overlay".into()],
             "/l".into(),
             3,
-            BTreeMap::new(),
         );
-        let v = serde_json::to_value(&s).unwrap();
-        assert_eq!(v["backend"], "none");
         assert_eq!(
-            v["pendingUpdates"],
-            serde_json::json!({"hasPendingUpdate": false, "details": []})
+            serde_json::to_value(&s).unwrap(),
+            json!({
+                "backend": "none",
+                "logsFolderPath": "/l",
+                "phasePercent": 3,
+                "listed": ["gep", "overlay"],
+                "pendingUpdates": {"hasPendingUpdate": false, "details": []}
+            })
         );
-        assert_eq!(v["listed"], serde_json::json!(["gep", "overlay"]));
-        for key in [
-            "runtime",
-            "logsFolderPath",
-            "phasePercent",
-            "packages",
-            "channels",
-            "members",
-            "packageState",
-        ] {
-            assert!(v.get(key).is_some(), "{key}");
-        }
+    }
+
+    #[test]
+    fn errors_match_ow_electron() {
+        let e = serde_json::to_value(set_channel_error("gep")).unwrap();
+        assert_eq!(
+            e,
+            json!({
+                "code": "not-found",
+                "message": "setChannel - package 'gep' is not registered in this app",
+                "data": {"message": "setChannel - package 'gep' is not registered in this app"}
+            })
+        );
+        let e = get_available_channels(&["recorder".into()]).unwrap_err();
+        assert_eq!(
+            serde_json::to_value(e).unwrap()["data"]["message"],
+            "getAvailableChannels - package 'recorder' is not registered in this app"
+        );
+        assert_eq!(get_channel(&[]), json!({}));
     }
 }

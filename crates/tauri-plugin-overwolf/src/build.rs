@@ -26,8 +26,10 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::identity::resolve_uid;
 use crate::manifest::{
-    ManifestError, ManifestWarning, parse_package_json, signing_warnings, tauri_conf_warnings,
+    EmbeddedManifest, ManifestError, ManifestWarning, parse_package_json, signing_warnings,
+    tauri_conf_warnings,
 };
 
 /// File name of the embedded manifest inside `OUT_DIR`.
@@ -196,6 +198,119 @@ pub fn embed_manifest_to(
     })
 }
 
+/// The uninstall Counter host of the installer (I.6), which differs from
+/// the runtime's Counter host.
+pub const UNINSTALL_COUNTER_URL: &str = "https://analyticssec.overwolf.com/analytics/Counter";
+
+const NSIS_HOOKS_TEMPLATE: &str = include_str!("build/installer-hooks.nsh");
+
+/// Renders the NSIS installer hooks of CONTRACT I.6 for `manifest`: the
+/// `SHCTX\Software\OverwolfElectron\<uid>` install record after install and,
+/// on a real uninstall only, the removal of `%APPDATA%\ow-electron\<uid>`,
+/// that registry key and the `ow_<label>_app_uninstall` Counter.
+///
+/// `config_uid` is the plugin's `uid` override, if the app sets one (G.2);
+/// `host_label` is `plugins.overwolf.analytics.hostLabel` (default `tauri`).
+///
+/// ```
+/// use tauri_plugin_overwolf::build::nsis_installer_hooks;
+/// use tauri_plugin_overwolf::manifest::EmbeddedManifest;
+/// let m = EmbeddedManifest::minimal("Example App", "Example Studio", "1.0.0");
+/// let nsh = nsis_installer_hooks(&m, None, "tauri");
+/// assert!(nsh.contains("!macro NSIS_HOOK_POSTUNINSTALL"));
+/// assert!(nsh.contains("Name=ow_tauri_app_uninstall"));
+/// assert!(nsh.contains("%22app_name%22%3A%22Example+App%22"));
+/// ```
+#[must_use]
+pub fn nsis_installer_hooks(
+    manifest: &EmbeddedManifest,
+    config_uid: Option<&str>,
+    host_label: &str,
+) -> String {
+    let uid = resolve_uid(config_uid, manifest).uid;
+    let counter_name = format!("ow_{host_label}_app_uninstall");
+    let extra = serde_json::json!({
+        "app_id": uid,
+        "app_version": manifest.version,
+        "app_name": manifest.product_name,
+    })
+    .to_string();
+    let prefix = format!(
+        "{UNINSTALL_COUNTER_URL}?Name={}",
+        form_encode(&counter_name)
+    );
+    // Every substituted value is either a validated uid or form-encoded, so
+    // none can carry NSIS syntax (`$`, quotes, newlines).
+    let comment: String = manifest
+        .product_name
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    NSIS_HOOKS_TEMPLATE
+        .replace("@UID@", &uid)
+        .replace("@PRODUCT_NAME_COMMENT@", &comment)
+        .replace("@VERSION@", &nsis_escape(&manifest.version))
+        .replace("@COUNTER_NAME@", &counter_name)
+        .replace("@COUNTER_URL_PREFIX@", &prefix)
+        .replace("@EXTRA@", &form_encode(&extra))
+}
+
+/// Reads `package_json` and writes [`nsis_installer_hooks`] to `out`, only
+/// when the content changed. Call it from the app's build script and point
+/// `bundle.windows.nsis.installerHooks` at `out`.
+///
+/// # Errors
+///
+/// [`BuildError::Io`] when a file cannot be read or written, and
+/// [`BuildError::Manifest`] when `package.json` fails validation.
+///
+/// ```
+/// use tauri_plugin_overwolf::build::write_nsis_installer_hooks;
+/// let dir = std::env::temp_dir().join(format!("ow-tauri-doc-nsis-{}", std::process::id()));
+/// std::fs::create_dir_all(&dir).unwrap();
+/// let package_json = dir.join("package.json");
+/// std::fs::write(&package_json, r#"{"name":"demo","version":"1.0.0","author":"Example Studio"}"#).unwrap();
+/// write_nsis_installer_hooks(&package_json, None, "tauri", &dir.join("hooks.nsh")).unwrap();
+/// assert!(std::fs::read_to_string(dir.join("hooks.nsh")).unwrap().contains("$UpdateMode"));
+/// # std::fs::remove_dir_all(&dir).unwrap();
+/// ```
+pub fn write_nsis_installer_hooks(
+    package_json: &Path,
+    config_uid: Option<&str>,
+    host_label: &str,
+    out: &Path,
+) -> Result<(), BuildError> {
+    let text = std::fs::read_to_string(package_json).map_err(|source| BuildError::Io {
+        action: "reading",
+        path: package_json.to_path_buf(),
+        source,
+    })?;
+    let parsed = parse_package_json(&text)?;
+    write(
+        out,
+        nsis_installer_hooks(&parsed.manifest, config_uid, host_label).as_bytes(),
+    )
+}
+
+/// `URLSearchParams` encoding (space as `+`).
+fn form_encode(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
+}
+
+/// Escapes a value for an NSIS double-quoted string.
+fn nsis_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '$' => out.push_str("$$"),
+            '"' => out.push_str("$\\\""),
+            c if c.is_control() => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn write(path: &Path, bytes: &[u8]) -> Result<(), BuildError> {
     // Only rewrite on change, so Cargo does not rebuild needlessly.
     if std::fs::read(path).is_ok_and(|old| old == bytes) {
@@ -270,7 +385,7 @@ mod tests {
         )
         .unwrap();
         let json = std::fs::read_to_string(&out.manifest_path).unwrap();
-        let m = crate::manifest::EmbeddedManifest::from_embedded_json(&json).unwrap();
+        let m = EmbeddedManifest::from_embedded_json(&json).unwrap();
         assert_eq!(m.product_name, "demo");
         assert!(out.dev_app_update_embedded);
         assert_eq!(
@@ -315,5 +430,31 @@ mod tests {
             "{invalid}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn nsis_hooks() {
+        let mut m = EmbeddedManifest::minimal("Example App", "Example Studio", "1.2.3");
+        let computed = crate::identity::computed_uid("Example Studio", "Example App");
+        let nsh = nsis_installer_hooks(&m, None, "tauri");
+        assert!(!nsh.contains('@'), "unfilled placeholder");
+        assert!(nsh.contains(&format!(
+            r#"WriteRegStr SHCTX "Software\OverwolfElectron\{computed}" "version" "1.2.3""#
+        )));
+        assert!(nsh.contains(&format!(r#"RMDir /r "$APPDATA\ow-electron\{computed}""#)));
+        assert!(nsh.contains("${If} $UpdateMode <> 1"));
+        let url = format!(
+            "https://analyticssec.overwolf.com/analytics/Counter?Name=ow_tauri_app_uninstall&MUID=$R0&MUIDV2=$R1&Extra=%7B%22app_id%22%3A%22{computed}%22%2C%22app_version%22%3A%221.2.3%22%2C%22app_name%22%3A%22Example+App%22%7D"
+        );
+        assert!(nsh.contains(&url), "{nsh}");
+
+        m.overwolf.uid = Some("djpddhibpjddgdpcfkbooljealnjnamkhlihgbab".into());
+        m.version = "1.0.0-\"$x".into();
+        m.product_name = "Line\nBreak".into();
+        let nsh = nsis_installer_hooks(&m, Some("../bad"), "electron");
+        assert!(nsh.contains(r#"OverwolfElectron\djpddhibpjddgdpcfkbooljealnjnamkhlihgbab""#));
+        assert!(nsh.contains(r#""version" "1.0.0-$\"$$x""#), "{nsh}");
+        assert!(nsh.contains("; app name: Line Break"));
+        assert!(nsh.contains("Name=ow_electron_app_uninstall"));
     }
 }

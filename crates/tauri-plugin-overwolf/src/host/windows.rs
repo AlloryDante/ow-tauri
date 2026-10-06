@@ -206,6 +206,10 @@ impl<R: Runtime> Host<R> {
             WindowClassWire::Overlay => WindowKind::Overlay,
         };
         let name = o.name.as_deref().map(crate::window::normalize_window_name);
+        let title = o
+            .title
+            .clone()
+            .unwrap_or_else(|| self.info.manifest.product_name.clone());
         self.with_core(|c| {
             c.windows.insert(
                 id,
@@ -217,6 +221,7 @@ impl<R: Runtime> Host<R> {
             );
             if let Some(entry) = c.windows.get_mut(id) {
                 entry.name = name;
+                entry.title = title;
             }
         });
         if !ignored.is_empty() {
@@ -547,6 +552,9 @@ impl<R: Runtime> Host<R> {
 
     /// Window `id` is gone: tell `ow-main`, drop its IPC state (A.3).
     pub(crate) fn window_destroyed(self: &Arc<Self>, id: u32) {
+        self.analytics_window_gone(id);
+        self.close_guests_of(&ui_label(id));
+        self.close_guests_of(&remote_label(id));
         let now = self.now();
         let (actions, evals) = self.with_core(|c| {
             if c.windows.remove(id).is_none() {
@@ -593,24 +601,31 @@ impl<R: Runtime> Host<R> {
                     take_evals(c, id)
                 });
                 reject_evals(evals, "The window navigated.");
-            }
-            PageLoadEvent::Finished => self.with_core(|c| {
-                c.urls.insert(label.to_owned(), href.clone());
-                let Some(entry) = c.windows.get_mut(id) else {
-                    return;
-                };
-                let first = !entry.shown_ready;
-                entry.shown_ready = true;
-                c.queue_main(HostMessage::window(id, WindowEventName::DomReady, None));
-                c.queue_main(HostMessage::window(
-                    id,
-                    WindowEventName::DidFinishLoad,
-                    Some(json!({ "url": href })),
-                ));
-                if first {
-                    c.queue_main(HostMessage::window(id, WindowEventName::ReadyToShow, None));
+                if app_webview {
+                    // B.3.4: the document unloads, so its guests close.
+                    self.close_guests_of(label);
                 }
-            }),
+            }
+            PageLoadEvent::Finished => {
+                self.analytics_page_finished(id, &href);
+                self.with_core(|c| {
+                    c.urls.insert(label.to_owned(), href.clone());
+                    let Some(entry) = c.windows.get_mut(id) else {
+                        return;
+                    };
+                    let first = !entry.shown_ready;
+                    entry.shown_ready = true;
+                    c.queue_main(HostMessage::window(id, WindowEventName::DomReady, None));
+                    c.queue_main(HostMessage::window(
+                        id,
+                        WindowEventName::DidFinishLoad,
+                        Some(json!({ "url": href })),
+                    ));
+                    if first {
+                        c.queue_main(HostMessage::window(id, WindowEventName::ReadyToShow, None));
+                    }
+                });
+            }
         }
     }
 

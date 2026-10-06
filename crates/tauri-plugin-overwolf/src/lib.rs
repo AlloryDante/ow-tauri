@@ -47,8 +47,7 @@ pub mod shell;
 
 // Internal building blocks: public so their doctests run and so the
 // mock-runtime suite can reach them, but not part of the documented API and
-// not covered by semver. The ads, analytics, consent and updater modules are
-// placeholders that later work fills in.
+// not covered by semver.
 #[doc(hidden)]
 pub mod accelerator;
 #[doc(hidden)]

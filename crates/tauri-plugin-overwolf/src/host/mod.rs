@@ -7,6 +7,9 @@
 //! Tauri may run window event handlers, which take the lock, on the calling
 //! thread.
 
+pub(crate) mod ads;
+pub(crate) mod analytics;
+pub(crate) mod consent;
 mod main_webview;
 mod setup;
 mod windows;
@@ -60,8 +63,9 @@ pub(crate) struct Info {
     pub(crate) manifest: EmbeddedManifest,
     pub(crate) identity: AppIdentity,
     pub(crate) muid: String,
+    pub(crate) muid_v2: String,
     pub(crate) phase_percent: u8,
-    pub(crate) utm_params: Value,
+    pub(crate) utm_params: Option<Value>,
     pub(crate) state_dir: StateDir,
     pub(crate) fs_scope: FsScope,
     pub(crate) app_origin: Url,
@@ -72,12 +76,18 @@ pub(crate) struct Info {
     )]
     pub(crate) browser_args: String,
     pub(crate) argv: Vec<String>,
-    /// Session switches; read by the ads and analytics services.
-    #[expect(
-        dead_code,
-        reason = "read by the ads and analytics services of later lanes"
-    )]
+    /// Session switches; read by the ads service.
     pub(crate) switches: Switches,
+    /// The ads data store's user data folder, `<appData>/<PN>/EBWebView-ow`
+    /// (A.1.1); WebView2 only.
+    #[cfg_attr(
+        not(windows),
+        expect(
+            dead_code,
+            reason = "the ads data store folder applies to WebView2 only"
+        )
+    )]
+    pub(crate) ads_data_dir: std::path::PathBuf,
     pub(crate) debug: bool,
     pub(crate) os: TargetOs,
 }
@@ -137,6 +147,10 @@ pub(crate) struct Core {
     /// loads (`IpcSender.url` and the `ow-main` reload check).
     pub(crate) urls: HashMap<String, String>,
     pub(crate) ticks: u64,
+    /// The ads service (D).
+    pub(crate) ads: ads::AdsCore,
+    /// The consent service (D.6).
+    pub(crate) consent: consent::ConsentCore,
 }
 
 impl std::fmt::Debug for Core {
@@ -182,12 +196,11 @@ pub(crate) struct Host<R: Runtime> {
     pub(crate) info: Info,
     pub(crate) logger: Logger,
     pub(crate) ow_tauri: OwTauriFile,
-    /// `ow-electron.json` (F.2); written by the ads and consent services.
-    #[expect(
-        dead_code,
-        reason = "written by the ads and consent services of later lanes"
-    )]
+    /// `ow-electron.json` (F.2); written by the consent service and the
+    /// first launch.
     pub(crate) ow_electron: OwElectronFile,
+    /// The analytics service (E).
+    pub(crate) analytics: analytics::AnalyticsHost,
     pub(crate) options: SetupOptions,
     core: Mutex<Core>,
     started: Instant,
@@ -358,7 +371,11 @@ impl<R: Runtime> Host<R> {
                 LogLevel::Warn,
                 "main_ready did not arrive within 10 s; starting analytics and packages anyway",
             );
+            self.start_analytics();
         }
+        self.poll_visibility();
+        self.ads_tick(now);
+        self.consent_tick(now);
         if slow {
             self.poll_windows();
             self.poll_displays();
@@ -414,9 +431,12 @@ impl<R: Runtime> Host<R> {
 
     /// The body of [`Host::finish_exit`]; the caller has set `exiting`.
     fn run_exit(self: &Arc<Self>, exit_code: i32) {
+        // Quit while windows are visible ends their visible periods (E.2 #7).
+        self.analytics_end_all_periods();
         let host = Arc::clone(self);
         tauri::async_runtime::spawn(async move {
-            crate::analytics::drain(crate::analytics::DRAIN_LIMIT).await;
+            crate::analytics::drain(&host.analytics.dispatcher, crate::analytics::DRAIN_LIMIT)
+                .await;
             host.send_main(HostMessage::lifecycle("quit", None, Some(exit_code)));
             host.flush_on_main_thread().await;
             crate::updater::install_pending();

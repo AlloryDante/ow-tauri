@@ -13,7 +13,8 @@
 //! let file = OwElectronFile::new(dir.join("ow-electron.json"));
 //! assert!(!file.read().state.first_launch);
 //! file.set_first_launch().unwrap();
-//! file.write_cmp(&CmpBlock { cmp_string: Some("CPX".into()), unified_consent_string: None, time_stamp: Some(1) }).unwrap();
+//! file.write_cmp(&CmpBlock { cmp_string: Some("CPX".into()), time_stamp: Some(1), unified_consent_string: None }).unwrap();
+//! assert_eq!(std::fs::read_to_string(file.path()).unwrap(), r#"{"firstLaunch":true,"cmp":{"cmpString":"CPX","timeStamp":1}}"#);
 //! let read = file.read();
 //! assert!(read.state.first_launch);
 //! assert_eq!(read.state.cmp.unwrap().cmp_string.as_deref(), Some("CPX"));
@@ -35,12 +36,12 @@ pub struct CmpBlock {
     /// TCF v2 string.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cmp_string: Option<String>,
-    /// `cmp=<tcf>&ac=<ac>`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unified_consent_string: Option<String>,
-    /// Unix epoch milliseconds of the last save.
+    /// Unix seconds, refreshed on every launch by the startup consent flow.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_stamp: Option<u64>,
+    /// Stored URL-encoded: `cmp%3D<tcf>%26ac%3D<ac>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unified_consent_string: Option<String>,
 }
 
 /// The shared keys ow-tauri reads.
@@ -163,9 +164,8 @@ impl OwElectronFile {
             return Err(WriteError::InvalidExisting);
         }
         edit(&mut map);
-        let mut bytes =
-            serde_json::to_vec_pretty(&Value::Object(map)).map_err(std::io::Error::other)?;
-        bytes.push(b'\n');
+        // Compact, no trailing newline: ow-electron's exact encoding (F.2).
+        let bytes = serde_json::to_vec(&Value::Object(map)).map_err(std::io::Error::other)?;
         write_atomic(&self.path, &bytes)?;
         Ok(())
     }
@@ -196,14 +196,16 @@ impl OwElectronFile {
                 *entry = Value::Object(Map::new());
             }
             if let Value::Object(obj) = entry {
+                // New keys go in ow-electron's order; existing keys keep
+                // their position.
                 if let Some(s) = &cmp.cmp_string {
                     obj.insert("cmpString".into(), Value::String(s.clone()));
                 }
-                if let Some(s) = &cmp.unified_consent_string {
-                    obj.insert("unifiedConsentString".into(), Value::String(s.clone()));
-                }
                 if let Some(t) = cmp.time_stamp {
                     obj.insert("timeStamp".into(), Value::from(t));
+                }
+                if let Some(s) = &cmp.unified_consent_string {
+                    obj.insert("unifiedConsentString".into(), Value::String(s.clone()));
                 }
             }
         })
@@ -239,8 +241,8 @@ mod tests {
         file.set_first_launch().unwrap();
         file.write_cmp(&CmpBlock {
             cmp_string: None,
-            unified_consent_string: Some("cmp=X&ac=Y".into()),
-            time_stamp: Some(1_759_750_000_000),
+            time_stamp: Some(1_759_750_000),
+            unified_consent_string: Some("cmp%3DX%26ac%3DY".into()),
         })
         .unwrap();
 
@@ -255,9 +257,27 @@ mod tests {
         );
         assert_eq!(
             value["cmp"],
-            serde_json::json!({"extra":"keep","cmpString":"OLD","unifiedConsentString":"cmp=X&ac=Y","timeStamp":1_759_750_000_000_u64})
+            serde_json::json!({"extra":"keep","cmpString":"OLD","timeStamp":1_759_750_000_u64,"unifiedConsentString":"cmp%3DX%26ac%3DY"})
         );
         assert!(file.read().state.first_launch);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn exact_bytes_match_ow_electron() {
+        let dir = test_dir("owe-bytes");
+        let file = OwElectronFile::new(dir.join("ow-electron.json"));
+        file.set_first_launch().unwrap();
+        file.write_cmp(&CmpBlock {
+            cmp_string: Some("CQTEST".into()),
+            time_stamp: Some(1_791_302_123),
+            unified_consent_string: Some("cmp%3DCQTEST%26ac%3D".into()),
+        })
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(file.path()).unwrap(),
+            r#"{"firstLaunch":true,"cmp":{"cmpString":"CQTEST","timeStamp":1791302123,"unifiedConsentString":"cmp%3DCQTEST%26ac%3D"}}"#
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

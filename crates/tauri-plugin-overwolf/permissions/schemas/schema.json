@@ -295,6 +295,90 @@
       "type": "string",
       "oneOf": [
         {
+          "description": "The one command of an ad guest (`owad-*`) on https://www.overwolf.com/monsdk/electron/: `adview_event`.\n#### This permission set includes:\n\n- `allow-adview-event`",
+          "type": "string",
+          "const": "adview-guest",
+          "markdownDescription": "The one command of an ad guest (`owad-*`) on https://www.overwolf.com/monsdk/electron/: `adview_event`.\n#### This permission set includes:\n\n- `allow-adview-event`"
+        },
+        {
+          "description": "The one command of a consent window (`ow-cmp*`) on https://content.overwolf.com/monsdk/electron/: `cmp_event`.\n#### This permission set includes:\n\n- `allow-cmp-event`",
+          "type": "string",
+          "const": "cmp-window",
+          "markdownDescription": "The one command of a consent window (`ow-cmp*`) on https://content.overwolf.com/monsdk/electron/: `cmp_event`.\n#### This permission set includes:\n\n- `allow-cmp-event`"
+        },
+        {
+          "description": "Enables the adview_command command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-adview-command",
+          "markdownDescription": "Enables the adview_command command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the adview_command command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-adview-command",
+          "markdownDescription": "Denies the adview_command command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the adview_event command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-adview-event",
+          "markdownDescription": "Enables the adview_event command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the adview_event command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-adview-event",
+          "markdownDescription": "Denies the adview_event command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the adview_mount command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-adview-mount",
+          "markdownDescription": "Enables the adview_mount command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the adview_mount command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-adview-mount",
+          "markdownDescription": "Denies the adview_mount command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the adview_unmount command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-adview-unmount",
+          "markdownDescription": "Enables the adview_unmount command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the adview_unmount command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-adview-unmount",
+          "markdownDescription": "Denies the adview_unmount command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the adview_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-adview-update",
+          "markdownDescription": "Enables the adview_update command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the adview_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-adview-update",
+          "markdownDescription": "Denies the adview_update command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the analytics_set_user_enabled command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-analytics-set-user-enabled",
+          "markdownDescription": "Enables the analytics_set_user_enabled command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the analytics_set_user_enabled command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-analytics-set-user-enabled",
+          "markdownDescription": "Denies the analytics_set_user_enabled command without any pre-configured scope."
+        },
+        {
           "description": "Enables the app_exit command without any pre-configured scope.",
           "type": "string",
           "const": "allow-app-exit",
@@ -343,6 +427,18 @@
           "markdownDescription": "Denies the app_quit_reply command without any pre-configured scope."
         },
         {
+          "description": "Enables the app_record_browser_args command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-record-browser-args",
+          "markdownDescription": "Enables the app_record_browser_args command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_record_browser_args command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-record-browser-args",
+          "markdownDescription": "Denies the app_record_browser_args command without any pre-configured scope."
+        },
+        {
           "description": "Enables the app_relaunch command without any pre-configured scope.",
           "type": "string",
           "const": "allow-app-relaunch",
@@ -365,6 +461,18 @@
           "type": "string",
           "const": "deny-bootstrap",
           "markdownDescription": "Denies the bootstrap command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cmp_event command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cmp-event",
+          "markdownDescription": "Enables the cmp_event command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cmp_event command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cmp-event",
+          "markdownDescription": "Denies the cmp_event command without any pre-configured scope."
         },
         {
           "description": "Enables the dialog_message command without any pre-configured scope.",
@@ -619,6 +727,18 @@
           "markdownDescription": "Denies the ipc_subscribe command without any pre-configured scope."
         },
         {
+          "description": "Enables the is_cmp_required command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-is-cmp-required",
+          "markdownDescription": "Enables the is_cmp_required command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the is_cmp_required command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-is-cmp-required",
+          "markdownDescription": "Denies the is_cmp_required command without any pre-configured scope."
+        },
+        {
           "description": "Enables the log command without any pre-configured scope.",
           "type": "string",
           "const": "allow-log",
@@ -643,6 +763,90 @@
           "markdownDescription": "Denies the main_ready command without any pre-configured scope."
         },
         {
+          "description": "Enables the open_ad_privacy_settings_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-ad-privacy-settings-window",
+          "markdownDescription": "Enables the open_ad_privacy_settings_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_ad_privacy_settings_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-ad-privacy-settings-window",
+          "markdownDescription": "Denies the open_ad_privacy_settings_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_cmp_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-cmp-window",
+          "markdownDescription": "Enables the open_cmp_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_cmp_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-cmp-window",
+          "markdownDescription": "Denies the open_cmp_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the packages_get_available_channels command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-packages-get-available-channels",
+          "markdownDescription": "Enables the packages_get_available_channels command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the packages_get_available_channels command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-packages-get-available-channels",
+          "markdownDescription": "Denies the packages_get_available_channels command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the packages_get_channel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-packages-get-channel",
+          "markdownDescription": "Enables the packages_get_channel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the packages_get_channel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-packages-get-channel",
+          "markdownDescription": "Denies the packages_get_channel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the packages_relaunch command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-packages-relaunch",
+          "markdownDescription": "Enables the packages_relaunch command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the packages_relaunch command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-packages-relaunch",
+          "markdownDescription": "Denies the packages_relaunch command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the packages_set_channel command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-packages-set-channel",
+          "markdownDescription": "Enables the packages_set_channel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the packages_set_channel command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-packages-set-channel",
+          "markdownDescription": "Denies the packages_set_channel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the packages_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-packages-snapshot",
+          "markdownDescription": "Enables the packages_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the packages_snapshot command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-packages-snapshot",
+          "markdownDescription": "Denies the packages_snapshot command without any pre-configured scope."
+        },
+        {
           "description": "Enables the screen_snapshot command without any pre-configured scope.",
           "type": "string",
           "const": "allow-screen-snapshot",
@@ -653,6 +857,30 @@
           "type": "string",
           "const": "deny-screen-snapshot",
           "markdownDescription": "Denies the screen_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_external_payment_user_id command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-external-payment-user-id",
+          "markdownDescription": "Enables the set_external_payment_user_id command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_external_payment_user_id command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-external-payment-user-id",
+          "markdownDescription": "Denies the set_external_payment_user_id command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_user_email_hashes command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-user-email-hashes",
+          "markdownDescription": "Enables the set_user_email_hashes command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_user_email_hashes command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-user-email-hashes",
+          "markdownDescription": "Denies the set_user_email_hashes command without any pre-configured scope."
         },
         {
           "description": "Enables the shell_open_external command without any pre-configured scope.",
@@ -781,16 +1009,16 @@
           "markdownDescription": "Grants nothing; capabilities name `overwolf:main` or `overwolf:renderer` per webview class."
         },
         {
-          "description": "Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, windows, screen, shell, dialogs, global shortcuts and scoped files.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-bootstrap`\n- `allow-main-ready`\n- `allow-ipc-main-ready`\n- `allow-app-quit-reply`\n- `allow-app-relaunch`\n- `allow-app-quit`\n- `allow-app-exit`\n- `allow-app-focus`\n- `allow-log`\n- `allow-ipc-reply`\n- `allow-ipc-emit`\n- `allow-ipc-emit-skip`\n- `allow-disable-anonymous-analytics`\n- `allow-disable-ads-optimization`\n- `allow-disable-ads-fpd`\n- `allow-window-create`\n- `allow-window-load`\n- `allow-window-close-reply`\n- `allow-window-destroy`\n- `allow-window-eval`\n- `allow-window-devtools`\n- `allow-window-set-name`\n- `allow-screen-snapshot`\n- `allow-shell-open-external`\n- `allow-shell-open-path`\n- `allow-shell-show-item-in-folder`\n- `allow-dialog-open`\n- `allow-dialog-save`\n- `allow-dialog-message`\n- `allow-global-shortcut-register`\n- `allow-global-shortcut-unregister`\n- `allow-fs-read-text`\n- `allow-fs-write-text`\n- `allow-fs-exists`\n- `allow-fs-mkdir`",
+          "description": "Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, the Overwolf API, packages, windows, screen, shell, dialogs, global shortcuts and scoped files.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-bootstrap`\n- `allow-main-ready`\n- `allow-ipc-main-ready`\n- `allow-app-quit-reply`\n- `allow-app-relaunch`\n- `allow-app-quit`\n- `allow-app-exit`\n- `allow-app-focus`\n- `allow-log`\n- `allow-ipc-reply`\n- `allow-ipc-emit`\n- `allow-ipc-emit-skip`\n- `allow-disable-anonymous-analytics`\n- `allow-disable-ads-optimization`\n- `allow-disable-ads-fpd`\n- `allow-is-cmp-required`\n- `allow-open-cmp-window`\n- `allow-open-ad-privacy-settings-window`\n- `allow-set-user-email-hashes`\n- `allow-set-external-payment-user-id`\n- `allow-analytics-set-user-enabled`\n- `allow-app-record-browser-args`\n- `allow-packages-snapshot`\n- `allow-packages-relaunch`\n- `allow-packages-set-channel`\n- `allow-packages-get-available-channels`\n- `allow-packages-get-channel`\n- `allow-window-create`\n- `allow-window-load`\n- `allow-window-close-reply`\n- `allow-window-destroy`\n- `allow-window-eval`\n- `allow-window-devtools`\n- `allow-window-set-name`\n- `allow-screen-snapshot`\n- `allow-shell-open-external`\n- `allow-shell-open-path`\n- `allow-shell-show-item-in-folder`\n- `allow-dialog-open`\n- `allow-dialog-save`\n- `allow-dialog-message`\n- `allow-global-shortcut-register`\n- `allow-global-shortcut-unregister`\n- `allow-fs-read-text`\n- `allow-fs-write-text`\n- `allow-fs-exists`\n- `allow-fs-mkdir`",
           "type": "string",
           "const": "main",
-          "markdownDescription": "Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, windows, screen, shell, dialogs, global shortcuts and scoped files.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-bootstrap`\n- `allow-main-ready`\n- `allow-ipc-main-ready`\n- `allow-app-quit-reply`\n- `allow-app-relaunch`\n- `allow-app-quit`\n- `allow-app-exit`\n- `allow-app-focus`\n- `allow-log`\n- `allow-ipc-reply`\n- `allow-ipc-emit`\n- `allow-ipc-emit-skip`\n- `allow-disable-anonymous-analytics`\n- `allow-disable-ads-optimization`\n- `allow-disable-ads-fpd`\n- `allow-window-create`\n- `allow-window-load`\n- `allow-window-close-reply`\n- `allow-window-destroy`\n- `allow-window-eval`\n- `allow-window-devtools`\n- `allow-window-set-name`\n- `allow-screen-snapshot`\n- `allow-shell-open-external`\n- `allow-shell-open-path`\n- `allow-shell-show-item-in-folder`\n- `allow-dialog-open`\n- `allow-dialog-save`\n- `allow-dialog-message`\n- `allow-global-shortcut-register`\n- `allow-global-shortcut-unregister`\n- `allow-fs-read-text`\n- `allow-fs-write-text`\n- `allow-fs-exists`\n- `allow-fs-mkdir`"
+          "markdownDescription": "Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, the Overwolf API, packages, windows, screen, shell, dialogs, global shortcuts and scoped files.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-bootstrap`\n- `allow-main-ready`\n- `allow-ipc-main-ready`\n- `allow-app-quit-reply`\n- `allow-app-relaunch`\n- `allow-app-quit`\n- `allow-app-exit`\n- `allow-app-focus`\n- `allow-log`\n- `allow-ipc-reply`\n- `allow-ipc-emit`\n- `allow-ipc-emit-skip`\n- `allow-disable-anonymous-analytics`\n- `allow-disable-ads-optimization`\n- `allow-disable-ads-fpd`\n- `allow-is-cmp-required`\n- `allow-open-cmp-window`\n- `allow-open-ad-privacy-settings-window`\n- `allow-set-user-email-hashes`\n- `allow-set-external-payment-user-id`\n- `allow-analytics-set-user-enabled`\n- `allow-app-record-browser-args`\n- `allow-packages-snapshot`\n- `allow-packages-relaunch`\n- `allow-packages-set-channel`\n- `allow-packages-get-available-channels`\n- `allow-packages-get-channel`\n- `allow-window-create`\n- `allow-window-load`\n- `allow-window-close-reply`\n- `allow-window-destroy`\n- `allow-window-eval`\n- `allow-window-devtools`\n- `allow-window-set-name`\n- `allow-screen-snapshot`\n- `allow-shell-open-external`\n- `allow-shell-open-path`\n- `allow-shell-show-item-in-folder`\n- `allow-dialog-open`\n- `allow-dialog-save`\n- `allow-dialog-message`\n- `allow-global-shortcut-register`\n- `allow-global-shortcut-unregister`\n- `allow-fs-read-text`\n- `allow-fs-write-text`\n- `allow-fs-exists`\n- `allow-fs-mkdir`"
         },
         {
-          "description": "Commands of UI and overlay webviews (`bw-*`): the IPC router and `executeJavaScript` results.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-ipc-invoke`\n- `allow-ipc-send`\n- `allow-ipc-skip`\n- `allow-eval-result`",
+          "description": "Commands of UI and overlay webviews (`bw-*`): the IPC router, `executeJavaScript` results and `<owadview>` guests.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-ipc-invoke`\n- `allow-ipc-send`\n- `allow-ipc-skip`\n- `allow-eval-result`\n- `allow-adview-mount`\n- `allow-adview-update`\n- `allow-adview-unmount`\n- `allow-adview-command`",
           "type": "string",
           "const": "renderer",
-          "markdownDescription": "Commands of UI and overlay webviews (`bw-*`): the IPC router and `executeJavaScript` results.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-ipc-invoke`\n- `allow-ipc-send`\n- `allow-ipc-skip`\n- `allow-eval-result`"
+          "markdownDescription": "Commands of UI and overlay webviews (`bw-*`): the IPC router, `executeJavaScript` results and `<owadview>` guests.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-ipc-invoke`\n- `allow-ipc-send`\n- `allow-ipc-skip`\n- `allow-eval-result`\n- `allow-adview-mount`\n- `allow-adview-update`\n- `allow-adview-unmount`\n- `allow-adview-command`"
         }
       ]
     }

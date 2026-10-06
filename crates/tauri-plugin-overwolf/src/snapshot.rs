@@ -92,8 +92,10 @@ pub struct HostSnapshot {
     pub manifest: EmbeddedManifest,
     /// App identity.
     pub identity: IdentityInfo,
-    /// `ow-electron.json` `utmParams`, or `null`.
-    pub utm_params: Value,
+    /// `ow-electron.json` `utmParams`; absent (`undefined` in JS) when there
+    /// are none (F.2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub utm_params: Option<Value>,
     /// Process arguments and the ad mode.
     pub switches: SwitchesInfo,
     /// `app.getPath()` values plus `appPath` (addition).

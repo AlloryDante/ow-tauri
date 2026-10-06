@@ -27,15 +27,35 @@ use tauri::{
 use tauri_plugin_overwolf::{Builder, COMMANDS, OverwolfExt};
 
 /// Commands only `bw-*` webviews may call.
-const RENDERER_ONLY: [&str; 4] = ["ipc_invoke", "ipc_send", "ipc_skip", "eval_result"];
+const RENDERER_ONLY: [&str; 8] = [
+    "ipc_invoke",
+    "ipc_send",
+    "ipc_skip",
+    "eval_result",
+    "adview_mount",
+    "adview_update",
+    "adview_unmount",
+    "adview_command",
+];
 /// The `overwolf:renderer` set.
-const RENDERER: [&str; 5] = [
+const RENDERER: [&str; 9] = [
     "ipc_subscribe",
     "ipc_invoke",
     "ipc_send",
     "ipc_skip",
     "eval_result",
+    "adview_mount",
+    "adview_update",
+    "adview_unmount",
+    "adview_command",
 ];
+/// Commands of remote Overwolf pages only: ad guests and consent windows.
+const REMOTE_ONLY: [&str; 2] = ["adview_event", "cmp_event"];
+/// The ad document, inside the ad guests' capability.
+const ADVIEW_PAGE: &str = "https://www.overwolf.com/monsdk/electron/latest/adview.html";
+/// The startup consent page, inside the consent windows' capability.
+const CMP_PAGE: &str =
+    "https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/ow-cmp-v2.html";
 
 type Captured = Arc<Mutex<Vec<(String, u32, Value)>>>;
 
@@ -156,6 +176,8 @@ fn probe_body(cmd: &str) -> Value {
         "app_relaunch" => json!({ "args": 1 }),
         "dialog_open" | "dialog_save" => json!({ "properties": 1 }),
         "dialog_message" => json!({ "buttons": 1 }),
+        "cmp_event" => json!({ "name": "ready" }),
+        "adview_event" => json!({ "name": "probe" }),
         _ => json!({}),
     }
 }
@@ -211,12 +233,15 @@ fn every_command_is_scoped_to_its_webview_class() {
     for cmd in COMMANDS {
         for label in ["ow-main", "bw-1", "owad-1", "bwr-2", "ow-cmp", "settings"] {
             let want = match label {
+                _ if REMOTE_ONLY.contains(cmd) => Outcome::Acl,
                 "ow-main" if !RENDERER_ONLY.contains(cmd) => Outcome::Reached,
                 "bw-1" if RENDERER.contains(cmd) => Outcome::Reached,
                 _ => Outcome::Acl,
             };
-            if label == "ow-main" && *cmd == "app_quit" {
-                continue; // covered by `quit_request_round_trip`
+            if label == "ow-main" && (*cmd == "app_quit" || *cmd == "is_cmp_required") {
+                // Covered by `quit_request_round_trip` and `consent_sequencing`:
+                // both wait for events the matrix does not send.
+                continue;
             }
             let got = outcome(&invoke(&app, label, cmd, probe_body(cmd)));
             if got != want {
@@ -451,7 +476,6 @@ fn bootstrap_matches_the_snapshot_shape() {
         "versions",
         "manifest",
         "identity",
-        "utmParams",
         "switches",
         "paths",
         "isPackaged",
@@ -463,6 +487,8 @@ fn bootstrap_matches_the_snapshot_shape() {
     ] {
         assert!(snapshot.get(key).is_some(), "missing {key}");
     }
+    // F.2: no stored `utmParams` means the key is absent (`undefined`).
+    assert!(snapshot.get("utmParams").is_none());
     assert_eq!(snapshot["manifest"]["productName"], "ACL Fixture");
     assert_eq!(snapshot["packages"]["backend"], "none");
     invoke(&app, "ow-main", "disable_ads_fpd", json!({})).unwrap();
@@ -734,4 +760,344 @@ fn navigation_policy_and_window_open() {
         .find(|x| x["event"] == "did-finish-load")
         .unwrap();
     assert_eq!(loaded["data"]["url"], app_page.as_str());
+}
+
+#[test]
+fn remote_pages_get_one_command_each() {
+    let (app, _) = app("remote");
+    webviews(&app);
+    let mut failures = Vec::new();
+    for cmd in COMMANDS {
+        let cases = [
+            ("owad-1", ADVIEW_PAGE, *cmd == "adview_event"),
+            ("owad-1", "https://evil.example/monsdk/electron/x", false),
+            ("owad-1", CMP_PAGE, false),
+            ("ow-cmp", CMP_PAGE, *cmd == "cmp_event"),
+            ("ow-cmp", ADVIEW_PAGE, false),
+            ("bw-1", ADVIEW_PAGE, false),
+        ];
+        for (label, url, allowed) in cases {
+            // The ACL lets the one command through; the plugin then refuses
+            // these webviews (an unregistered guest, a document URL outside
+            // the consent scope).
+            let want = if allowed {
+                Outcome::Forbidden
+            } else {
+                Outcome::Acl
+            };
+            let got = outcome(&invoke_from(&app, label, url, cmd, probe_body(cmd)));
+            if got != want {
+                failures.push(format!(
+                    "{cmd} from {label} at {url}: want {want:?}, got {got:?}"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// An app whose plugin config has `extra` merged in.
+fn app_with(name: &str, extra: Value) -> (App<MockRuntime>, Captured) {
+    let captured: Captured = Arc::default();
+    let sink = Arc::clone(&captured);
+    let mut context = ow_tauri_acl_tests::context();
+    let mut config = json!({ "state": { "appDataDir": temp_dir(name) } });
+    if let (Some(c), Value::Object(e)) = (config.as_object_mut(), extra) {
+        c.extend(e);
+    }
+    context
+        .config_mut()
+        .plugins
+        .0
+        .insert("overwolf".into(), config);
+    let app = mock_builder()
+        .channel_interceptor(move |webview, callback: CallbackFn, _index, body| {
+            let value = match body {
+                InvokeResponseBody::Json(s) => serde_json::from_str(s).unwrap(),
+                InvokeResponseBody::Raw(_) => Value::Null,
+            };
+            sink.lock()
+                .unwrap()
+                .push((webview.label().to_owned(), callback.0, value));
+            true
+        })
+        .plugin(
+            Builder::new()
+                .manifest_json(ow_tauri_acl_tests::manifest())
+                .companion_plugins(false)
+                .main_webview(false)
+                .skip_os_queries()
+                .argv(vec!["acl-fixture".into()])
+                .build(),
+        )
+        .build(context)
+        .unwrap();
+    (app, captured)
+}
+
+fn mount_body(element_id: &str) -> Value {
+    json!({
+        "elementId": element_id,
+        "attributes": {
+            "cid": "", "slotsize": "300x250", "adstyle": "", "customTracking": null,
+            "performance": false, "unit": null, "pageurl": ""
+        },
+        "rect": { "x": 10, "y": 20, "width": 300, "height": 250, "devicePixelRatio": 1 },
+        "visible": true
+    })
+}
+
+/// The `adview-event` host messages `bw-1` received, as `(source, name)`.
+fn adview_events(all: &[(String, u32, Value)]) -> Vec<(String, String)> {
+    messages(all, "bw-1")
+        .into_iter()
+        .filter(|m| m["type"] == "adview-event")
+        .map(|m| {
+            (
+                m["source"].as_str().unwrap_or_default().to_owned(),
+                m["name"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn adview_guest_lifecycle_crash_and_recovery_cap() {
+    let (app, captured) = app_with("guest", json!({ "ads": { "maxRecoveries": 1 } }));
+    main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
+    let ow = app.overwolf();
+    let mounted = invoke(&app, "bw-1", "adview_mount", mount_body("e1")).unwrap();
+    let guest = mounted["guestLabel"].as_str().unwrap().to_owned();
+    assert_eq!(guest, "owad-bw-1-1");
+    assert!(app.get_webview(&guest).is_some());
+    // D.6.5: no navigation before consent or 3 s after the mount.
+    let t0 = ow.test_now();
+    ow.test_ads_tick(t0);
+    assert_eq!(ow.test_guest(&guest).unwrap()["navigated"], false);
+    ow.test_ads_tick(t0 + 3_100);
+    assert_eq!(ow.test_guest(&guest).unwrap()["navigated"], true);
+    // The ad document loads (the mock runtime does not navigate by itself).
+    let page = tauri::Url::parse(ADVIEW_PAGE).unwrap();
+    app.get_webview(&guest)
+        .unwrap()
+        .navigate(page.clone())
+        .unwrap();
+    ow.test_page_load(&guest, &page, true);
+    // Guest messages reach the embedder; internal ones do not.
+    invoke_from(
+        &app,
+        &guest,
+        ADVIEW_PAGE,
+        "adview_event",
+        json!({ "name": "__host:ready", "data": {} }),
+    )
+    .unwrap();
+    invoke_from(
+        &app,
+        &guest,
+        ADVIEW_PAGE,
+        "adview_event",
+        json!({ "slotId": "someone-else", "name": "impression", "data": { "n": 1 } }),
+    )
+    .unwrap();
+    let bad = invoke_from(
+        &app,
+        &guest,
+        ADVIEW_PAGE,
+        "adview_event",
+        json!({ "name": "bad name!" }),
+    );
+    assert_eq!(bad.unwrap_err()["code"], "invalid-argument");
+    let all = wait_for(&captured, |m| {
+        adview_events(m).iter().any(|(_, n)| n == "impression")
+    });
+    let events = adview_events(&all);
+    assert!(
+        events.contains(&("host".into(), "did-attach".into())),
+        "{events:?}"
+    );
+    assert!(
+        events.contains(&("host".into(), "did-finish-load".into())),
+        "{events:?}"
+    );
+    assert!(
+        events.contains(&("guest".into(), "impression".into())),
+        "{events:?}"
+    );
+    assert!(
+        !events.iter().any(|(_, n)| n.starts_with("__host:")),
+        "{events:?}"
+    );
+    // A crash: render-process-gone, then a reload (one recovery).
+    ow.test_guest_crashed(&guest, tauri_plugin_overwolf::ads::GoneReason::Crashed);
+    assert_eq!(ow.test_guest(&guest).unwrap()["recoveries"], 1);
+    wait_for(&captured, |m| {
+        adview_events(m)
+            .iter()
+            .any(|(_, n)| n == "render-process-gone")
+    });
+    // ads.maxRecoveries = 1: the next crash closes the guest.
+    ow.test_guest_crashed(&guest, tauri_plugin_overwolf::ads::GoneReason::Oom);
+    assert!(ow.test_guest(&guest).is_none());
+    // Commands on a closed element: not-found; unmount stays idempotent.
+    let r = invoke(
+        &app,
+        "bw-1",
+        "adview_command",
+        json!({ "elementId": "e1", "command": "reload", "args": [] }),
+    );
+    assert_eq!(r.unwrap_err()["code"], "not-found");
+    invoke(&app, "bw-1", "adview_unmount", json!({ "elementId": "e1" })).unwrap();
+}
+
+#[test]
+fn adview_update_command_and_window_close() {
+    let (app, _) = app("guest-update");
+    main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
+    let ow = app.overwolf();
+    let guest = invoke(&app, "bw-1", "adview_mount", mount_body("e1")).unwrap()["guestLabel"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    invoke(
+        &app,
+        "bw-1",
+        "adview_update",
+        json!({ "elementId": "e1", "visible": false, "attributes": { "customTracking": { "a": 1 } } }),
+    )
+    .unwrap();
+    assert_eq!(ow.test_guest(&guest).unwrap()["visible"], false);
+    for (command, args) in [
+        ("setAudioMuted", json!([false])),
+        ("setPageUrl", json!(["https://example.com/page"])),
+        ("sendCommand", json!(["x", 1])),
+        ("reload", json!([])),
+    ] {
+        invoke(
+            &app,
+            "bw-1",
+            "adview_command",
+            json!({ "elementId": "e1", "command": command, "args": args }),
+        )
+        .unwrap();
+    }
+    let r = invoke(
+        &app,
+        "bw-1",
+        "adview_update",
+        json!({ "elementId": "nope", "visible": true }),
+    );
+    assert_eq!(r.unwrap_err()["code"], "not-found");
+    // A second mount of the same element replaces the guest.
+    let again = invoke(&app, "bw-1", "adview_mount", mount_body("e1")).unwrap();
+    assert_eq!(again["guestLabel"], "owad-bw-1-2");
+    assert!(ow.test_guest(&guest).is_none());
+    // Guests close with their embedder window.
+    ow.test_window_destroyed("bw-1");
+    assert!(ow.test_guest("owad-bw-1-2").is_none());
+}
+
+#[test]
+fn consent_sequencing() {
+    let (app, _) = app("consent");
+    main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
+    let ow = app.overwolf();
+    // A guest mounted before consent waits for the startup window (D.6.5).
+    let guest = invoke(&app, "bw-1", "adview_mount", mount_body("e1")).unwrap()["guestLabel"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // RunEvent::Ready: the cmp-eu-only request (refused in test builds, so
+    // as after a failed request) and then the startup window (D.6.1).
+    ow.test_start_consent();
+    let start = Instant::now();
+    while !ow
+        .test_hidden_consent_windows()
+        .contains(&"ow-cmp-startup".to_owned())
+    {
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "no startup window"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let window = app.get_webview_window("ow-cmp-startup").unwrap();
+    assert!(window.url().unwrap().as_str().starts_with(CMP_PAGE));
+    // isCMPRequired() waits for the startup page's load.
+    let handle = app.handle().clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let required = tauri::async_runtime::block_on(handle.overwolf().test_is_cmp_required());
+        tx.send(required).unwrap();
+    });
+    assert!(
+        rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        "resolved before the load"
+    );
+    assert!(!ow.test_consent_gate_open());
+    ow.test_ads_tick(ow.test_now());
+    assert_eq!(ow.test_guest(&guest).unwrap()["navigated"], false);
+    let url = window.url().unwrap();
+    ow.test_page_load("ow-cmp-startup", &url, true);
+    assert!(rx.recv_timeout(Duration::from_secs(5)).unwrap());
+    // The page saves consent, then closes itself.
+    invoke_from(
+        &app,
+        "ow-cmp-startup",
+        CMP_PAGE,
+        "cmp_event",
+        json!({ "name": "saveConsent", "data": { "consent": "CQTESTSTRING" } }),
+    )
+    .unwrap();
+    let bad = invoke_from(
+        &app,
+        "ow-cmp-startup",
+        CMP_PAGE,
+        "cmp_event",
+        json!({ "name": "saveConsent", "data": { "consent": "has space" } }),
+    );
+    assert_eq!(bad.unwrap_err()["code"], "invalid-argument");
+    invoke_from(
+        &app,
+        "ow-cmp-startup",
+        CMP_PAGE,
+        "cmp_event",
+        json!({ "name": "saveUnifiedConsent", "data": { "consent": "cmp=CQTESTSTRING&ac=2~1" } }),
+    )
+    .unwrap();
+    invoke_from(
+        &app,
+        "ow-cmp-startup",
+        CMP_PAGE,
+        "cmp_event",
+        json!({ "name": "close" }),
+    )
+    .unwrap();
+    let start = Instant::now();
+    while !ow.test_consent_gate_open() {
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "gate never opened"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    ow.test_ads_tick(ow.test_now());
+    assert_eq!(ow.test_guest(&guest).unwrap()["navigated"], true);
+    let state: Value =
+        serde_json::from_slice(&std::fs::read(ow.state_dir().join("ow-electron.json")).unwrap())
+            .unwrap();
+    assert_eq!(state["cmp"]["cmpString"], "CQTESTSTRING");
+    assert_eq!(
+        state["cmp"]["unifiedConsentString"],
+        "cmp%3DCQTESTSTRING%26ac%3D2~1"
+    );
+    assert!(state["cmp"]["timeStamp"].is_u64());
+    // Later calls resolve at once (the result is cached for the launch).
+    let handle = app.handle().clone();
+    assert!(tauri::async_runtime::block_on(
+        handle.overwolf().test_is_cmp_required()
+    ));
 }

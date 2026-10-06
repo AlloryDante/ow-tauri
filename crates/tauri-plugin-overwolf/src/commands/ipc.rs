@@ -45,9 +45,16 @@ pub(crate) async fn ipc_subscribe<R: Runtime>(
     webview: Webview<R>,
     state: State<'_, Overwolf<R>>,
     on_message: Channel<Vec<HostMessage>>,
+    user_agent: Option<String>,
 ) -> Result<Subscribed> {
     let host = host(&state);
     require_main_or_ui(&webview, host)?;
+    if let Some(ua) = user_agent.as_deref()
+        && require_main(&webview).is_ok()
+    {
+        // E.1: the platform webview's default UA, reported once.
+        host.report_user_agent(ua);
+    }
     let label = webview.label().to_owned();
     let epoch = uuid::Uuid::new_v4().simple().to_string();
     let now = host.now();
@@ -95,6 +102,7 @@ pub(crate) async fn main_ready<R: Runtime>(
         );
     }
     host.log(LogLevel::Info, "main_ready");
+    host.start_analytics();
     Ok(())
 }
 

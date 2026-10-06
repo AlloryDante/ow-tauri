@@ -4,6 +4,7 @@
 //! label and returns `forbidden` when it does not match, so a mis-scoped
 //! capability cannot widen access (ARCHITECTURE 5.2, defence in depth).
 
+mod ads;
 mod app;
 mod dialog;
 mod fs;
@@ -107,6 +108,18 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         app::disable_anonymous_analytics,
         app::disable_ads_optimization,
         app::disable_ads_fpd,
+        ads::is_cmp_required,
+        ads::open_cmp_window,
+        ads::open_ad_privacy_settings_window,
+        ads::set_user_email_hashes,
+        ads::set_external_payment_user_id,
+        ads::analytics_set_user_enabled,
+        ads::app_record_browser_args,
+        ads::packages_snapshot,
+        ads::packages_relaunch,
+        ads::packages_set_channel,
+        ads::packages_get_available_channels,
+        ads::packages_get_channel,
         window::window_create,
         window::window_load,
         window::window_close_reply,
@@ -131,5 +144,11 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         ipc::ipc_send,
         ipc::ipc_skip,
         window::eval_result,
+        ads::adview_mount,
+        ads::adview_update,
+        ads::adview_unmount,
+        ads::adview_command,
+        ads::adview_event,
+        ads::cmp_event,
     ]
 }

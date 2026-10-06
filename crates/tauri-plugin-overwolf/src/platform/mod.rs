@@ -2,8 +2,12 @@
 //! release (Node's `os.release()`), the macOS major version (A.6 liveness),
 //! and whether a file carries an execute bit (A.2.3.2).
 
+#[cfg(feature = "plugin")]
+pub(crate) mod machine;
 #[cfg(unix)]
 mod unix;
+#[cfg(feature = "plugin")]
+pub(crate) mod webview;
 #[cfg(windows)]
 mod windows;
 
