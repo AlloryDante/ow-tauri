@@ -24,3 +24,31 @@ describe('OwTauriError', () => {
     expect(error.code).toBe('backend');
   });
 });
+
+describe('instanceof across runtime copies', () => {
+  const BRANDS = Symbol.for('ow-tauri.error.brands');
+
+  it('recognises an error branded by another copy of the runtime', () => {
+    const foreign = Object.defineProperty(new Error('from another bundle'), BRANDS, {
+      value: ['OwTauriUnsupportedError', 'OwTauriError'],
+    });
+    expect(foreign instanceof OwTauriError).toBe(true);
+    expect(foreign instanceof OwTauriUnsupportedError).toBe(true);
+  });
+
+  it('keeps subclass checks precise', () => {
+    const base = new OwTauriError('io', 'disk full');
+    expect(base instanceof OwTauriError).toBe(true);
+    expect(base instanceof OwTauriUnsupportedError).toBe(false);
+    expect(new Error('plain') instanceof OwTauriError).toBe(false);
+    expect(OwTauriError[Symbol.hasInstance]('text')).toBe(false);
+  });
+
+  it('brands instances with their class chain', () => {
+    const error = new OwTauriUnsupportedError('app.dock', 'out of scope');
+    expect((error as unknown as Record<symbol, unknown>)[BRANDS]).toEqual([
+      'OwTauriUnsupportedError',
+      'OwTauriError',
+    ]);
+  });
+});

@@ -6,7 +6,8 @@
 //!
 //! This crate is the Rust half of ow-tauri. The JavaScript half, the npm
 //! package `ow-tauri`, runs the app's existing main-process code in a hidden
-//! webview and talks to this plugin over Tauri IPC. The wire contract between
+//! webview and talks to this plugin over Tauri IPC: commands from webviews to
+//! Rust, and one ordered `tauri::ipc::Channel` per webview from Rust back. The wire contract between
 //! the two is specified in `docs/CONTRACT.md` at the repository root, and the
 //! design in `docs/ARCHITECTURE.md`.
 //!
@@ -45,22 +46,12 @@ pub const PLUGIN_NAME: &str = "overwolf";
 /// ```
 pub const COMMAND_PREFIX: &str = "plugin:overwolf|";
 
-/// The prefix of every event this plugin emits (`overwolf://ipc`,
-/// `overwolf://adview-event`, ...).
-///
-/// ```
-/// use tauri_plugin_overwolf::EVENT_PREFIX;
-/// assert_eq!(format!("{EVENT_PREFIX}ipc"), "overwolf://ipc");
-/// ```
-pub const EVENT_PREFIX: &str = "overwolf://";
-
 #[cfg(test)]
 mod tests {
-    use super::{COMMAND_PREFIX, EVENT_PREFIX, PLUGIN_NAME};
+    use super::{COMMAND_PREFIX, PLUGIN_NAME};
 
     #[test]
-    fn prefixes_are_derived_from_the_plugin_name() {
+    fn command_prefix_is_derived_from_the_plugin_name() {
         assert_eq!(COMMAND_PREFIX, format!("plugin:{PLUGIN_NAME}|"));
-        assert_eq!(EVENT_PREFIX, format!("{PLUGIN_NAME}://"));
     }
 }
