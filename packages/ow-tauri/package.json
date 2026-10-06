@@ -5,6 +5,9 @@
   "license": "MIT",
   "author": "ow-tauri contributors",
   "type": "module",
+  "bin": {
+    "ow-tauri": "./dist/cli/index.js"
+  },
   "sideEffects": [
     "./dist/bootstrap/*.js",
     "./dist/electron/*.js",
