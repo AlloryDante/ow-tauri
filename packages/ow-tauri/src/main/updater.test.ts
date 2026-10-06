@@ -199,7 +199,8 @@ describe('autoUpdater commands (A.2.8)', () => {
     });
     await expect(autoUpdater.downloadUpdate()).rejects.toThrow(/setFeedURL/);
     expect(errors).toHaveLength(2);
-    expect(log.lines[0]).toMatch(/^error Error: /);
+    expect(log.lines[0]).toBe('info Checking for update');
+    expect(log.lines[1]).toMatch(/^error Error: /);
   });
 
   it('emits error for a call Tauri rejected, not for one the plugin reported', async () => {
@@ -243,6 +244,79 @@ describe('autoUpdater commands (A.2.8)', () => {
     host!.setCommand('updater_configure', () => null);
     host!.setCommand('updater_check', () => null);
     expect(await autoUpdater.checkForUpdates()).toBeNull();
+  });
+
+  it('returns the check in progress instead of checking twice', async () => {
+    let resolve: (value: unknown) => void = () => undefined;
+    const result = { isUpdateAvailable: false, updateInfo: info, versionInfo: info };
+    await start({
+      commands: {
+        updater_check: () =>
+          new Promise((r) => {
+            resolve = r;
+          }),
+      },
+    });
+    const log = logger();
+    autoUpdater.logger = log;
+    autoUpdater.setFeedURL(FEED);
+    const first = autoUpdater.checkForUpdates();
+    const second = autoUpdater.checkForUpdatesAndNotify();
+    expect(second).toBe(first);
+    await settle();
+    expect(host!.callsOf('updater_check')).toHaveLength(1);
+    resolve(result);
+    expect(await first).toEqual(result);
+    expect(log.lines).toEqual([
+      'info Checking for update',
+      'info Checking for update (already in progress)',
+    ]);
+    host!.setCommand('updater_check', () => result);
+    await autoUpdater.checkForUpdates();
+    expect(host!.callsOf('updater_check')).toHaveLength(2);
+  });
+
+  it('prefixes a failed check with "Cannot check for updates: "', async () => {
+    await start({
+      commands: {
+        updater_check: () => Promise.reject({ code: 'network', message: 'offline' }),
+        updater_download: () => Promise.reject({ code: 'network', message: 'offline' }),
+      },
+    });
+    autoUpdater.logger = null;
+    const messages: string[] = [];
+    autoUpdater.on('error', (_e: Error, message: string) => messages.push(message));
+    // No feed: the facade reports the failure itself.
+    await expect(autoUpdater.checkForUpdates()).rejects.toThrow(/setFeedURL/);
+    expect(messages[0]).toMatch(/^Cannot check for updates: .*setFeedURL/s);
+    // The plugin reports the failure as an `error` message, after or before
+    // the rejection.
+    autoUpdater.setFeedURL(FEED);
+    await expect(autoUpdater.checkForUpdates()).rejects.toMatchObject({ code: 'network' });
+    host!.push({ type: 'updater', event: 'error', error: { code: 'network', message: 'offline' } });
+    await settle();
+    expect(messages[1]).toMatch(/^Cannot check for updates: .*offline/s);
+    // Later errors (a download) keep electron-updater's plain message.
+    await expect(autoUpdater.downloadUpdate()).rejects.toMatchObject({ code: 'network' });
+    host!.push({ type: 'updater', event: 'error', error: { code: 'network', message: 'offline' } });
+    await settle();
+    expect(messages).toHaveLength(3);
+    expect(messages[2]).not.toMatch(/^Cannot check/);
+    // A check that found an update: a following download error is plain.
+    host!.setCommand('updater_check', () => ({ isUpdateAvailable: true }));
+    await autoUpdater.checkForUpdates();
+    host!.push(
+      { type: 'updater', event: 'update-available', info },
+      { type: 'updater', event: 'error', error: { code: 'backend', message: 'bad hash' } },
+    );
+    await settle();
+    expect(messages[3]).not.toMatch(/^Cannot check/);
+    // A disabled updater (`null`, no event) leaves nothing pending.
+    host!.setCommand('updater_check', () => null);
+    expect(await autoUpdater.checkForUpdates()).toBeNull();
+    host!.push({ type: 'updater', event: 'error', error: { code: 'backend', message: 'x' } });
+    await settle();
+    expect(messages[4]).not.toMatch(/^Cannot check/);
   });
 
   it('is main-only', async () => {
@@ -301,7 +375,6 @@ describe('autoUpdater events (I.3)', () => {
     expect(error.code).toBe('backend');
     expect(typeof seen[5]![2]).toBe('string');
     expect(log.lines).toEqual([
-      'info Checking for update',
       'info Found version 2.0.0 (url: setup.exe)',
       'info Update for version 1.0.0 is not available (latest version: 2.0.0, downgrade is disallowed).',
       'info New version 2.0.0 has been downloaded to /c/s.exe',

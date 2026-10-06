@@ -234,6 +234,9 @@ export class AppUpdater extends EventEmitter {
   #dirty = true;
   #sync: Promise<void> = Promise.resolve();
   #flushQueued = false;
+  #checkPromise: Promise<UpdateCheckResult | null> | null = null;
+  /** A check runs whose failure the plugin reports as an `error` message. */
+  #checkErrorPending = false;
 
   /**
    * @param kernel - the runtime kernel
@@ -258,6 +261,8 @@ export class AppUpdater extends EventEmitter {
       this.#dirty = true;
       this.#sync = Promise.resolve();
       this.#flushQueued = false;
+      this.#checkPromise = null;
+      this.#checkErrorPending = false;
     });
   }
 
@@ -415,14 +420,40 @@ export class AppUpdater extends EventEmitter {
    * or when the plugin disables updates for this build. With `autoDownload`
    * the plugin starts the download itself (`update-downloaded` follows).
    *
+   * While a check is in progress, another call returns the same promise and
+   * sends no second request, as electron-updater does. A failed check emits
+   * `error(error, 'Cannot check for updates: ' + stack)`.
+   *
    * @returns the check result, or `null`
    */
-  async checkForUpdates(): Promise<UpdateCheckResult | null> {
-    this.#kernel.require('main', 'autoUpdater.checkForUpdates');
-    if (!this.#active()) return null;
-    await this.#configured('updater_check');
-    const result = await this.#call('updater_check');
-    return (result ?? null) as UpdateCheckResult | null;
+  checkForUpdates(): Promise<UpdateCheckResult | null> {
+    try {
+      this.#kernel.require('main', 'autoUpdater.checkForUpdates');
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+    if (!this.#active()) return Promise.resolve(null);
+    const pending = this.#checkPromise;
+    if (pending) {
+      this.#logger.info('Checking for update (already in progress)');
+      return pending;
+    }
+    this.#logger.info('Checking for update');
+    this.#checkErrorPending = true;
+    const check: Promise<UpdateCheckResult | null> = this.#check().then(
+      (result) => {
+        if (this.#checkPromise === check) this.#checkPromise = null;
+        // `null`: the plugin disabled updates and sent no event.
+        if (result === null) this.#checkErrorPending = false;
+        return result;
+      },
+      (error: unknown) => {
+        if (this.#checkPromise === check) this.#checkPromise = null;
+        throw error;
+      },
+    );
+    this.#checkPromise = check;
+    return check;
   }
 
   /**
@@ -459,6 +490,12 @@ export class AppUpdater extends EventEmitter {
     this.#kernel.require('main', 'autoUpdater.quitAndInstall');
     this.#logger.info('Install on explicit quitAndInstall');
     this.#call('updater_quit_and_install', { isSilent, isForceRunAfter }).catch(() => undefined);
+  }
+
+  async #check(): Promise<UpdateCheckResult | null> {
+    await this.#configured('updater_check', true);
+    const result = await this.#call('updater_check', undefined, true);
+    return (result ?? null) as UpdateCheckResult | null;
   }
 
   #active(): boolean {
@@ -511,49 +548,72 @@ export class AppUpdater extends EventEmitter {
     return run;
   }
 
-  async #configured(command: string): Promise<void> {
+  /**
+   * Makes sure the plugin has the current configuration.
+   *
+   * @param command - the command about to run, for the error message
+   * @param check - whether a check runs (error message prefix)
+   */
+  async #configured(command: string, check = false): Promise<void> {
     if (this.#feed === null && !this.#forceDevUpdateConfig) {
       const error = new OwTauriError(
         'invalid-argument',
         `${command}: no update feed; call autoUpdater.setFeedURL() first (ow-tauri has no app-update.yml)`,
       );
-      this.#dispatchError(error);
+      this.#dispatchError(error, check);
       throw error;
     }
     try {
       await this.#configure();
     } catch (raw) {
       const error = fromWireError(raw, 'updater_configure');
-      this.#dispatchError(error);
+      this.#dispatchError(error, check);
       throw error;
     }
   }
 
-  async #call(command: string, args?: Record<string, unknown>): Promise<unknown> {
+  /**
+   * Runs an updater command.
+   *
+   * @param command - the command
+   * @param args - its arguments
+   * @param check - whether it is `updater_check` (error message prefix)
+   */
+  async #call(command: string, args?: Record<string, unknown>, check = false): Promise<unknown> {
     try {
       return await this.#kernel.command(command, args);
     } catch (raw) {
       const error = fromWireError(raw, command);
       // The plugin emits `error` for failures it handled; a call Tauri
       // rejected before the command ran never reached it.
-      if (isPreCommandRejection(error) || error.code === 'unsupported') this.#dispatchError(error);
+      if (isPreCommandRejection(error) || error.code === 'unsupported')
+        this.#dispatchError(error, check);
       throw error;
     }
   }
 
-  #dispatchError(error: Error): void {
+  /**
+   * Logs and emits `error(error, message)` as electron-updater does; a
+   * failed check prefixes the message with `Cannot check for updates: `.
+   *
+   * @param error - the error
+   * @param check - whether a check failed
+   */
+  #dispatchError(error: Error, check = false): void {
+    if (check) this.#checkErrorPending = false;
     this.#logger.error(`Error: ${error.stack ?? error.message}`);
-    emitFromHost(this, 'error', error, error.stack ?? String(error));
+    const detail = error.stack ?? String(error);
+    emitFromHost(this, 'error', error, check ? `Cannot check for updates: ${detail}` : detail);
   }
 
   #onHostMessage(message: UpdaterMessage): void {
     const event = message.event as UpdaterEvent;
     switch (event) {
       case 'checking-for-update':
-        this.#logger.info('Checking for update');
         emitFromHost(this, event);
         return;
       case 'update-available': {
+        this.#checkErrorPending = false;
         const info = message.info as Partial<UpdateInfo> | undefined;
         const urls = Array.isArray(info?.files) ? info.files.map((f) => f.url).join(', ') : '';
         this.#logger.info(`Found version ${versionOf(info)} (url: ${urls})`);
@@ -561,6 +621,7 @@ export class AppUpdater extends EventEmitter {
         return;
       }
       case 'update-not-available': {
+        this.#checkErrorPending = false;
         const info = message.info;
         this.#logger.info(
           `Update for version ${this.currentVersion.version} is not available (latest version: ${versionOf(info)}, downgrade is ${this.#allowDowngrade ? 'allowed' : 'disallowed'}).`,
@@ -579,7 +640,9 @@ export class AppUpdater extends EventEmitter {
         return;
       }
       case 'error':
-        this.#dispatchError(fromWireError(message.error, 'autoUpdater'));
+        // The check's own failure comes first: the plugin reports nothing
+        // else for it before update-available or update-not-available.
+        this.#dispatchError(fromWireError(message.error, 'autoUpdater'), this.#checkErrorPending);
         return;
       default:
         this.#kernel.log('debug', `unknown updater event: ${String(message.event)}`);
