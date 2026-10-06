@@ -111,9 +111,26 @@ tauri-plugin-overwolf = { version = "0.1", default-features = false, features = 
 
 `sign-exe` sends the app exe to Overwolf's certificate service when the app
 is eligible and asks for it (`enableOWCertSigning`), and runs `--fallback`
-(your own signing) for every other binary. Use the object form: Tauri
-splits a string `signCommand` on spaces. `ow-tauri sign --dry-run` prints
-the request without sending it.
+(your own signing) for every other binary. It finds the app exe from
+`tauri.conf.json` (`mainBinaryName`, else Cargo's binary name or
+`productName`); pass `--app-exe <name.exe>` to name it. Use the object form:
+Tauri starts a string `signCommand` without a shell, so `npx` cannot start
+on Windows. `ow-tauri sign --dry-run` prints the request without sending
+it.
+
+As with Overwolf's builder, a Windows release build fails when signing is
+required (`build.overwolf.requireSigning` is not `false`, or
+`OW_REQUIRE_SIGNING` is on) and `ow-tauri sign` has not produced output for
+this version. Set `OW_TAURI_ALLOW_UNSIGNED=1` for a local unsigned release
+build; it then only warns. `ow-tauri sign` touches `package.json`, so the
+next build picks its output up, and `write_nsis_installer_hooks` uses the
+signed uid as well.
+
+When the app exe is signed with Overwolf's certificate, set
+`plugins.overwolf.updater.publisherNames` to the name on your own
+certificate (the one that signs the installer): the updater cannot use the
+app exe's signer as the installer's publisher and otherwise skips that
+check, as electron-updater does without a `publisherName`.
 
 ## Tests
 

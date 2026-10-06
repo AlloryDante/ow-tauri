@@ -76,9 +76,27 @@ pub enum BuildError {
     /// compiler for the Windows target, or it failed).
     #[error("compiling the OWEINTEGRITY/OWE resource: {0}")]
     Resource(String),
+    /// A Windows release build requires Overwolf signing (CONTRACT G.4 e:
+    /// `build.overwolf.requireSigning` is not `false`, or
+    /// `OW_REQUIRE_SIGNING` is on) and no output of `ow-tauri sign` for this
+    /// version was found, as Overwolf's builder fails such a build.
+    #[error(
+        "[OW] Overwolf signing is required for this Windows release build: {0}. Run `npx ow-tauri sign` before `tauri build`, set build.overwolf.requireSigning to false in package.json, or set OW_TAURI_ALLOW_UNSIGNED=1 for a local unsigned build"
+    )]
+    SigningRequired(String),
+}
+
+/// The builder's truthy environment rule: set, not empty, not `0`, not
+/// `false` (any case).
+fn env_on(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|v| !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false"))
 }
 
 /// What the build targets, for [`embed_manifest_to`].
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts of the build, each read on its own"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BuildTarget {
     /// A release build (`PROFILE=release`): the signed output is applied and
@@ -87,6 +105,12 @@ pub struct BuildTarget {
     /// A Windows target (`CARGO_CFG_TARGET_OS=windows`): the builder's
     /// signing gate and the `OWEINTEGRITY/OWE` resource apply.
     pub windows: bool,
+    /// `OW_REQUIRE_SIGNING` is on: signing is required even when
+    /// `requireSigning` is `false` (the builder's rule).
+    pub require_signing_env: bool,
+    /// `OW_TAURI_ALLOW_UNSIGNED` is on: an unsigned Windows release build
+    /// that requires signing only warns (local builds without credentials).
+    pub allow_unsigned_env: bool,
 }
 
 impl BuildTarget {
@@ -96,7 +120,15 @@ impl BuildTarget {
         BuildTarget {
             release: std::env::var("PROFILE").is_ok_and(|p| p == "release"),
             windows: std::env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "windows"),
+            require_signing_env: env_on("OW_REQUIRE_SIGNING"),
+            allow_unsigned_env: env_on("OW_TAURI_ALLOW_UNSIGNED"),
         }
+    }
+
+    /// A release build for a target the builder signs (Windows).
+    #[must_use]
+    pub fn signs(self) -> bool {
+        self.release && self.windows
     }
 }
 
@@ -148,12 +180,18 @@ pub struct EmbedOutput {
 /// becomes `raw` (CONTRACT G.4 a). For a Windows target the
 /// `OWEINTEGRITY/OWE` resource is then compiled and linked with the
 /// `embed-resource` feature (G.4 c); without the feature a warning says so.
+/// `ow-tauri sign` touches `package.json`, so a later build picks up its
+/// output.
+///
+/// A Windows release build that requires signing (G.4 e) and has no signed
+/// output fails, as Overwolf's builder fails it: see
+/// [`BuildError::SigningRequired`].
 ///
 /// # Errors
 ///
 /// [`BuildError`] when a file cannot be read, fails validation (the error
-/// names the field path), `OUT_DIR` is not set, or the resource cannot be
-/// compiled.
+/// names the field path), `OUT_DIR` is not set, signing is required but
+/// missing, or the resource cannot be compiled.
 ///
 /// ```no_run
 /// // build.rs of the app (`tauri-plugin-overwolf` in [build-dependencies]
@@ -183,6 +221,9 @@ pub fn embed_manifest(path: impl AsRef<Path>) -> Result<(), BuildError> {
     )?;
     for file in &out.rerun_if_changed {
         println!("cargo:rerun-if-changed={}", file.display());
+    }
+    for name in ["OW_REQUIRE_SIGNING", "OW_TAURI_ALLOW_UNSIGNED"] {
+        println!("cargo:rerun-if-env-changed={name}");
     }
     for warning in &out.warnings {
         println!("cargo:warning={warning}");
@@ -242,27 +283,22 @@ pub fn embed_manifest_to(
     out_dir: &Path,
     target: BuildTarget,
 ) -> Result<EmbedOutput, BuildError> {
-    let text = std::fs::read_to_string(package_json).map_err(|source| BuildError::Io {
-        action: "reading",
-        path: package_json.to_path_buf(),
-        source,
-    })?;
-    let parsed = parse_package_json(&text)?;
-    let mut manifest = parsed.manifest;
-    let mut warnings = parsed.warnings;
-    let mut rerun = vec![package_json.to_path_buf()];
+    let Resolved {
+        manifest,
+        mut warnings,
+        mut rerun,
+        signed,
+    } = resolve_manifest(package_json, target)?;
     let package_dir = package_json.parent().unwrap_or_else(|| Path::new(""));
-
-    let signed = if target.release {
-        let signed_dir = package_dir.join(SIGNED_DIR);
-        // Watched even while missing: a release build must pick up a
-        // later `ow-tauri sign` (a missing file re-runs the script).
-        rerun.push(signed_dir.join("package.json"));
-        apply_signed(&mut manifest, &signed_dir, package_dir, &mut warnings)?
-    } else {
-        false
-    };
-    let signing_target = target.release && target.windows;
+    let signing_target = target.signs();
+    let required = manifest.build_overwolf.require_signing || target.require_signing_env;
+    if signing_target && required && !signed && !target.allow_unsigned_env {
+        let why = warnings.iter().find(|w| w.path == "version").map_or_else(
+            || format!("no {SIGNED_DIR}/package.json next to package.json"),
+            |w| w.message.clone(),
+        );
+        return Err(BuildError::SigningRequired(why));
+    }
     warnings.extend(signing_warnings(
         &manifest.build_overwolf,
         signing_target,
@@ -277,6 +313,7 @@ pub fn embed_manifest_to(
             warnings.extend(tauri_conf_warnings(&manifest, &conf));
             if signing_target {
                 warnings.extend(sign_command_warnings(&manifest.build_overwolf, &conf));
+                warnings.extend(publisher_name_warnings(&manifest.build_overwolf, &conf));
             }
             if signing_target && signed && !ships_integrity_dll(&conf) {
                 warnings.push(ManifestWarning {
@@ -335,13 +372,55 @@ pub fn embed_manifest_to(
     })
 }
 
+/// The manifest a build uses: `package.json`, with the output of
+/// `ow-tauri sign` applied in release builds.
+struct Resolved {
+    manifest: EmbeddedManifest,
+    warnings: Vec<ManifestWarning>,
+    rerun: Vec<PathBuf>,
+    signed: bool,
+}
+
+fn resolve_manifest(package_json: &Path, target: BuildTarget) -> Result<Resolved, BuildError> {
+    let text = std::fs::read_to_string(package_json).map_err(|source| BuildError::Io {
+        action: "reading",
+        path: package_json.to_path_buf(),
+        source,
+    })?;
+    let parsed = parse_package_json(&text)?;
+    let mut manifest = parsed.manifest;
+    let mut warnings = parsed.warnings;
+    let mut rerun = vec![package_json.to_path_buf()];
+    let package_dir = package_json.parent().unwrap_or_else(|| Path::new(""));
+    let signed = if target.release {
+        apply_signed(
+            &mut manifest,
+            &package_dir.join(SIGNED_DIR),
+            package_dir,
+            &mut warnings,
+            &mut rerun,
+        )?
+    } else {
+        false
+    };
+    Ok(Resolved {
+        manifest,
+        warnings,
+        rerun,
+        signed,
+    })
+}
+
 /// Applies `<signed_dir>/package.json` when it exists and was signed for
-/// the manifest's version. Returns whether it was applied.
+/// the manifest's version. Returns whether it was applied. Only files that
+/// exist are added to `rerun` (Cargo re-runs the script on every build for
+/// a missing one); `ow-tauri sign` touches `package.json` instead.
 fn apply_signed(
     manifest: &mut EmbeddedManifest,
     signed_dir: &Path,
     package_dir: &Path,
     warnings: &mut Vec<ManifestWarning>,
+    rerun: &mut Vec<PathBuf>,
 ) -> Result<bool, BuildError> {
     let path = signed_dir.join("package.json");
     let text = match std::fs::read_to_string(&path) {
@@ -355,6 +434,11 @@ fn apply_signed(
             });
         }
     };
+    rerun.push(path);
+    let result_path = signed_dir.join("sign-result.json");
+    if result_path.is_file() {
+        rerun.push(result_path);
+    }
     let invalid = |message: &str| {
         BuildError::Manifest(ManifestError {
             path: format!("{SIGNED_DIR}/package.json"),
@@ -388,11 +472,17 @@ fn apply_signed(
         .filter(|uid| is_valid_uid(uid))
         .ok_or_else(|| invalid("has no valid overwolf.uid; run `npx ow-tauri sign` again"))?
         .to_owned();
-    if let Some(message) = stale_entry_warning(signed_dir, package_dir) {
-        warnings.push(ManifestWarning {
-            path: "main".into(),
-            message,
-        });
+    let entry = signed_entry(signed_dir, package_dir);
+    if let Some(entry) = &entry {
+        if entry.path.is_file() {
+            rerun.push(entry.path.clone());
+        }
+        if let Some(message) = entry.stale_warning() {
+            warnings.push(ManifestWarning {
+                path: "main".into(),
+                message,
+            });
+        }
     }
     manifest.overwolf.uid = Some(uid);
     manifest.raw = without_dev_keys(signed);
@@ -407,23 +497,79 @@ fn without_dev_keys(mut signed: Map<String, Value>) -> Map<String, Value> {
     signed
 }
 
-/// A warning when the entry file `ow-tauri sign` hashed changed since.
-fn stale_entry_warning(signed_dir: &Path, package_dir: &Path) -> Option<String> {
+/// The entry file `ow-tauri sign` hashed, from `sign-result.json`.
+struct SignedEntry {
+    /// `mainFile` as hashed (for messages).
+    name: String,
+    /// The file: `mainPath` (absolute, written by `ow-tauri sign`), else
+    /// `mainFile` against the `package.json` folder.
+    path: PathBuf,
+    /// `mainSha256`.
+    sha256: String,
+}
+
+impl SignedEntry {
+    /// A warning when the file changed since it was hashed. A file that
+    /// cannot be read is reported too, since signing hashed it.
+    fn stale_warning(&self) -> Option<String> {
+        let Ok(bytes) = std::fs::read(&self.path) else {
+            return Some(format!(
+                "{} ({}), which `ow-tauri sign` hashed, cannot be read; run `npx ow-tauri sign` again",
+                self.name,
+                self.path.display()
+            ));
+        };
+        let actual = Sha256::digest(&bytes)
+            .iter()
+            .fold(String::new(), |mut hex, b| {
+                use std::fmt::Write as _;
+                let _ = write!(hex, "{b:02x}");
+                hex
+            });
+        (!actual.eq_ignore_ascii_case(&self.sha256)).then(|| {
+            format!(
+                "{} changed since `ow-tauri sign` hashed it; run `npx ow-tauri sign` again",
+                self.name
+            )
+        })
+    }
+}
+
+fn signed_entry(signed_dir: &Path, package_dir: &Path) -> Option<SignedEntry> {
     let result: Value =
         serde_json::from_slice(&std::fs::read(signed_dir.join("sign-result.json")).ok()?).ok()?;
-    let main = result.get("mainFile")?.as_str()?;
-    let expected = result.get("mainSha256")?.as_str()?;
-    let bytes = std::fs::read(package_dir.join(main)).ok()?;
-    let actual = Sha256::digest(&bytes)
-        .iter()
-        .fold(String::new(), |mut hex, b| {
-            use std::fmt::Write as _;
-            let _ = write!(hex, "{b:02x}");
-            hex
-        });
-    (!actual.eq_ignore_ascii_case(expected)).then(|| {
-        format!("{main} changed since `ow-tauri sign` hashed it; run `npx ow-tauri sign` again")
-    })
+    let name = result.get("mainFile")?.as_str()?.to_owned();
+    let sha256 = result.get("mainSha256")?.as_str()?.to_owned();
+    let path = result
+        .get("mainPath")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| package_dir.join(&name));
+    Some(SignedEntry { name, path, sha256 })
+}
+
+/// Warns when the app exe is signed with Overwolf's certificate
+/// (`enableOWCertSigning`) and `plugins.overwolf.updater.publisherNames` is
+/// unset: the updater then cannot tell the installer's publisher from the
+/// app exe's signer and skips the check (CONTRACT I.3).
+fn publisher_name_warnings(
+    build: &crate::manifest::BuildOverwolf,
+    conf: &Value,
+) -> Vec<ManifestWarning> {
+    let names = conf.pointer("/plugins/overwolf/updater/publisherNames");
+    if !build.enable_ow_cert_signing || names.is_some_and(|n| !n.is_null()) {
+        return Vec::new();
+    }
+    let updater_off =
+        conf.pointer("/plugins/overwolf/updater/enabled") == Some(&Value::Bool(false));
+    if updater_off {
+        return Vec::new();
+    }
+    vec![ManifestWarning {
+        path: "plugins.overwolf.updater.publisherNames".into(),
+        message: "the app exe is signed with Overwolf's certificate, so the updater cannot use its signer as the installer's publisher and skips the publisher check; set plugins.overwolf.updater.publisherNames to the name on your own code-signing certificate".into(),
+    }]
 }
 
 /// Whether `bundle.resources` names `integrity.dll`.
@@ -563,6 +709,12 @@ pub fn nsis_installer_hooks(
 /// when the content changed. Call it from the app's build script and point
 /// `bundle.windows.nsis.installerHooks` at `out`.
 ///
+/// It resolves the manifest as [`embed_manifest`] does for the running
+/// build ([`BuildTarget::from_env`]): in a release build the signed uid
+/// from `ow-tauri sign` names the registry key, the state folder and the
+/// uninstall Counter, as Overwolf's builder writes its NSIS script from
+/// the signed `package.json`. See [`write_nsis_installer_hooks_to`].
+///
 /// # Errors
 ///
 /// [`BuildError::Io`] when a file cannot be read or written, and
@@ -584,15 +736,48 @@ pub fn write_nsis_installer_hooks(
     host_label: &str,
     out: &Path,
 ) -> Result<(), BuildError> {
-    let text = std::fs::read_to_string(package_json).map_err(|source| BuildError::Io {
-        action: "reading",
-        path: package_json.to_path_buf(),
-        source,
-    })?;
-    let parsed = parse_package_json(&text)?;
+    write_nsis_installer_hooks_to(
+        package_json,
+        config_uid,
+        host_label,
+        out,
+        BuildTarget::from_env(),
+    )
+}
+
+/// [`write_nsis_installer_hooks`] for an explicit [`BuildTarget`].
+///
+/// # Errors
+///
+/// As [`write_nsis_installer_hooks`].
+///
+/// ```
+/// use tauri_plugin_overwolf::build::{write_nsis_installer_hooks_to, BuildTarget};
+/// let dir = std::env::temp_dir().join(format!("ow-tauri-doc-nsis-to-{}", std::process::id()));
+/// std::fs::create_dir_all(dir.join("ow-tauri-signed")).unwrap();
+/// let package_json = dir.join("package.json");
+/// std::fs::write(&package_json, r#"{"name":"demo","version":"1.0.0","author":"Example Studio"}"#).unwrap();
+/// std::fs::write(
+///     dir.join("ow-tauri-signed/package.json"),
+///     r#"{"name":"demo","version":"1.0.0","overwolf":{"uid":"abcdefabcdefabcdefabcdefabcdefabcdefabcd"}}"#,
+/// ).unwrap();
+/// let release = BuildTarget { release: true, windows: true, ..BuildTarget::default() };
+/// write_nsis_installer_hooks_to(&package_json, None, "tauri", &dir.join("hooks.nsh"), release).unwrap();
+/// let nsh = std::fs::read_to_string(dir.join("hooks.nsh")).unwrap();
+/// assert!(nsh.contains(r#"OverwolfElectron\abcdefabcdefabcdefabcdefabcdefabcdefabcd""#));
+/// # std::fs::remove_dir_all(&dir).unwrap();
+/// ```
+pub fn write_nsis_installer_hooks_to(
+    package_json: &Path,
+    config_uid: Option<&str>,
+    host_label: &str,
+    out: &Path,
+    target: BuildTarget,
+) -> Result<(), BuildError> {
+    let resolved = resolve_manifest(package_json, target)?;
     write(
         out,
-        nsis_installer_hooks(&parsed.manifest, config_uid, host_label).as_bytes(),
+        nsis_installer_hooks(&resolved.manifest, config_uid, host_label).as_bytes(),
     )
 }
 
@@ -700,13 +885,19 @@ mod tests {
         assert_eq!(paths, ["overwolf.packages", "productName"]);
         assert_eq!(out.rerun_if_changed.len(), 3);
 
-        // Release builds embed no dev update config and, for Windows, warn
-        // about signing.
-        let release = BuildTarget {
-            release: true,
-            windows: true,
+        // An unsigned Windows release build that requires signing fails, as
+        // Overwolf's builder fails it (G.4 e); OW_REQUIRE_SIGNING forces it.
+        let err =
+            embed_manifest_to(&dir.join("package.json"), None, &dir, WINDOWS_RELEASE).unwrap_err();
+        assert!(matches!(err, BuildError::SigningRequired(_)), "{err}");
+        assert!(err.to_string().contains("npx ow-tauri sign"), "{err}");
+        // OW_TAURI_ALLOW_UNSIGNED: a warning. Release builds embed no dev
+        // update config, and nothing missing is watched.
+        let allow = BuildTarget {
+            allow_unsigned_env: true,
+            ..WINDOWS_RELEASE
         };
-        let out = embed_manifest_to(&dir.join("package.json"), None, &dir, release).unwrap();
+        let out = embed_manifest_to(&dir.join("package.json"), None, &dir, allow).unwrap();
         assert!(!out.dev_app_update_embedded);
         assert_eq!(std::fs::read(&out.dev_app_update_path).unwrap(), b"");
         assert!(
@@ -714,6 +905,30 @@ mod tests {
                 .iter()
                 .any(|w| w.path == "build.overwolf.requireSigning")
         );
+        assert_eq!(out.rerun_if_changed, [dir.join("package.json")]);
+        // requireSigning false: no gate, unless OW_REQUIRE_SIGNING.
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{"name":"demo","version":"1.0.0","author":"Studio","build":{"overwolf":{"requireSigning":false}}}"#,
+        )
+        .unwrap();
+        let out =
+            embed_manifest_to(&dir.join("package.json"), None, &dir, WINDOWS_RELEASE).unwrap();
+        assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+        let forced = BuildTarget {
+            require_signing_env: true,
+            ..WINDOWS_RELEASE
+        };
+        assert!(matches!(
+            embed_manifest_to(&dir.join("package.json"), None, &dir, forced),
+            Err(BuildError::SigningRequired(_))
+        ));
+        // Other targets never gate.
+        let mac = BuildTarget {
+            windows: false,
+            ..forced
+        };
+        assert!(embed_manifest_to(&dir.join("package.json"), None, &dir, mac).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -779,6 +994,8 @@ mod tests {
     const WINDOWS_RELEASE: BuildTarget = BuildTarget {
         release: true,
         windows: true,
+        require_signing_env: false,
+        allow_unsigned_env: false,
     };
 
     #[test]
@@ -786,7 +1003,7 @@ mod tests {
         let dir = signed_fixture("signed", "1.0.0");
         std::fs::write(
             dir.join("tauri.conf.json"),
-            r#"{"bundle":{"resources":{"../ow-tauri-signed/integrity.dll":"integrity.dll"},"windows":{"signCommand":"npx ow-tauri sign-exe %1"}}}"#,
+            r#"{"bundle":{"resources":{"../ow-tauri-signed/integrity.dll":"integrity.dll"},"windows":{"signCommand":{"cmd":"npx.cmd","args":["ow-tauri","sign-exe","%1"]}}},"plugins":{"overwolf":{"updater":{"publisherNames":["Studio"]}}}}"#,
         )
         .unwrap();
         let out = embed_manifest_to(
@@ -812,10 +1029,14 @@ mod tests {
             m.build_overwolf.enable_ow_cert_signing,
             "kept from package.json"
         );
-        assert!(
-            out.rerun_if_changed
-                .contains(&dir.join(SIGNED_DIR).join("package.json"))
-        );
+        // The signed copy, its result and the hashed entry are watched.
+        for watched in [
+            dir.join(SIGNED_DIR).join("package.json"),
+            dir.join(SIGNED_DIR).join("sign-result.json"),
+            dir.join("main.js"),
+        ] {
+            assert!(out.rerun_if_changed.contains(&watched), "{watched:?}");
+        }
         let owe = out.owe_resource.expect("OWE resource on Windows");
         assert_eq!(
             std::fs::read_to_string(&owe.json_path).unwrap(),
@@ -828,8 +1049,8 @@ mod tests {
         // Other targets apply the uid but compile no resource, and a stale
         // resource from an earlier build is removed.
         let mac = BuildTarget {
-            release: true,
             windows: false,
+            ..WINDOWS_RELEASE
         };
         let out = embed_manifest_to(&dir.join("package.json"), None, &dir, mac).unwrap();
         assert!(out.signed && out.owe_resource.is_none());
@@ -857,10 +1078,17 @@ mod tests {
 
     #[test]
     fn signed_output_warnings_and_errors() {
-        // Another version: ignored with a warning, and the unsigned warning.
+        // Another version: ignored, so signing is missing and the build
+        // fails, naming the version; with OW_TAURI_ALLOW_UNSIGNED, warnings.
         let dir = signed_fixture("stale", "0.9.0");
-        let out =
-            embed_manifest_to(&dir.join("package.json"), None, &dir, WINDOWS_RELEASE).unwrap();
+        let err =
+            embed_manifest_to(&dir.join("package.json"), None, &dir, WINDOWS_RELEASE).unwrap_err();
+        assert!(err.to_string().contains("\"0.9.0\""), "{err}");
+        let allow = BuildTarget {
+            allow_unsigned_env: true,
+            ..WINDOWS_RELEASE
+        };
+        let out = embed_manifest_to(&dir.join("package.json"), None, &dir, allow).unwrap();
         assert!(!out.signed && out.owe_resource.is_none());
         let paths: Vec<&str> = out.warnings.iter().map(|w| w.path.as_str()).collect();
         assert_eq!(
@@ -890,6 +1118,7 @@ mod tests {
             [
                 "main",
                 "build.overwolf.enableOWCertSigning",
+                "plugins.overwolf.updater.publisherNames",
                 "bundle.resources"
             ]
         );
@@ -908,6 +1137,84 @@ mod tests {
             embed_manifest_to(&dir.join("package.json"), None, &dir, WINDOWS_RELEASE),
             Err(BuildError::Manifest(_))
         ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn entry_from_main_path_and_hooks_use_the_signed_uid() {
+        // `ow-tauri sign --project-dir` hashes a file outside the package
+        // folder and records its absolute path.
+        let dir = signed_fixture("main-path", "1.0.0");
+        let project = dir.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("main.js"), "test").unwrap();
+        std::fs::remove_file(dir.join("main.js")).unwrap();
+        std::fs::write(
+            dir.join(SIGNED_DIR).join("sign-result.json"),
+            serde_json::json!({
+                "mainFile": "main.js",
+                "mainPath": std::path::absolute(project.join("main.js")).unwrap(),
+                "mainSha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let out =
+            embed_manifest_to(&dir.join("package.json"), None, &dir, WINDOWS_RELEASE).unwrap();
+        assert!(out.signed);
+        assert!(
+            out.warnings.iter().all(|w| w.path != "main"),
+            "{:?}",
+            out.warnings
+        );
+        assert!(
+            out.rerun_if_changed
+                .contains(&std::path::absolute(project.join("main.js")).unwrap())
+        );
+        std::fs::write(project.join("main.js"), "changed").unwrap();
+        let out =
+            embed_manifest_to(&dir.join("package.json"), None, &dir, WINDOWS_RELEASE).unwrap();
+        assert!(out.warnings.iter().any(|w| w.path == "main"));
+
+        // The NSIS hooks of a signed release name the signed uid (registry
+        // key, state folder, Counter app_id); debug builds the computed one.
+        let hooks = dir.join("hooks.nsh");
+        write_nsis_installer_hooks_to(
+            &dir.join("package.json"),
+            None,
+            "tauri",
+            &hooks,
+            WINDOWS_RELEASE,
+        )
+        .unwrap();
+        let nsh = std::fs::read_to_string(&hooks).unwrap();
+        assert!(
+            nsh.contains(&format!(r#"OverwolfElectron\{SIGNED_UID}""#)),
+            "{nsh}"
+        );
+        assert!(
+            nsh.contains(&format!(r#"$APPDATA\ow-electron\{SIGNED_UID}""#)),
+            "{nsh}"
+        );
+        assert!(
+            nsh.contains(&format!("%22app_id%22%3A%22{SIGNED_UID}%22")),
+            "{nsh}"
+        );
+        write_nsis_installer_hooks_to(
+            &dir.join("package.json"),
+            None,
+            "tauri",
+            &hooks,
+            BuildTarget::default(),
+        )
+        .unwrap();
+        let computed = crate::identity::computed_uid("Studio", "demo");
+        let nsh = std::fs::read_to_string(&hooks).unwrap();
+        assert!(
+            nsh.contains(&format!(r#"OverwolfElectron\{computed}""#)),
+            "{nsh}"
+        );
+        assert!(!nsh.contains(SIGNED_UID));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

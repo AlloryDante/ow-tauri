@@ -552,21 +552,41 @@ pub fn signing_warnings(
 
 /// Warns when `enableOWCertSigning` is set but `tauri.conf.json`
 /// `bundle.windows.signCommand` does not run `ow-tauri sign-exe`, the step
-/// that posts the app exe to the certificate service (CONTRACT G.4 d).
+/// that posts the app exe to the certificate service (CONTRACT G.4 d), and
+/// when a string `signCommand` starts with `npx`: Tauri starts it without a
+/// shell, so `npx` (`npx.cmd`) cannot start on Windows; the object form
+/// `{"cmd": "npx.cmd", "args": [...]}` can.
 ///
 /// ```
 /// use tauri_plugin_overwolf::manifest::{sign_command_warnings, BuildOverwolf};
 /// let b = BuildOverwolf { enable_ow_cert_signing: true, ..BuildOverwolf::default() };
-/// let conf = serde_json::json!({ "bundle": { "windows": { "signCommand": "npx ow-tauri sign-exe %1" } } });
+/// let conf = serde_json::json!({ "bundle": { "windows": { "signCommand": {
+///     "cmd": "npx.cmd", "args": ["ow-tauri", "sign-exe", "%1"]
+/// } } } });
 /// assert!(sign_command_warnings(&b, &conf).is_empty());
 /// assert_eq!(sign_command_warnings(&b, &serde_json::json!({})).len(), 1);
+/// let npx = serde_json::json!({ "bundle": { "windows": { "signCommand": "npx ow-tauri sign-exe %1" } } });
+/// assert!(sign_command_warnings(&b, &npx)[0].message.contains("npx.cmd"));
 /// ```
 #[must_use]
 pub fn sign_command_warnings(build: &BuildOverwolf, conf: &Value) -> Vec<ManifestWarning> {
-    if !build.enable_ow_cert_signing {
-        return Vec::new();
+    let mut out = Vec::new();
+    let sign_command = conf.pointer("/bundle/windows/signCommand");
+    if let Some(Value::String(line)) = sign_command
+        && line
+            .split_whitespace()
+            .next()
+            .is_some_and(|first| first.eq_ignore_ascii_case("npx"))
+    {
+        out.push(warn(
+            "bundle.windows.signCommand",
+            "Tauri starts a string signCommand without a shell, so `npx` cannot start on Windows; use the object form {\"cmd\": \"npx.cmd\", \"args\": [\"ow-tauri\", \"sign-exe\", \"%1\"]}",
+        ));
     }
-    let command = match conf.pointer("/bundle/windows/signCommand") {
+    if !build.enable_ow_cert_signing {
+        return out;
+    }
+    let command = match sign_command {
         Some(Value::String(line)) => line.clone(),
         Some(Value::Object(spec)) => {
             let mut words = vec![spec.get("cmd").and_then(Value::as_str).unwrap_or_default()];
@@ -583,14 +603,13 @@ pub fn sign_command_warnings(build: &BuildOverwolf, conf: &Value) -> Vec<Manifes
         .iter()
         .position(|w| *w == "sign-exe")
         .is_some_and(|at| words[..at].iter().any(|w| w.contains("ow-tauri")));
-    if runs_sign_exe {
-        Vec::new()
-    } else {
-        vec![warn(
+    if !runs_sign_exe {
+        out.push(warn(
             "build.overwolf.enableOWCertSigning",
-            "tauri.conf.json bundle.windows.signCommand does not run `ow-tauri sign-exe %1`, so the app exe is not signed with Overwolf's certificate",
-        )]
+            "tauri.conf.json bundle.windows.signCommand does not run `ow-tauri sign-exe`, so the app exe is not signed with Overwolf's certificate; set it to {\"cmd\": \"npx.cmd\", \"args\": [\"ow-tauri\", \"sign-exe\", \"%1\"]}",
+        ));
     }
+    out
 }
 
 /// Warnings for `tauri.conf.json` values that disagree with the manifest
@@ -829,10 +848,19 @@ mod tests {
         assert!(sign_command_warnings(&b, &object).is_empty());
         let other = serde_json::json!({"bundle":{"windows":{"signCommand":"signtool sign %1"}}});
         assert_eq!(sign_command_warnings(&b, &other).len(), 1);
+        let npx =
+            serde_json::json!({"bundle":{"windows":{"signCommand":"npx ow-tauri sign-exe %1"}}});
+        let paths: Vec<String> = sign_command_warnings(&b, &npx)
+            .into_iter()
+            .map(|w| w.path)
+            .collect();
+        assert_eq!(paths, ["bundle.windows.signCommand"]);
         b.require_signing = false;
         b.enable_ow_cert_signing = false;
         assert!(signing_warnings(&b, true, false).is_empty());
         assert!(sign_command_warnings(&b, &other).is_empty());
+        // The npx warning does not depend on Overwolf certificate signing.
+        assert_eq!(sign_command_warnings(&b, &npx).len(), 1);
 
         let m = EmbeddedManifest::minimal("Demo", "S", "1.0.0");
         let ok = serde_json::json!({"productName":"Demo","version":"../package.json"});
