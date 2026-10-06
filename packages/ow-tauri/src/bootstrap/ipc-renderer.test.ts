@@ -199,14 +199,32 @@ describe('ipcRenderer.invoke (C.2)', () => {
     expect(host.callsOf('ipc_skip')).toEqual([{ epoch: 'epoch-1', seq: 1 }]);
   });
 
-  it('does not skip when the plugin itself rejected (the command ran)', async () => {
+  it('skips the sequence number of a call the plugin refused (C.3 gaps)', async () => {
     host.setCommand('ipc_invoke', () => {
       throw { code: 'ipc-overloaded', message: '256 invokes in flight' };
     });
+    host.setCommand('ipc_send', () => {
+      throw { code: 'ipc-serialization', message: 'too large' };
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     await expect(ipcRenderer.invoke('busy')).rejects.toMatchObject({
       code: 'ipc-overloaded',
       message: "Error invoking remote method 'busy': 256 invokes in flight",
     });
+    ipcRenderer.send('big');
+    await settle();
+    expect(host.callsOf('ipc_skip')).toEqual([
+      { epoch: 'epoch-1', seq: 1 },
+      { epoch: 'epoch-1', seq: 2 },
+    ]);
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('does not skip for a stale epoch, which the router no longer orders', async () => {
+    host.setCommand('ipc_invoke', () => {
+      throw { code: 'not-ready', message: 'stale epoch' };
+    });
+    await expect(ipcRenderer.invoke('old')).rejects.toMatchObject({ code: 'not-ready' });
     await settle();
     expect(host.callsOf('ipc_skip')).toEqual([]);
   });
@@ -354,5 +372,15 @@ describe('remoteInvokeError', () => {
     expect(remoteInvokeError('c', { code: 'ipc-remote-error', message: 'm' }).message).toBe(
       "Error invoking remote method 'c': Error: m",
     );
+  });
+
+  it("uses Electron's toString() text when the main runtime sent it", () => {
+    const error = remoteInvokeError('c', {
+      code: 'ipc-remote-error',
+      message: 'boom',
+      data: { name: 'Error', message: 'boom', text: 'boom' },
+    });
+    expect(error.message).toBe("Error invoking remote method 'c': boom");
+    expect(error.data).toMatchObject({ name: 'Error', message: 'boom' });
   });
 });

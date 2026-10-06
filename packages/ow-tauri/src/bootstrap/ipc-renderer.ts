@@ -10,8 +10,11 @@
  *   an `ipc-result` host message on the same ordered channel as
  *   `webContents.send` messages. A result that overtakes its acknowledgement
  *   is held until the acknowledgement arrives.
- * - A call Tauri rejects before the command runs is reported with
- *   `ipc_skip` so the router does not wait for its sequence number.
+ * - Every rejected call is reported with `ipc_skip`, whether Tauri rejected
+ *   it before the command ran or the plugin refused it, so the router never
+ *   waits for a sequence number that will not arrive (a number the router
+ *   already consumed is ignored by `ipc_skip`). Only a stale epoch is not
+ *   reported: the router ignores skips for old epochs.
  *
  * @packageDocumentation
  */
@@ -22,6 +25,7 @@ import type { IpcResultMessage } from '../shared/protocol.js';
 import { defineUnsupported } from '../shared/unsupported.js';
 import { isPreCommandRejection, type OverwolfErrorWire } from '../shared/wire-error.js';
 import type { KernelServices } from './services.js';
+import type { UnsupportedMethod } from '../shared/unsupported.js';
 
 /** Default `ipc.maxMessageBytes` (CONTRACT A.1). */
 export const DEFAULT_MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
@@ -111,7 +115,9 @@ export function remoteInvokeError(channel: string, wire: OverwolfErrorWire): OwT
       >;
       const name = typeof data['name'] === 'string' ? data['name'] : 'Error';
       const message = typeof data['message'] === 'string' ? data['message'] : wire.message;
-      return new OwTauriError('ipc-remote-error', `${prefix}${name}: ${message}`, {
+      // `text` is the thrown value's toString(), Electron's exact wording.
+      const text = typeof data['text'] === 'string' ? data['text'] : `${name}: ${message}`;
+      return new OwTauriError('ipc-remote-error', `${prefix}${text}`, {
         data: { ...data, name, message },
       });
     }
@@ -338,9 +344,13 @@ export class IpcClient {
     this.#queue.push(call);
   }
 
-  /** Maps a command rejection and reports pre-command rejections with `ipc_skip`. */
+  /**
+   * Reports a rejected call's sequence number with `ipc_skip` (CONTRACT C.3
+   * "Gaps"). A `not-ready` from the plugin means a stale epoch, which the
+   * router no longer orders, so it is not reported.
+   */
   #rejected(error: OwTauriError, epoch: string, seq: number): OwTauriError {
-    if (isPreCommandRejection(error)) {
+    if (isPreCommandRejection(error) || error.code !== 'not-ready') {
       this.services.command('ipc_skip', { epoch, seq }).catch(() => {
         // the 1 s gap timeout in the router covers a failed skip
       });
@@ -368,6 +378,30 @@ export interface IpcRendererEvent {
  * `OwTauriUnsupportedError`).
  */
 export class IpcRenderer extends EventEmitter {
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.3).
+   */
+  declare readonly sendSync: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.3).
+   */
+  declare readonly sendTo: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.3).
+   */
+  declare readonly sendToHost: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.3).
+   */
+  declare readonly postMessage: UnsupportedMethod;
   readonly #services: KernelServices;
   readonly #client: () => IpcClient;
 

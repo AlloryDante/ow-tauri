@@ -13,11 +13,19 @@
  */
 import type { WindowIds } from './ipc-main.js';
 
+/** Plugin ids of closed windows remembered, so late messages are not re-bound. */
+const MAX_FORGOTTEN = 1024;
+
 /** Bidirectional map between app-visible and plugin window ids. */
 export class WindowIdMap implements WindowIds {
   #next = 1;
   readonly #toHost = new Map<number, number>();
   readonly #fromHost = new Map<number, number>();
+  /** Reserved ids whose `window_create` has not settled. */
+  readonly #pending = new Set<number>();
+  /** Plugin ids of windows that were forgotten (closed). */
+  readonly #forgotten = new Set<number>();
+  readonly #listeners = new Set<() => void>();
 
   /**
    * Allocates an app-visible id whose plugin id is not known yet.
@@ -25,7 +33,9 @@ export class WindowIdMap implements WindowIds {
    * @returns the new id
    */
   reserve(): number {
-    return this.#next++;
+    const id = this.#next++;
+    this.#pending.add(id);
+    return id;
   }
 
   /**
@@ -37,6 +47,9 @@ export class WindowIdMap implements WindowIds {
   bind(id: number, hostId: number): void {
     this.#toHost.set(id, hostId);
     this.#fromHost.set(hostId, id);
+    this.#forgotten.delete(hostId);
+    this.#pending.delete(id);
+    this.#changed();
   }
 
   /**
@@ -49,11 +62,26 @@ export class WindowIdMap implements WindowIds {
     return this.#fromHost.has(hostId);
   }
 
+  /** {@inheritDoc WindowIds.peekHost} */
+  peekHost(hostId: number): number | undefined {
+    return this.#fromHost.get(hostId);
+  }
+
+  /** {@inheritDoc WindowIds.isForgotten} */
+  isForgotten(hostId: number): boolean {
+    return this.#forgotten.has(hostId);
+  }
+
+  /** {@inheritDoc WindowIds.hasPending} */
+  hasPending(): boolean {
+    return this.#pending.size > 0;
+  }
+
   /** {@inheritDoc WindowIds.fromHost} */
   fromHost(hostId: number): number {
     const known = this.#fromHost.get(hostId);
     if (known !== undefined) return known;
-    const id = this.reserve();
+    const id = this.#next++;
     this.bind(id, hostId);
     return id;
   }
@@ -64,14 +92,30 @@ export class WindowIdMap implements WindowIds {
   }
 
   /**
-   * Forgets a window.
+   * Forgets a window (closed, or its creation failed). Later messages from its
+   * plugin id are recognised as stale instead of being bound to a new id.
    *
    * @param id - the app-visible id
    */
   forget(id: number): void {
     const hostId = this.#toHost.get(id);
     this.#toHost.delete(id);
-    if (hostId !== undefined) this.#fromHost.delete(hostId);
+    this.#pending.delete(id);
+    if (hostId !== undefined) {
+      this.#fromHost.delete(hostId);
+      this.#forgotten.add(hostId);
+      if (this.#forgotten.size > MAX_FORGOTTEN) {
+        const oldest = this.#forgotten.values().next();
+        if (oldest.done !== true) this.#forgotten.delete(oldest.value);
+      }
+    }
+    this.#changed();
+  }
+
+  /** {@inheritDoc WindowIds.onChange} */
+  onChange(listener: () => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
   }
 
   /** Forgets everything and restarts numbering at 1. */
@@ -79,5 +123,11 @@ export class WindowIdMap implements WindowIds {
     this.#next = 1;
     this.#toHost.clear();
     this.#fromHost.clear();
+    this.#pending.clear();
+    this.#forgotten.clear();
+  }
+
+  #changed(): void {
+    for (const listener of [...this.#listeners]) listener();
   }
 }

@@ -8,11 +8,16 @@
  * sequence number, assigned when the message is sent, so a reply is delivered
  * after every message its handler sent to that window before returning.
  *
+ * Every outbound sequence number is accounted for: a reply or emit the plugin
+ * (or Tauri) rejects is reported with `ipc_emit_skip { target, seq }`, and a
+ * reply that cannot be delivered is replaced by a small error reply, so the
+ * renderer's `invoke` always settles.
+ *
  * @packageDocumentation
  */
 import { EventEmitter, emitFromHost, type EventName, type Listener } from '../shared/emitter.js';
-import { OwTauriUnsupportedError } from '../shared/errors.js';
-import { decodeArgs, encode, type OtjValue } from '../shared/otj.js';
+import { OwTauriError, OwTauriUnsupportedError } from '../shared/errors.js';
+import { decodeArgs, encode, encodedSize, type OtjValue } from '../shared/otj.js';
 import type { IpcSender } from '../shared/protocol.js';
 import { describeThrown, type OverwolfErrorWire } from '../shared/wire-error.js';
 import { checkChannel, DEFAULT_MAX_MESSAGE_BYTES, encodeMessageArgs } from './ipc-renderer.js';
@@ -46,7 +51,11 @@ export interface IpcMainEventBase {
   readonly defaultPrevented: boolean;
 }
 
-/** First argument of `ipcMain.handle` handlers (Electron's `IpcMainInvokeEvent`). */
+/**
+ * First argument of `ipcMain.handle` handlers (Electron's `IpcMainInvokeEvent`).
+ * It has no `reply`, `returnValue` or `ports`: the handler's return value is
+ * the reply.
+ */
 export type IpcMainInvokeEvent = IpcMainEventBase;
 
 /** First argument of `ipcMain.on` listeners (Electron's `IpcMainEvent`). */
@@ -58,9 +67,17 @@ export interface IpcMainEvent extends IpcMainEventBase {
    * @param args - the arguments
    */
   reply(channel: string, ...args: unknown[]): void;
-  /** Unsupported (`sendSync`): reading returns `undefined`, assigning throws. */
+  /**
+   * Unsupported (`sendSync`): reading returns `undefined`, assigning throws.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.3): use `ipcRenderer.invoke` and `ipcMain.handle`.
+   */
   returnValue: unknown;
-  /** Unsupported (MessagePorts): reads as `undefined`. */
+  /**
+   * Unsupported (MessagePorts): reads as `undefined`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.3).
+   */
   readonly ports: undefined;
 }
 
@@ -202,13 +219,57 @@ export interface WindowIds {
    */
   fromHost(hostId: number): number;
   /**
+   * The app-visible id for a plugin id, without allocating.
+   *
+   * @param hostId - the plugin's id
+   * @returns the app-visible id, or `undefined` when the id is not bound
+   */
+  peekHost(hostId: number): number | undefined;
+  /**
    * The plugin's id for an app-visible id.
    *
    * @param id - the app-visible id
    * @returns the plugin's id, or `undefined` while the window is being created
    */
   toHost(id: number): number | undefined;
+  /**
+   * Whether the plugin id belonged to a window that was closed.
+   *
+   * @param hostId - the plugin's id
+   * @returns `true` for a forgotten window
+   */
+  isForgotten(hostId: number): boolean;
+  /**
+   * Whether a `window_create` is outstanding (its plugin id is not known yet).
+   *
+   * @returns `true` while any create is pending
+   */
+  hasPending(): boolean;
+  /**
+   * Subscribes to binds and forgets.
+   *
+   * @param listener - called after every change
+   * @returns a function that unsubscribes
+   */
+  onChange(listener: () => void): () => void;
 }
+
+/** IPC from a window whose plugin id is not bound yet. */
+interface HeldIpc {
+  hostId: number;
+  run: (windowId: number) => void;
+}
+
+/** An `ipc_reply` payload without its sequence number. */
+interface Reply {
+  id: number;
+  ok: boolean;
+  value?: OtjValue;
+  error?: OverwolfErrorWire;
+}
+
+/** Most IPC messages held while windows are being created. */
+const MAX_HELD = 4096;
 
 /** The main-webview half of the IPC protocol. */
 export class IpcServer {
@@ -218,6 +279,7 @@ export class IpcServer {
   senderResolver: SenderResolver = (windowId) => this.#minimalSender(windowId);
   readonly #scoped = new Map<number, IpcMain>();
   readonly #seq = new Map<number, number>();
+  #held: HeldIpc[] = [];
 
   /**
    * @param services - kernel services
@@ -231,6 +293,9 @@ export class IpcServer {
   ) {
     this.ipcMain = new IpcMain((api) => {
       services.require('main', api);
+    });
+    ids.onChange(() => {
+      this.#releaseHeld();
     });
   }
 
@@ -268,6 +333,7 @@ export class IpcServer {
     for (const scope of this.#scoped.values()) scope.clear();
     this.#scoped.clear();
     this.#seq.clear();
+    this.#held = [];
     this.ipcMain.clear();
   }
 
@@ -280,8 +346,22 @@ export class IpcServer {
    * @param sender - the sender Rust stamped
    * @returns resolves when the reply was handed to the plugin
    */
-  async onInvoke(id: number, channel: string, args: unknown, sender: IpcSender): Promise<void> {
-    const windowId = this.ids.fromHost(sender.windowId);
+  onInvoke(id: number, channel: string, args: unknown, sender: IpcSender): Promise<void> {
+    // A held or dropped request resolves at once; a held one replies later.
+    let done = Promise.resolve();
+    this.#route(sender.windowId, `invoke '${channel}'`, (windowId) => {
+      done = this.#invoke(windowId, id, channel, args, sender);
+    });
+    return done;
+  }
+
+  async #invoke(
+    windowId: number,
+    id: number,
+    channel: string,
+    args: unknown,
+    sender: IpcSender,
+  ): Promise<void> {
     const target = sender.windowId;
     const handler =
       this.#scoped.get(windowId)?.handlerFor(channel) ?? this.ipcMain.handlerFor(channel);
@@ -300,7 +380,7 @@ export class IpcServer {
     let result: unknown;
     try {
       const decoded = decodeArgs(args);
-      result = await handler(this.#event(windowId, sender), ...decoded);
+      result = await handler(this.#invokeEvent(windowId, sender), ...decoded);
     } catch (error) {
       this.#reply(target, { id, ok: false, error: remoteError(error) });
       return;
@@ -320,6 +400,19 @@ export class IpcServer {
       });
       return;
     }
+    const size = value === undefined ? 0 : encodedSize(value);
+    if (size > this.maxMessageBytes) {
+      this.#reply(target, {
+        id,
+        ok: false,
+        error: {
+          code: 'ipc-serialization',
+          message: `the handler's return value cannot be sent: it is ${String(size)} bytes, more than the ${String(this.maxMessageBytes)}-byte limit (ipc.maxMessageBytes)`,
+          data: { bytes: size, limit: this.maxMessageBytes },
+        },
+      });
+      return;
+    }
     this.#reply(target, value === undefined ? { id, ok: true } : { id, ok: true, value });
   }
 
@@ -333,7 +426,12 @@ export class IpcServer {
    * @param sender - the sender Rust stamped
    */
   onSend(channel: string, args: unknown, sender: IpcSender): void {
-    const windowId = this.ids.fromHost(sender.windowId);
+    this.#route(sender.windowId, `send '${channel}'`, (windowId) => {
+      this.#send(windowId, channel, args, sender);
+    });
+  }
+
+  #send(windowId: number, channel: string, args: unknown, sender: IpcSender): void {
     let decoded: unknown[];
     try {
       decoded = decodeArgs(args);
@@ -385,20 +483,85 @@ export class IpcServer {
           'warn',
           `webContents.send('${channel}') failed: ${(error as Error).message}`,
         );
+        this.#skip(target, seq);
       });
   }
 
-  #reply(
-    target: number,
-    reply: { id: number; ok: boolean; value?: OtjValue; error?: unknown },
-  ): void {
+  #reply(target: number, reply: Reply): void {
     const seq = this.#nextSeq(target);
     this.services.command('ipc_reply', { ...reply, seq }).catch((error: unknown) => {
+      const message = (error as Error).message;
+      this.services.log('warn', `ipc_reply for request ${String(reply.id)} failed: ${message}`);
+      if (!reply.ok) {
+        this.#skip(target, seq);
+        return;
+      }
+      // Never leave the renderer's invoke pending: answer with a small error
+      // under the same sequence number.
+      const code =
+        error instanceof OwTauriError && error.code === 'ipc-serialization'
+          ? 'ipc-serialization'
+          : 'backend';
+      const fallback: Reply = {
+        id: reply.id,
+        ok: false,
+        error: { code, message: `the reply could not be delivered: ${message}` },
+      };
+      this.services.command('ipc_reply', { ...fallback, seq }).catch((second: unknown) => {
+        this.services.log(
+          'error',
+          `ipc_reply for request ${String(reply.id)} failed twice: ${(second as Error).message}`,
+        );
+        this.#skip(target, seq);
+      });
+    });
+  }
+
+  /**
+   * Reports an outbound sequence number the plugin never accepted, so later
+   * messages to `target` are not held back (CONTRACT C.5).
+   */
+  #skip(target: number, seq: number): void {
+    this.services.command('ipc_emit_skip', { target, seq }).catch((error: unknown) => {
       this.services.log(
-        'warn',
-        `ipc_reply for request ${String(reply.id)} failed: ${(error as Error).message}`,
+        'debug',
+        `ipc_emit_skip ${String(seq)} for window ${String(target)} failed (the 1 s gap timeout covers it): ${(error as Error).message}`,
       );
     });
+  }
+
+  /**
+   * Runs `run` with the app-visible id of the sending window. IPC from a window
+   * whose plugin id is not bound yet is held while a `window_create` is
+   * pending (its response may not have arrived); IPC from a closed window is
+   * dropped.
+   */
+  #route(hostId: number, what: string, run: (windowId: number) => void): void {
+    const known = this.ids.peekHost(hostId);
+    if (known !== undefined && !this.#held.some((h) => h.hostId === hostId)) {
+      run(known);
+      return;
+    }
+    if (known === undefined && this.ids.isForgotten(hostId)) {
+      this.services.log('debug', `dropped ipc ${what} from closed window ${String(hostId)}`);
+      return;
+    }
+    if (known === undefined && !this.ids.hasPending()) {
+      run(this.ids.fromHost(hostId));
+      return;
+    }
+    if (this.#held.length >= MAX_HELD) {
+      this.services.log('warn', `dropped ipc ${what}: too many messages from unknown windows`);
+      return;
+    }
+    this.#held.push({ hostId, run });
+  }
+
+  #releaseHeld(): void {
+    if (this.#held.length === 0) return;
+    const held = this.#held;
+    this.#held = [];
+    for (const message of held) this.#route(message.hostId, 'message', message.run);
   }
 
   #nextSeq(target: number): number {
@@ -407,11 +570,10 @@ export class IpcServer {
     return next;
   }
 
-  #event(windowId: number, sender: IpcSender): IpcMainEvent {
-    const services = this.services;
+  #invokeEvent(windowId: number, sender: IpcSender): IpcMainInvokeEvent {
     let prevented = false;
-    const event = {
-      type: 'frame' as const,
+    return {
+      type: 'frame',
       sender: this.senderResolver(windowId, sender),
       frameId: 0,
       processId: 0,
@@ -422,31 +584,47 @@ export class IpcServer {
       get defaultPrevented() {
         return prevented;
       },
-      reply: (channel: string, ...args: unknown[]) => {
-        this.emit(windowId, channel, args);
-      },
-      get returnValue(): unknown {
-        services.warnOnce(
-          'IpcMainEvent.returnValue',
-          'IpcMainEvent.returnValue is unsupported (ipcRenderer.sendSync); it reads as undefined',
-        );
-        return undefined;
-      },
-      set returnValue(_value: unknown) {
-        throw new OwTauriUnsupportedError(
-          'IpcMainEvent.returnValue',
-          'ipcRenderer.sendSync has no equivalent; use ipcRenderer.invoke and ipcMain.handle',
-        );
-      },
-      get ports(): undefined {
-        services.warnOnce(
-          'IpcMainEvent.ports',
-          'IpcMainEvent.ports is unsupported (MessagePorts); it reads as undefined',
-        );
-        return undefined;
-      },
     };
-    return event;
+  }
+
+  #event(windowId: number, sender: IpcSender): IpcMainEvent {
+    const services = this.services;
+    const event = this.#invokeEvent(windowId, sender);
+    Object.defineProperties(event, {
+      reply: {
+        value: (channel: string, ...args: unknown[]) => {
+          this.emit(windowId, channel, args);
+        },
+        enumerable: true,
+      },
+      returnValue: {
+        get(): unknown {
+          services.warnOnce(
+            'IpcMainEvent.returnValue',
+            'IpcMainEvent.returnValue is unsupported (ipcRenderer.sendSync); it reads as undefined',
+          );
+          return undefined;
+        },
+        set(_value: unknown) {
+          throw new OwTauriUnsupportedError(
+            'IpcMainEvent.returnValue',
+            'ipcRenderer.sendSync has no equivalent; use ipcRenderer.invoke and ipcMain.handle',
+          );
+        },
+        enumerable: true,
+      },
+      ports: {
+        get(): undefined {
+          services.warnOnce(
+            'IpcMainEvent.ports',
+            'IpcMainEvent.ports is unsupported (MessagePorts); it reads as undefined',
+          );
+          return undefined;
+        },
+        enumerable: true,
+      },
+    });
+    return event as IpcMainEvent;
   }
 
   #minimalSender(windowId: number): unknown {
@@ -461,11 +639,33 @@ export class IpcServer {
 
 /**
  * The wire error for a handler that threw or rejected (CONTRACT C.2 step 5).
+ * `data.text` is the thrown value's `toString()`, the exact text Electron
+ * puts after `Error invoking remote method '<channel>': `.
  *
  * @param error - the thrown value
- * @returns `{ code: 'ipc-remote-error', message, data: { name, message } }`
+ * @returns `{ code: 'ipc-remote-error', message, data: { name, message, text } }`
  */
 export function remoteError(error: unknown): OverwolfErrorWire {
   const { name, message } = describeThrown(error);
-  return { code: 'ipc-remote-error', message, data: { name, message } };
+  return {
+    code: 'ipc-remote-error',
+    message,
+    data: { name, message, text: electronErrorText(error) },
+  };
+}
+
+/**
+ * What Electron reports for a value thrown by an `ipcMain.handle` handler:
+ * `String(error)`, which is `Error.prototype.toString()` for errors
+ * (`"<name>: <message>"`, or just the name when the message is empty).
+ *
+ * @param error - the thrown value
+ * @returns the text
+ */
+export function electronErrorText(error: unknown): string {
+  try {
+    return String(error);
+  } catch {
+    return 'Error';
+  }
 }
