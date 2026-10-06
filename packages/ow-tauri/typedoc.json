@@ -1,0 +1,12 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "name": "ow-tauri",
+  "entryPoints": ["src/main/index.ts", "src/electron/index.ts", "src/renderer/index.ts"],
+  "tsconfig": "tsconfig.build.json",
+  "out": "docs-out",
+  "readme": "README.md",
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "treatWarningsAsErrors": true,
+  "validation": { "notExported": true, "invalidLink": true, "notDocumented": true }
+}

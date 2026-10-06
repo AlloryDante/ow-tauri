@@ -1,0 +1,75 @@
+# ow-tauri Cargo workspace.
+#
+# Members are added as they land: the plugin crate today, the example app's
+# `src-tauri` crate once the packages-sample port reaches it.
+[workspace]
+resolver = "3"
+members = ["crates/tauri-plugin-overwolf"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# MSRV: the highest floor of our toolchain inputs. Edition 2024 needs 1.85 and
+# tauri 2.12.1 declares `rust-version = "1.90"`. Development uses Rust 1.98.
+rust-version = "1.90"
+license = "MIT"
+authors = ["ow-tauri contributors"]
+description = "Run Overwolf ow-electron apps on Tauri 2 with Overwolf ads, analytics and packages."
+keywords = ["tauri", "overwolf", "plugin", "ads", "electron"]
+categories = ["gui", "api-bindings"]
+
+# Versions every lane must use. Latest stable as of 2026-10-06; see
+# docs/adr/ and CONTRIBUTING.md for the upgrade policy. Members opt in with
+# `foo = { workspace = true }`, so nothing here is resolved until used.
+[workspace.dependencies]
+tauri = { version = "2.12.1", default-features = true }
+tauri-build = "2.7.1"
+tauri-plugin = "2.7.1"
+tauri-plugin-opener = "2.7.0"
+tauri-plugin-global-shortcut = "2.4.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+reqwest = { version = "0.13.5", default-features = false, features = ["native-tls"] }
+url = "2"
+semver = "1"
+sha1_smol = "1"
+sha2 = "0.10"
+md5 = "0.7"
+uuid = { version = "1", features = ["v4"] }
+base64 = "0.22"
+log = "0.4"
+
+[workspace.lints.rust]
+missing_docs = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
+missing_crate_level_docs = "deny"
+
+[workspace.lints.clippy]
+# Pedantic is on for the whole workspace. Any `#[allow(clippy::...)]` must
+# carry a comment that justifies it (CONTRIBUTING.md, "Lint exceptions").
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+undocumented_unsafe_blocks = "warn"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

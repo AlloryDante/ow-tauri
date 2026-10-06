@@ -1,0 +1,20 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 2
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.rs]
+indent_size = 4
+
+[*.md]
+trim_trailing_whitespace = false
+
+# The upstream sample keeps its own conventions (CRLF, see its .prettierrc).
+[examples/packages-sample/**]
+end_of_line = unset
+indent_size = unset

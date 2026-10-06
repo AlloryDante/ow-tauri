@@ -1,0 +1,17 @@
+# Workspace lint levels live in Cargo.toml [workspace.lints]; this file only
+# configures individual lints.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-print-in-tests = true
+# Proper nouns that `clippy::doc_markdown` must not ask to backtick.
+doc-valid-idents = [
+  "..",
+  "Overwolf",
+  "WebView2",
+  "WebKitGTK",
+  "WKWebView",
+  "ow-electron",
+  "TypeScript",
+  "JavaScript",
+]

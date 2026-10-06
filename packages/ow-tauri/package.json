@@ -1,0 +1,59 @@
+{
+  "name": "ow-tauri",
+  "version": "0.1.0",
+  "description": "JavaScript host runtime for ow-tauri: app.overwolf, an Electron-compatible subset and the <owadview> element on Tauri 2.",
+  "license": "MIT",
+  "author": "ow-tauri contributors",
+  "type": "module",
+  "sideEffects": [
+    "./dist/renderer/index.js"
+  ],
+  "exports": {
+    "./main": {
+      "types": "./dist/main/index.d.ts",
+      "import": "./dist/main/index.js"
+    },
+    "./electron": {
+      "types": "./dist/electron/index.d.ts",
+      "import": "./dist/electron/index.js"
+    },
+    "./renderer": {
+      "types": "./dist/renderer/index.d.ts",
+      "import": "./dist/renderer/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "docs": "typedoc",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@overwolf/ow-electron-packages-types": "^1.1.12",
+    "@tauri-apps/api": "^2.12.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "26.6.4",
+    "eslint": "10.12.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-tsdoc": "0.5.4",
+    "globals": "17.13.0",
+    "happy-dom": "20.14.5",
+    "typedoc": "0.28.20",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "8.71.1",
+    "vitest": "5.0.3"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "ow-tauri-workspace",
+  "private": true,
+  "description": "Workspace root for ow-tauri: run Overwolf ow-electron apps on Tauri 2.",
+  "license": "MIT",
+  "author": "ow-tauri contributors",
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "npm run build --workspace ow-tauri",
+    "lint": "npm run lint --workspace ow-tauri",
+    "typecheck": "npm run typecheck --workspace ow-tauri",
+    "test": "npm run test --workspace ow-tauri",
+    "docs": "npm run docs --workspace ow-tauri",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "prettier": "3.9.9"
+  }
+}
