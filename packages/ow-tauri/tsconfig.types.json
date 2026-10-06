@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node"],
+    "paths": {
+      "ow-tauri/electron": ["./src/electron/index.ts"],
+      "electron": ["./src/types/electron.d.ts"],
+      "@overwolf/ow-electron": ["./src/types/ow-electron.d.ts"]
+    }
+  },
+  "include": ["src/types", "test-d"]
+}

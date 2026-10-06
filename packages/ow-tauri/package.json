@@ -61,10 +61,12 @@
     "node": ">=22.12.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-types.mjs",
+    "build:injected": "rolldown -c rolldown.config.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.types.json",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "docs": "typedoc",
     "prepack": "npm run build"
@@ -79,11 +81,13 @@
     "@eslint/js": "10.0.1",
     "@tauri-apps/api": "2.12.1",
     "@types/node": "22.20.5",
+    "@vitest/coverage-v8": "5.0.3",
     "eslint": "10.12.0",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-tsdoc": "0.5.4",
     "globals": "17.13.0",
     "happy-dom": "20.14.5",
+    "rolldown": "1.2.12",
     "typedoc": "0.28.20",
     "typescript": "~6.0.3",
     "typescript-eslint": "8.71.1",

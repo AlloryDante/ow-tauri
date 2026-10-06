@@ -13,5 +13,6 @@
     "invalidLink": true,
     "notDocumented": true
   },
-  "disableSources": true
+  "disableSources": true,
+  "intentionallyNotExported": ["errorMonitor", "EventName", "Listener"]
 }

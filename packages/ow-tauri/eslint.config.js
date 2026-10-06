@@ -7,7 +7,7 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default defineConfig(
-  globalIgnores(['dist/', 'docs-out/', 'coverage/']),
+  globalIgnores(['dist/', 'docs-out/', 'coverage/', 'src/types/', 'test-d/']),
   js.configs.recommended,
   tseslint.configs.strictTypeChecked,
   tseslint.configs.stylisticTypeChecked,
@@ -24,14 +24,22 @@ export default defineConfig(
       '@typescript-eslint/explicit-module-boundary-types': 'error',
       '@typescript-eslint/consistent-type-imports': 'error',
       'tsdoc/syntax': 'error',
+      // Electron signatures keep their parameter names; unused ones start with `_`.
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
     },
   },
   {
     files: ['**/*.test.ts'],
-    rules: { '@typescript-eslint/no-non-null-assertion': 'off' },
+    rules: {
+      '@typescript-eslint/no-non-null-assertion': 'off',
+      // Tests simulate Tauri rejecting with plain strings and objects.
+      '@typescript-eslint/only-throw-error': 'off',
+      '@typescript-eslint/prefer-promise-reject-errors': 'off',
+      '@typescript-eslint/unbound-method': 'off',
+    },
   },
   {
-    files: ['*.config.{js,ts}', 'eslint.config.js'],
+    files: ['*.config.{js,mjs,ts}', 'eslint.config.js', 'scripts/**/*.mjs'],
     extends: [tseslint.configs.disableTypeChecked],
     languageOptions: { globals: { ...globals.node } },
   },
