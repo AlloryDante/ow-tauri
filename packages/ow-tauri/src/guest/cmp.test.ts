@@ -72,11 +72,14 @@ describe('installCmp (D.6.6)', () => {
     expect(await (win as unknown as CmpGlobals).privacy.getIsAdOptimizationEnabled()).toBe(true);
   });
 
-  it('is inert off content.overwolf.com and on a second run', () => {
+  it('is inert off content.overwolf.com/monsdk/electron/ and on a second run', () => {
     for (const url of [
       'https://www.overwolf.com/x',
       'https://evil.example/',
       'http://content.overwolf.com/',
+      'https://content.overwolf.com/',
+      'https://content.overwolf.com/libs/ads/latest/x.html',
+      'https://content.overwolf.com/monsdk/electronic/cmp.html',
     ]) {
       const { win, sent, installed } = consentWindow(url);
       expect(installed, url).toBe(false);

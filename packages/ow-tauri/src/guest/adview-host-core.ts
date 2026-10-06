@@ -1,12 +1,18 @@
 /**
  * The ad guest shim (`docs/CONTRACT.md` D.1 to D.5): `window.__overwolf__`,
- * `window.gc` and the host API `window.__owTauriHost` in the main frame of
+ * `window.gc` and the host API Rust calls in the main frame of
  * `https://www.overwolf.com/monsdk/electron/latest/adview.html`. Built into
  * `crates/tauri-plugin-overwolf/js/adview-host.js` by `adview-host.ts`.
  *
+ * The host API lives on a non-enumerable window property whose name is
+ * random per guest (`hostKey` of the configuration), so the page cannot
+ * look it up by a fixed name. The shim's functions are bound functions:
+ * their source text reads `function () { [native code] }`, like the
+ * functions ow-electron exposes to the page.
+ *
  * @packageDocumentation
  */
-import { Outbox, copy, deepFreeze, sanitize } from './outbox.js';
+import { Outbox, copy, deepFreeze, hostFunction, sanitize } from './outbox.js';
 
 /** The only origin the ad shim runs on (D.1). */
 export const ADVIEW_ORIGIN = 'https://www.overwolf.com';
@@ -14,8 +20,27 @@ export const ADVIEW_ORIGIN = 'https://www.overwolf.com';
 /** The command ad guests send with (A.2.6). */
 export const ADVIEW_COMMAND = 'plugin:overwolf|adview_event';
 
-/** `sessionStorage` key of the `pageurl` for the next load (B.3.3). */
-export const PAGE_URL_KEY = '__owTauriPageUrl';
+/**
+ * The host API's window property when the configuration has no valid
+ * `hostKey` (only in tests: Rust always sets one).
+ */
+export const DEFAULT_HOST_KEY = '__owTauriHost';
+
+/** A valid `hostKey`: a plain identifier of at most 64 characters. */
+const HOST_KEY_PATTERN = /^[A-Za-z_$][\w$]{0,63}$/;
+
+/**
+ * The window property of the host API, and the `sessionStorage` key of the
+ * `pageurl` for the next load (B.3.3), for a guest configuration.
+ *
+ * @param config - the guest configuration
+ * @returns its `hostKey`, or {@link DEFAULT_HOST_KEY}
+ */
+export function hostKeyOf(config: Record<string, unknown>): string {
+  const key = config['hostKey'];
+  return typeof key === 'string' && HOST_KEY_PATTERN.test(key) ? key : DEFAULT_HOST_KEY;
+}
+
 
 /** Most `onmessage` handlers kept (D.3). */
 export const MAX_HANDLERS = 16;
@@ -56,7 +81,7 @@ export interface HostMessage {
   data?: unknown;
 }
 
-/** `window.__owTauriHost`: what Rust calls in the guest (D.5). */
+/** The host API: what Rust calls in the guest (D.5). */
 export interface AdviewHostApi {
   /** Passes a host message to the page's `onmessage` handlers. */
   deliver: (...args: unknown[]) => boolean;
@@ -82,9 +107,9 @@ function isTopFrame(win: Window): boolean {
   }
 }
 
-function readStoredPageUrl(win: Window): string | undefined {
+function readStoredPageUrl(win: Window, key: string): string | undefined {
   try {
-    const stored = win.sessionStorage.getItem(PAGE_URL_KEY);
+    const stored = win.sessionStorage.getItem(key);
     return stored ?? undefined;
   } catch {
     return undefined;
@@ -108,6 +133,7 @@ export function installAdviewHost(win: Window, config: unknown): boolean {
   if (!isRecord(config)) return false;
 
   const doc = win.document;
+  const hostKey = hostKeyOf(config);
   const outbox = new Outbox(win, ADVIEW_COMMAND);
   const slotId = typeof config['slotId'] === 'string' ? config['slotId'] : '';
   const post = (name: string, data?: unknown): void => {
@@ -123,10 +149,9 @@ export function installAdviewHost(win: Window, config: unknown): boolean {
   const handlers: ((message: unknown) => void)[] = [];
 
   // `pageUrl` of this load: a `setPageUrl()` made before the reload wins (B.3.3).
-  const pageUrl = readStoredPageUrl(win) ?? config['pageUrl'];
+  const pageUrl = readStoredPageUrl(win, hostKey) ?? config['pageUrl'];
 
-  const fn = <A extends unknown[], R>(body: (...args: A) => R): ((...args: A) => R) =>
-    Object.freeze((...args: A) => body(...args));
+  const fn = hostFunction;
 
   const functions = {
     setMute: fn((...args: unknown[]) => {
@@ -234,13 +259,13 @@ export function installAdviewHost(win: Window, config: unknown): boolean {
       const url = args[0];
       if (typeof url !== 'string' || url.length > 2048) return;
       try {
-        win.sessionStorage.setItem(PAGE_URL_KEY, url);
+        win.sessionStorage.setItem(hostKey, url);
       } catch {
         // No storage: the next load keeps the mount value.
       }
     }),
   };
-  Object.defineProperty(win, '__owTauriHost', {
+  Object.defineProperty(win, hostKey, {
     value: Object.freeze(host),
     writable: false,
     configurable: false,

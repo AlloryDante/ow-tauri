@@ -6,10 +6,13 @@
  *
  * @packageDocumentation
  */
-import { MAX_DATA_BYTES, Outbox } from './outbox.js';
+import { MAX_DATA_BYTES, Outbox, hostFunction } from './outbox.js';
 
 /** The only origin the consent shim runs on (D.1). */
 export const CMP_ORIGIN = 'https://content.overwolf.com';
+
+/** The path every consent page lives under (`CMP_SCOPE`, D.6.4). */
+export const CMP_PATH_PREFIX = '/monsdk/electron/';
 
 /** The command consent windows send with (A.2.7). */
 export const CMP_COMMAND = 'plugin:overwolf|cmp_event';
@@ -30,8 +33,8 @@ export function consentString(value: unknown): string {
 
 /**
  * Installs the consent shim in `win`. Does nothing (and returns `false`)
- * outside the main frame of {@link CMP_ORIGIN}, or when it already ran in
- * this document (D.1).
+ * outside the main frame of a page under {@link CMP_ORIGIN} and
+ * {@link CMP_PATH_PREFIX}, or when it already ran in this document (D.1).
  *
  * @param win - the consent window
  * @param config - `{ adOptimization: boolean }` (D.6.6)
@@ -45,6 +48,7 @@ export function installCmp(win: Window, config: unknown): boolean {
     top = false;
   }
   if (!top || win.location.origin !== CMP_ORIGIN) return false;
+  if (!win.location.pathname.startsWith(CMP_PATH_PREFIX)) return false;
   if (Object.prototype.hasOwnProperty.call(win, 'cmp')) return false;
 
   const outbox = new Outbox(win, CMP_COMMAND);
@@ -54,8 +58,7 @@ export function installCmp(win: Window, config: unknown): boolean {
   let adOptimization =
     typeof config === 'object' && config !== null && Reflect.get(config, 'adOptimization') === true;
 
-  const fn = <A extends unknown[], R>(body: (...args: A) => R): ((...args: A) => R) =>
-    Object.freeze((...args: A) => body(...args));
+  const fn = hostFunction;
   const save = (name: string) =>
     fn((...args: unknown[]) => {
       const consent = consentString(args[0]);

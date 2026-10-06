@@ -178,3 +178,19 @@ export class Outbox {
     }
   }
 }
+
+/**
+ * Wraps `body` the way functions the host exposes to a page look: a frozen
+ * bound function with an empty name, whose source text is the engine's
+ * `[native code]` form.
+ *
+ * @param body - what the function does
+ * @returns the page-facing function
+ */
+export function hostFunction<A extends unknown[], R>(
+  body: (...args: A) => R,
+): (...args: A) => R {
+  const bound = ((...args: A) => body(...args)).bind(undefined);
+  Object.defineProperty(bound, 'name', { value: '' });
+  return Object.freeze(bound);
+}

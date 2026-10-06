@@ -5,12 +5,15 @@ import {
   ADVIEW_COMMAND,
   DATA_KEYS,
   MAX_HANDLERS,
-  PAGE_URL_KEY,
+  DEFAULT_HOST_KEY,
+  hostKeyOf,
   installAdviewHost,
   type AdviewHostApi,
 } from './adview-host-core.js';
 
 const ADVIEW_URL = 'https://www.overwolf.com/monsdk/electron/latest/adview.html';
+/** A stand-in per-guest host key. */
+const HOST_KEY = '_0123456789abcdef0123456789abcdef';
 
 /** A stand-in configuration as Rust builds it (`guest_config`, D.2). */
 function config(extra: Record<string, unknown> = {}): Record<string, unknown> {
@@ -43,6 +46,7 @@ function config(extra: Record<string, unknown> = {}): Record<string, unknown> {
     customTracking: { a: 1 },
     slotId: 'owad-bw-1-1',
     visibilityState: 'visible',
+    hostKey: HOST_KEY,
     ...extra,
   };
 }
@@ -77,7 +81,12 @@ function guest(url = ADVIEW_URL, cfg: unknown = config(), withTransport = true):
     win,
     sent,
     ow: Reflect.get(win, '__overwolf__') as Record<string, unknown>,
-    host: Reflect.get(win, '__owTauriHost') as AdviewHostApi,
+    host: Reflect.get(
+      win,
+      typeof cfg === 'object' && cfg !== null
+        ? hostKeyOf(cfg as Record<string, unknown>)
+        : DEFAULT_HOST_KEY,
+    ) as AdviewHostApi,
   };
 }
 
@@ -270,13 +279,36 @@ describe('host to guest (D.5)', () => {
     expect(g.ow['pageUrl']).toBe('https://example.com/a');
     g.host.setNextPageUrl('https://example.com/b');
     g.host.setNextPageUrl(42);
-    expect(g.win.sessionStorage.getItem(PAGE_URL_KEY)).toBe('https://example.com/b');
+    expect(g.win.sessionStorage.getItem(HOST_KEY)).toBe('https://example.com/b');
   });
 
   it('exposes the host API frozen and hidden from enumeration', () => {
     const g = guest();
     expect(Object.isFrozen(g.host)).toBe(true);
-    expect(Object.keys(g.win)).not.toContain('__owTauriHost');
+    expect(Object.keys(g.win)).not.toContain(HOST_KEY);
+    expect(Reflect.get(g.win, DEFAULT_HOST_KEY)).toBeUndefined();
+  });
+
+  it('takes the host key from the configuration, else the default', () => {
+    expect(hostKeyOf({ hostKey: HOST_KEY })).toBe(HOST_KEY);
+    expect(hostKeyOf({ hostKey: 'not valid!' })).toBe(DEFAULT_HOST_KEY);
+    expect(hostKeyOf({ hostKey: 7 })).toBe(DEFAULT_HOST_KEY);
+    expect(hostKeyOf({})).toBe(DEFAULT_HOST_KEY);
+    const g = guest(ADVIEW_URL, config({ hostKey: undefined }));
+    expect(Reflect.get(g.win, DEFAULT_HOST_KEY)).toBe(g.host);
+  });
+
+  it('gives page-facing functions native-looking source text', () => {
+    const g = guest();
+    for (const name of ['reload', 'triggerEvent', 'getSystemInformation']) {
+      const f = g.ow[name] as (...a: unknown[]) => unknown;
+      expect(Function.prototype.toString.call(f)).toContain('[native code]');
+      expect(f.name).toBe('');
+      expect(Object.isFrozen(f)).toBe(true);
+    }
+    expect(Function.prototype.toString.call(Reflect.get(g.win.document, 'hasFocus'))).toContain(
+      '[native code]',
+    );
   });
 });
 
