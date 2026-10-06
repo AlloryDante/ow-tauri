@@ -199,8 +199,8 @@ export interface HostSnapshot {
     /** Rollout bucket, 0 to 99. */
     phasePercent: number;
   };
-  /** `ow-electron.json` `utmParams`, or `null`. */
-  utmParams: unknown;
+  /** `ow-electron.json` `utmParams`; absent when there are none (F.2). */
+  utmParams?: unknown;
   /** Process arguments and the ad mode. */
   switches: {
     /** The process arguments. */
@@ -235,6 +235,19 @@ export interface HostSnapshot {
   arch?: string;
   /** Cursor position in DIP when the snapshot was taken; ow-tauri addition. */
   cursor?: Point;
+  /**
+   * Limits the main runtime checks itself (CONTRACT A.2.1, C.5); without it
+   * the runtime uses the 8 MiB default.
+   */
+  ipcLimits?: {
+    /** `ipc.maxMessageBytes`: encoded size cap per message, bytes. */
+    maxMessageBytes: number;
+  };
+  /**
+   * Whether `ow-electron.json` had no `firstLaunch` at setup
+   * (`app.overwolf.__settings__.firstLaunch`, F.2); ow-tauri addition.
+   */
+  firstLaunch?: boolean;
 }
 
 /**

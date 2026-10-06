@@ -143,7 +143,7 @@ describe('__settings__ [OBS]', () => {
   });
 
   it('reads firstLaunch from the snapshot', () => {
-    host = mockHost({ snapshot: { firstLaunch: true } as never });
+    host = mockHost({ snapshot: { firstLaunch: true } });
     expect(new Overwolf(kernel).__settings__.firstLaunch).toBe(true);
   });
 

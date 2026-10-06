@@ -29,6 +29,20 @@ import type { UnsupportedMethod } from '../shared/unsupported.js';
 
 /** Default `ipc.maxMessageBytes` (CONTRACT A.1). */
 export const DEFAULT_MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
+/**
+ * `ipc.maxMessageBytes` as the host reports it in `HostSnapshot.ipcLimits`
+ * (CONTRACT A.2.1, C.5), else {@link DEFAULT_MAX_MESSAGE_BYTES}.
+ *
+ * @param state - reads a dotted path of the state cache
+ * @returns the encoded size cap per message, in bytes
+ */
+export function maxMessageBytesFrom(state: { get(path: string): unknown }): number {
+  const value = state.get('ipcLimits.maxMessageBytes');
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+    ? value
+    : DEFAULT_MAX_MESSAGE_BYTES;
+}
+
 /** Default `ipc.startupQueueMax` (CONTRACT A.1), also used for the renderer's own queue. */
 export const DEFAULT_STARTUP_QUEUE_MAX = 1024;
 /** Longest channel name, in UTF-16 code units (CONTRACT C.2). */

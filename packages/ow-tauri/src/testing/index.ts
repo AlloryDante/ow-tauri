@@ -201,6 +201,8 @@ export function defaultSnapshot(overrides: Partial<HostSnapshot> = {}): HostSnap
     },
     platform: 'win32',
     arch: 'x64',
+    firstLaunch: false,
+    ipcLimits: { maxMessageBytes: 8 * 1024 * 1024 },
     ...overrides,
   };
 }

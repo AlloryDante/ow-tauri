@@ -4,7 +4,12 @@ import { OwTauriError, OwTauriUnsupportedError } from '../shared/errors.js';
 import { encode } from '../shared/otj.js';
 import { mockHost, settle, type MockHost } from '../testing/index.js';
 import { attachRuntime } from './install.js';
-import { IpcClient, remoteInvokeError } from './ipc-renderer.js';
+import {
+  DEFAULT_MAX_MESSAGE_BYTES,
+  IpcClient,
+  maxMessageBytesFrom,
+  remoteInvokeError,
+} from './ipc-renderer.js';
 import type { KernelServices } from './services.js';
 
 const kernel = attachRuntime();
@@ -382,5 +387,27 @@ describe('remoteInvokeError', () => {
     });
     expect(error.message).toBe("Error invoking remote method 'c': boom");
     expect(error.data).toMatchObject({ name: 'Error', message: 'boom' });
+  });
+});
+
+describe('maxMessageBytesFrom (C.5)', () => {
+  it('reads HostSnapshot.ipcLimits and falls back to 8 MiB', () => {
+    const at = (value: unknown) => ({
+      get: (path: string) => (path === 'ipcLimits.maxMessageBytes' ? value : undefined),
+    });
+    expect(maxMessageBytesFrom(at(1024))).toBe(1024);
+    expect(maxMessageBytesFrom(at(undefined))).toBe(DEFAULT_MAX_MESSAGE_BYTES);
+    expect(maxMessageBytesFrom(at(0))).toBe(DEFAULT_MAX_MESSAGE_BYTES);
+    expect(maxMessageBytesFrom(at(1.5))).toBe(DEFAULT_MAX_MESSAGE_BYTES);
+    expect(maxMessageBytesFrom(at('64'))).toBe(DEFAULT_MAX_MESSAGE_BYTES);
+  });
+
+  it('applies a bootstrap limit to ipcRenderer', async () => {
+    host.dispose();
+    host = mockHost({ label: 'bw-1', snapshot: { ipcLimits: { maxMessageBytes: 32 } } });
+    await settle();
+    expect(() => {
+      kernel.ipcRenderer.send('ch', 'x'.repeat(64));
+    }).toThrow(expect.objectContaining({ code: 'ipc-serialization' }) as Error);
   });
 });

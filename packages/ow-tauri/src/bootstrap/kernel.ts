@@ -34,7 +34,12 @@ import {
   type HostMessageHandler,
 } from './facade-kernel.js';
 import { IpcServer, remoteError } from './ipc-main.js';
-import { IpcClient, IpcRenderer } from './ipc-renderer.js';
+import {
+  DEFAULT_STARTUP_QUEUE_MAX,
+  IpcClient,
+  IpcRenderer,
+  maxMessageBytesFrom,
+} from './ipc-renderer.js';
 import type { LogLevel } from './services.js';
 import { StateCache } from './state-cache.js';
 import { tauriTransport, type Transport } from './transport.js';
@@ -134,8 +139,14 @@ export class Kernel implements FacadeKernel {
     this.#mismatch = options.mismatch;
     this.#readBootstrap =
       options.readBootstrap ?? (() => (globalThis as Record<string, unknown>)[BOOTSTRAP_GLOBAL]);
-    this.server = new IpcServer(this, this.windowIds);
-    this.client = new IpcClient(this);
+    const state = this.state;
+    this.server = new IpcServer(this, this.windowIds, () => maxMessageBytesFrom(state));
+    this.client = new IpcClient(this, {
+      get maxMessageBytes() {
+        return maxMessageBytesFrom(state);
+      },
+      startupQueueMax: DEFAULT_STARTUP_QUEUE_MAX,
+    });
     this.ipcRenderer = new IpcRenderer(this, () => this.client);
     this.#loadSnapshot();
   }

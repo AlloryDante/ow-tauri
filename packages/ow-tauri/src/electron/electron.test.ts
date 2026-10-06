@@ -295,6 +295,42 @@ describe('BrowserWindow (B.2.2)', () => {
     });
   });
 
+  it('emits show and hide after the native call when the visibility changes', async () => {
+    await start();
+    const win = new BrowserWindow({ show: false });
+    const seen: string[] = [];
+    win.on('show', () => seen.push('show'));
+    win.on('hide', () => seen.push('hide'));
+    win.show();
+    expect(seen).toEqual([]); // after the native call, not synchronously
+    await settle();
+    expect(seen).toEqual(['show']);
+    win.showInactive(); // already visible: no event
+    win.show();
+    await settle();
+    expect(seen).toEqual(['show']);
+    win.hide();
+    win.hide();
+    await settle();
+    expect(seen).toEqual(['show', 'hide']);
+    win.showInactive();
+    await settle();
+    expect(seen).toEqual(['show', 'hide', 'show']);
+  });
+
+  it('does not emit show when the native call fails', async () => {
+    await start({
+      commands: { 'plugin:window|show': () => Promise.reject({ code: 'io', message: 'x' }) },
+    });
+    const win = new BrowserWindow({ show: false });
+    const shown = vi.fn();
+    win.on('show', shown);
+    win.show();
+    await settle();
+    expect(shown).not.toHaveBeenCalled();
+    expect(win.isVisible()).toBe(true);
+  });
+
   it('resolves loadFile on did-finish-load and rejects loadURL on did-fail-load', async () => {
     await start();
     const win = new BrowserWindow({ show: false });

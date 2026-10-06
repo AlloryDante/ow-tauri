@@ -216,6 +216,24 @@ describe('ipcMain.handle (C.2)', () => {
     ]);
   });
 
+  it('reads ipc.maxMessageBytes from HostSnapshot.ipcLimits', async () => {
+    host.dispose();
+    host = mockHost({ label: 'ow-main', snapshot: { ipcLimits: { maxMessageBytes: 64 } } });
+    await settle();
+    expect(kernel.server.maxMessageBytes).toBe(64);
+    ipcMain.handle('big', () => 'x'.repeat(64));
+    invoke(1, 'big');
+    await settle();
+    expect(host.callsOf('ipc_reply')[0]).toMatchObject({
+      ok: false,
+      error: { code: 'ipc-serialization', data: { bytes: 66, limit: 64 } },
+    });
+    host.dispose();
+    host = mockHost({ label: 'ow-main', snapshot: { ipcLimits: { maxMessageBytes: -1 } } });
+    await settle();
+    expect(kernel.server.maxMessageBytes).toBe(8 * 1024 * 1024);
+  });
+
   it('replaces an undeliverable reply with an error under the same seq', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     host.setCommand('ipc_reply', (args) => {

@@ -548,23 +548,53 @@ export class BrowserWindow extends EventEmitter {
     return this.#load(target);
   }
 
-  /** Shows and focuses the window. */
+  /** Shows and focuses the window; emits `show` when it was hidden. */
   show(): void {
+    const changed = !this.#state.visible;
     this.#set({ visible: true, minimized: false, focused: true });
-    this.#native('show');
+    this.#native(
+      'show',
+      undefined,
+      changed
+        ? () => {
+            this.#emitVisibility('show');
+          }
+        : undefined,
+    );
     this.#native('set_focus');
   }
 
-  /** Shows the window without requesting focus (partial: some platforms still activate it). */
+  /**
+   * Shows the window without requesting focus (partial: some platforms still
+   * activate it); emits `show` when it was hidden.
+   */
   showInactive(): void {
+    const changed = !this.#state.visible;
     this.#set({ visible: true, minimized: false });
-    this.#native('show');
+    this.#native(
+      'show',
+      undefined,
+      changed
+        ? () => {
+            this.#emitVisibility('show');
+          }
+        : undefined,
+    );
   }
 
-  /** Hides the window. */
+  /** Hides the window; emits `hide` when it was visible. */
   hide(): void {
+    const changed = this.#state.visible;
     this.#set({ visible: false, focused: false });
-    this.#native('hide');
+    this.#native(
+      'hide',
+      undefined,
+      changed
+        ? () => {
+            this.#emitVisibility('hide');
+          }
+        : undefined,
+    );
   }
 
   /** Requests a close: emits `close` (preventable), then `closed`. */
@@ -1281,11 +1311,25 @@ export class BrowserWindow extends EventEmitter {
     return run;
   }
 
-  #native(command: string, value?: unknown): void {
+  /**
+   * Tauri reports no visibility change, so `show()`, `showInactive()` and
+   * `hide()` emit `show` / `hide` themselves after the native call succeeded
+   * (CONTRACT A.3, B.2.2).
+   */
+  #emitVisibility(event: 'show' | 'hide'): void {
     if (this.#destroyed) return;
-    this.#op(({ label }) =>
-      kernel.raw(`plugin:window|${command}`, value === undefined ? { label } : { label, value }),
-    ).catch((error: unknown) => {
+    emitFromHost(this, event, createEvent());
+  }
+
+  #native(command: string, value?: unknown, then?: () => void): void {
+    if (this.#destroyed) return;
+    this.#op(async ({ label }) => {
+      await kernel.raw(
+        `plugin:window|${command}`,
+        value === undefined ? { label } : { label, value },
+      );
+      then?.();
+    }).catch((error: unknown) => {
       kernel.log(
         'warn',
         `BrowserWindow ${String(this.id)}: ${command} failed: ${(error as Error).message}`,

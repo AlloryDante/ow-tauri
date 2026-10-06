@@ -280,23 +280,31 @@ export class IpcServer {
   readonly #scoped = new Map<number, IpcMain>();
   readonly #seq = new Map<number, number>();
   #held: HeldIpc[] = [];
+  readonly #limit: () => number;
 
   /**
    * @param services - kernel services
    * @param ids - the window id map
-   * @param maxMessageBytes - encoded size cap for `ipc_emit` and replies
+   * @param limit - encoded size cap for `ipc_emit` and replies, or a function
+   *   read on every check (the kernel reads `HostSnapshot.ipcLimits`)
    */
   constructor(
     private readonly services: KernelServices,
     private readonly ids: WindowIds,
-    readonly maxMessageBytes = DEFAULT_MAX_MESSAGE_BYTES,
+    limit: number | (() => number) = DEFAULT_MAX_MESSAGE_BYTES,
   ) {
+    this.#limit = typeof limit === 'number' ? () => limit : limit;
     this.ipcMain = new IpcMain((api) => {
       services.require('main', api);
     });
     ids.onChange(() => {
       this.#releaseHeld();
     });
+  }
+
+  /** Encoded size cap for `ipc_emit` and replies (`ipc.maxMessageBytes`). */
+  get maxMessageBytes(): number {
+    return this.#limit();
   }
 
   /**
