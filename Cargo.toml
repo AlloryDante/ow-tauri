@@ -10,7 +10,9 @@ members = ["crates/tauri-plugin-overwolf"]
 version = "0.1.0"
 edition = "2024"
 # MSRV: the highest floor of our toolchain inputs. Edition 2024 needs 1.85 and
-# tauri 2.12.1 declares `rust-version = "1.90"`. Development uses Rust 1.98.
+# tauri 2.12.1 declares `rust-version = "1.90"`. Development and the main CI
+# jobs use Rust 1.98 (see rust-toolchain.toml); a scheduled CI job also runs
+# the newest stable Rust.
 rust-version = "1.90"
 license = "MIT"
 authors = ["ow-tauri contributors"]
@@ -22,22 +24,37 @@ categories = ["gui", "api-bindings"]
 # docs/adr/ and CONTRIBUTING.md for the upgrade policy. Members opt in with
 # `foo = { workspace = true }`, so nothing here is resolved until used.
 [workspace.dependencies]
+# Supported range: 2.12.1 up to the newest 2.x. The plugin enables `unstable`
+# (child webviews, ADR 0003); unstable APIs may change in a 2.x minor, so the
+# scheduled CI job builds against the newest 2.x release (CONTRIBUTING.md).
 tauri = { version = "2.12.1", default-features = true }
 tauri-build = "2.7.1"
 tauri-plugin = "2.7.1"
 tauri-plugin-opener = "2.7.0"
 tauri-plugin-global-shortcut = "2.4.0"
+tauri-plugin-dialog = "2.8.1"
+# The app registers single-instance itself (it must be the first plugin);
+# listed here so the example and the plugin's tests share one version.
+tauri-plugin-single-instance = "2.5.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-reqwest = { version = "0.13.5", default-features = false, features = ["native-tls"] }
+# Default features off to choose the TLS stack; `system-proxy` keeps corporate
+# proxies working (Chromium-based ow-electron honours them), `http2` and
+# `charset` restore the remaining defaults.
+reqwest = { version = "0.13.5", default-features = false, features = [
+  "native-tls",
+  "system-proxy",
+  "http2",
+  "charset",
+] }
 url = "2"
 semver = "1"
 sha1_smol = "1"
-sha2 = "0.10"
-md5 = "0.7"
+sha2 = "0.11"
+md5 = "0.8"
 uuid = { version = "1", features = ["v4"] }
-base64 = "0.22"
+base64 = "0.23"
 log = "0.4"
 
 [workspace.lints.rust]

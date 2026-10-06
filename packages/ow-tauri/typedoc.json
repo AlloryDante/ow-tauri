@@ -8,5 +8,10 @@
   "excludePrivate": true,
   "excludeInternal": true,
   "treatWarningsAsErrors": true,
-  "validation": { "notExported": true, "invalidLink": true, "notDocumented": true }
+  "validation": {
+    "notExported": true,
+    "invalidLink": true,
+    "notDocumented": true
+  },
+  "disableSources": true
 }

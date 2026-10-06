@@ -3,6 +3,12 @@
 # Development reference: Rust 1.98 from Homebrew (no rustup, so this file is
 # ignored there and no local Windows target exists; Windows is covered by CI).
 # The minimum supported Rust version is `rust-version` in Cargo.toml (1.90).
+#
+# Why 1.98 and not the newest stable (1.99): CI must run the same compiler as
+# the reference development machine, so clippy and rustdoc findings are
+# identical locally and in CI. The scheduled CI job `latest` runs the newest
+# stable Rust and the newest tauri 2.x to catch new lints early. Bump this pin
+# together with the development toolchain.
 [toolchain]
 channel = "1.98"
 components = ["rustfmt", "clippy"]

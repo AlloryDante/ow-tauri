@@ -11,17 +11,33 @@
   "exports": {
     "./main": {
       "types": "./dist/main/index.d.ts",
-      "import": "./dist/main/index.js"
+      "import": "./dist/main/index.js",
+      "default": "./dist/main/index.js"
     },
     "./electron": {
       "types": "./dist/electron/index.d.ts",
-      "import": "./dist/electron/index.js"
+      "import": "./dist/electron/index.js",
+      "default": "./dist/electron/index.js"
     },
     "./renderer": {
       "types": "./dist/renderer/index.d.ts",
-      "import": "./dist/renderer/index.js"
+      "import": "./dist/renderer/index.js",
+      "default": "./dist/renderer/index.js"
     },
     "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "main": [
+        "./dist/main/index.d.ts"
+      ],
+      "electron": [
+        "./dist/electron/index.d.ts"
+      ],
+      "renderer": [
+        "./dist/renderer/index.d.ts"
+      ]
+    }
   },
   "files": [
     "dist",
@@ -40,12 +56,15 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@overwolf/ow-electron-packages-types": "^1.1.12",
+    "@overwolf/ow-electron-packages-types": "^1.1.12"
+  },
+  "peerDependencies": {
     "@tauri-apps/api": "^2.12.1"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
-    "@types/node": "26.6.4",
+    "@tauri-apps/api": "2.12.1",
+    "@types/node": "22.20.5",
     "eslint": "10.12.0",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-tsdoc": "0.5.4",

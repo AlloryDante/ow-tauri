@@ -1,15 +1,16 @@
 // @ts-check
 import js from '@eslint/js';
 import prettier from 'eslint-config-prettier';
+import { defineConfig, globalIgnores } from 'eslint/config';
 import tsdoc from 'eslint-plugin-tsdoc';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
-export default tseslint.config(
-  { ignores: ['dist/', 'docs-out/', 'coverage/'] },
+export default defineConfig(
+  globalIgnores(['dist/', 'docs-out/', 'coverage/']),
   js.configs.recommended,
-  ...tseslint.configs.strictTypeChecked,
-  ...tseslint.configs.stylisticTypeChecked,
+  tseslint.configs.strictTypeChecked,
+  tseslint.configs.stylisticTypeChecked,
   {
     languageOptions: {
       globals: { ...globals.browser },
@@ -31,7 +32,7 @@ export default tseslint.config(
   },
   {
     files: ['*.config.{js,ts}', 'eslint.config.js'],
-    ...tseslint.configs.disableTypeChecked,
+    extends: [tseslint.configs.disableTypeChecked],
     languageOptions: { globals: { ...globals.node } },
   },
   prettier,

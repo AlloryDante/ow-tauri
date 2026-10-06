@@ -1,0 +1,25 @@
+# Normalise line endings to LF everywhere, so `cargo fmt --check`
+# (newline_style = "Unix") and `prettier --check` (endOfLine: lf) pass on
+# Windows checkouts, where core.autocrlf is often true.
+* text=auto eol=lf
+
+# The upstream sample is kept byte-for-byte as imported (it mixes CRLF and
+# LF). Git must not convert it in either direction.
+examples/packages-sample/** -text
+
+# Binary assets and fixtures.
+*.png binary
+*.ico binary
+*.icns binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.zip binary
+*.exe binary
+*.dll binary
+*.dylib binary
+*.so binary

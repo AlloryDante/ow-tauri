@@ -5,12 +5,15 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # Weekly: newest stable Rust + newest tauri 2.x, and the liveness soak.
+    - cron: '17 3 * * 1'
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 env:
@@ -22,26 +25,30 @@ env:
   # CI never runs Electron, so skip the binary download.
   ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
+# Third-party actions are pinned by commit SHA (tag in the trailing comment);
+# Dependabot keeps them current (.github/dependabot.yml).
+
 jobs:
   rust:
     name: Rust (${{ matrix.os }})
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
-      - name: Linux system dependencies (WebKitGTK 4.1)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Linux system dependencies (Tauri prerequisites)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: rustfmt
         run: cargo fmt --all -- --check
       - name: clippy
@@ -53,18 +60,19 @@ jobs:
 
   msrv:
     name: Rust MSRV 1.90
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - name: Linux system dependencies (WebKitGTK 4.1)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Linux system dependencies (Tauri prerequisites)
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - name: Install Rust 1.90
         run: rustup toolchain install 1.90 --profile minimal
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: check
         env:
           RUSTFLAGS: ''
@@ -72,19 +80,20 @@ jobs:
 
   node:
     name: TypeScript (${{ matrix.os }})
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-      # Switch to `npm ci` once package-lock.json is committed (see CONTRIBUTING.md).
-      - name: install
-        run: npm install --no-audit --no-fund
+          cache: npm
+      - name: install (ow-tauri workspace only)
+        run: npm ci --workspace ow-tauri --include-workspace-root --no-audit --no-fund
       - name: format
         run: npm run format:check
       - name: lint
@@ -96,8 +105,27 @@ jobs:
       - name: docs
         run: npm run docs
 
+  supply-chain:
+    name: Supply chain
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: cargo-deny (advisories, bans, licenses, sources)
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories bans licenses sources
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: npm audit (ow-tauri and the workspace root)
+        run: npm audit --audit-level=high --workspace ow-tauri --include-workspace-root
+      - name: Overwolf packages are on the latest dist-tag
+        run: node scripts/check-overwolf-dist-tags.mjs
+
   example:
     name: Example build (${{ matrix.os }})
+    if: github.event_name != 'schedule'
     needs: [rust, node]
     strategy:
       fail-fast: false
@@ -105,7 +133,7 @@ jobs:
         os: [ubuntu-24.04, macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Skip until the Tauri port of the example exists
         id: gate
         shell: bash
@@ -116,25 +144,97 @@ jobs:
             echo "examples/packages-sample has no src-tauri yet; skipping."
             echo "ported=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Linux system dependencies (WebKitGTK 4.1)
+      - name: Linux system dependencies (Tauri prerequisites)
         if: steps.gate.outputs.ported == 'true' && runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
-      - uses: actions/setup-node@v5
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: steps.gate.outputs.ported == 'true'
         with:
           node-version: 22
-      - uses: Swatinem/rust-cache@v2
+          cache: npm
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: steps.gate.outputs.ported == 'true'
       - name: install
         if: steps.gate.outputs.ported == 'true'
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: build frontend and Rust app (no bundling, no launch)
         if: steps.gate.outputs.ported == 'true'
         run: |
           npm run build --workspace ow-tauri
           npm run build --workspace examples/packages-sample
           cargo build --manifest-path examples/packages-sample/src-tauri/Cargo.toml --locked
+
+  latest:
+    name: Newest stable Rust + newest tauri 2.x (${{ matrix.os }})
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Linux system dependencies (Tauri prerequisites)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: Newest stable Rust (overrides rust-toolchain.toml)
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          echo "RUSTUP_TOOLCHAIN=stable" >> "$GITHUB_ENV"
+      - name: Update every dependency to its newest compatible release
+        run: cargo update
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: test
+        run: cargo test --workspace --all-features
+
+  soak:
+    name: Main webview liveness soak (${{ matrix.os }})
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Skip until the soak test exists (CONTRACT A.6)
+        id: gate
+        shell: bash
+        run: |
+          if [ -f crates/tauri-plugin-overwolf/tests/liveness_soak.rs ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No liveness soak test yet; skipping."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Linux system dependencies (Tauri prerequisites + Xvfb)
+        if: steps.gate.outputs.present == 'true' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.gate.outputs.present == 'true'
+      - name: soak (test ads only; no network ads are loaded)
+        if: steps.gate.outputs.present == 'true'
+        shell: bash
+        env:
+          OW_TAURI_TEST_AD: '1'
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a cargo test -p tauri-plugin-overwolf --test liveness_soak --locked -- --ignored --nocapture
+          else
+            cargo test -p tauri-plugin-overwolf --test liveness_soak --locked -- --ignored --nocapture
+          fi

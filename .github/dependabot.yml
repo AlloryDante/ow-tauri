@@ -1,0 +1,32 @@
+# Weekly dependency updates. Overwolf npm packages follow their `latest`
+# dist-tag, which is what Dependabot proposes; CI also checks it.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore(deps)
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore(deps)
+    ignore:
+      # Types follow the minimum supported Node major (engines: >=22.12).
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+      # TypeScript stays on the newest release that typescript-eslint and
+      # TypeDoc support (CONTRIBUTING.md, "Dependencies").
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major', 'version-update:semver-minor']
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore(ci)
