@@ -763,6 +763,18 @@
           "markdownDescription": "Denies the main_ready command without any pre-configured scope."
         },
         {
+          "description": "Enables the navigation_external command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-navigation-external",
+          "markdownDescription": "Enables the navigation_external command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the navigation_external command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-navigation-external",
+          "markdownDescription": "Denies the navigation_external command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_ad_privacy_settings_window command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-ad-privacy-settings-window",
@@ -919,6 +931,54 @@
           "markdownDescription": "Denies the shell_show_item_in_folder command without any pre-configured scope."
         },
         {
+          "description": "Enables the updater_check command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-updater-check",
+          "markdownDescription": "Enables the updater_check command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the updater_check command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-updater-check",
+          "markdownDescription": "Denies the updater_check command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the updater_configure command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-updater-configure",
+          "markdownDescription": "Enables the updater_configure command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the updater_configure command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-updater-configure",
+          "markdownDescription": "Denies the updater_configure command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the updater_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-updater-download",
+          "markdownDescription": "Enables the updater_download command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the updater_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-updater-download",
+          "markdownDescription": "Denies the updater_download command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the updater_quit_and_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-updater-quit-and-install",
+          "markdownDescription": "Enables the updater_quit_and_install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the updater_quit_and_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-updater-quit-and-install",
+          "markdownDescription": "Denies the updater_quit_and_install command without any pre-configured scope."
+        },
+        {
           "description": "Enables the window_close_reply command without any pre-configured scope.",
           "type": "string",
           "const": "allow-window-close-reply",
@@ -1009,16 +1069,16 @@
           "markdownDescription": "Grants nothing; capabilities name `overwolf:main` or `overwolf:renderer` per webview class."
         },
         {
-          "description": "Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, the Overwolf API, packages, windows, screen, shell, dialogs, global shortcuts and scoped files.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-bootstrap`\n- `allow-main-ready`\n- `allow-ipc-main-ready`\n- `allow-app-quit-reply`\n- `allow-app-relaunch`\n- `allow-app-quit`\n- `allow-app-exit`\n- `allow-app-focus`\n- `allow-log`\n- `allow-ipc-reply`\n- `allow-ipc-emit`\n- `allow-ipc-emit-skip`\n- `allow-disable-anonymous-analytics`\n- `allow-disable-ads-optimization`\n- `allow-disable-ads-fpd`\n- `allow-is-cmp-required`\n- `allow-open-cmp-window`\n- `allow-open-ad-privacy-settings-window`\n- `allow-set-user-email-hashes`\n- `allow-set-external-payment-user-id`\n- `allow-analytics-set-user-enabled`\n- `allow-app-record-browser-args`\n- `allow-packages-snapshot`\n- `allow-packages-relaunch`\n- `allow-packages-set-channel`\n- `allow-packages-get-available-channels`\n- `allow-packages-get-channel`\n- `allow-window-create`\n- `allow-window-load`\n- `allow-window-close-reply`\n- `allow-window-destroy`\n- `allow-window-eval`\n- `allow-window-devtools`\n- `allow-window-set-name`\n- `allow-screen-snapshot`\n- `allow-shell-open-external`\n- `allow-shell-open-path`\n- `allow-shell-show-item-in-folder`\n- `allow-dialog-open`\n- `allow-dialog-save`\n- `allow-dialog-message`\n- `allow-global-shortcut-register`\n- `allow-global-shortcut-unregister`\n- `allow-fs-read-text`\n- `allow-fs-write-text`\n- `allow-fs-exists`\n- `allow-fs-mkdir`",
+          "description": "Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, the Overwolf API, packages, windows, screen, shell, dialogs, global shortcuts, scoped files and the update client.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-bootstrap`\n- `allow-main-ready`\n- `allow-ipc-main-ready`\n- `allow-app-quit-reply`\n- `allow-app-relaunch`\n- `allow-app-quit`\n- `allow-app-exit`\n- `allow-app-focus`\n- `allow-log`\n- `allow-ipc-reply`\n- `allow-ipc-emit`\n- `allow-ipc-emit-skip`\n- `allow-disable-anonymous-analytics`\n- `allow-disable-ads-optimization`\n- `allow-disable-ads-fpd`\n- `allow-is-cmp-required`\n- `allow-open-cmp-window`\n- `allow-open-ad-privacy-settings-window`\n- `allow-set-user-email-hashes`\n- `allow-set-external-payment-user-id`\n- `allow-analytics-set-user-enabled`\n- `allow-app-record-browser-args`\n- `allow-packages-snapshot`\n- `allow-packages-relaunch`\n- `allow-packages-set-channel`\n- `allow-packages-get-available-channels`\n- `allow-packages-get-channel`\n- `allow-window-create`\n- `allow-window-load`\n- `allow-window-close-reply`\n- `allow-window-destroy`\n- `allow-window-eval`\n- `allow-window-devtools`\n- `allow-window-set-name`\n- `allow-screen-snapshot`\n- `allow-shell-open-external`\n- `allow-shell-open-path`\n- `allow-shell-show-item-in-folder`\n- `allow-dialog-open`\n- `allow-dialog-save`\n- `allow-dialog-message`\n- `allow-global-shortcut-register`\n- `allow-global-shortcut-unregister`\n- `allow-fs-read-text`\n- `allow-fs-write-text`\n- `allow-fs-exists`\n- `allow-fs-mkdir`\n- `allow-updater-configure`\n- `allow-updater-check`\n- `allow-updater-download`\n- `allow-updater-quit-and-install`",
           "type": "string",
           "const": "main",
-          "markdownDescription": "Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, the Overwolf API, packages, windows, screen, shell, dialogs, global shortcuts and scoped files.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-bootstrap`\n- `allow-main-ready`\n- `allow-ipc-main-ready`\n- `allow-app-quit-reply`\n- `allow-app-relaunch`\n- `allow-app-quit`\n- `allow-app-exit`\n- `allow-app-focus`\n- `allow-log`\n- `allow-ipc-reply`\n- `allow-ipc-emit`\n- `allow-ipc-emit-skip`\n- `allow-disable-anonymous-analytics`\n- `allow-disable-ads-optimization`\n- `allow-disable-ads-fpd`\n- `allow-is-cmp-required`\n- `allow-open-cmp-window`\n- `allow-open-ad-privacy-settings-window`\n- `allow-set-user-email-hashes`\n- `allow-set-external-payment-user-id`\n- `allow-analytics-set-user-enabled`\n- `allow-app-record-browser-args`\n- `allow-packages-snapshot`\n- `allow-packages-relaunch`\n- `allow-packages-set-channel`\n- `allow-packages-get-available-channels`\n- `allow-packages-get-channel`\n- `allow-window-create`\n- `allow-window-load`\n- `allow-window-close-reply`\n- `allow-window-destroy`\n- `allow-window-eval`\n- `allow-window-devtools`\n- `allow-window-set-name`\n- `allow-screen-snapshot`\n- `allow-shell-open-external`\n- `allow-shell-open-path`\n- `allow-shell-show-item-in-folder`\n- `allow-dialog-open`\n- `allow-dialog-save`\n- `allow-dialog-message`\n- `allow-global-shortcut-register`\n- `allow-global-shortcut-unregister`\n- `allow-fs-read-text`\n- `allow-fs-write-text`\n- `allow-fs-exists`\n- `allow-fs-mkdir`"
+          "markdownDescription": "Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, the Overwolf API, packages, windows, screen, shell, dialogs, global shortcuts, scoped files and the update client.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-bootstrap`\n- `allow-main-ready`\n- `allow-ipc-main-ready`\n- `allow-app-quit-reply`\n- `allow-app-relaunch`\n- `allow-app-quit`\n- `allow-app-exit`\n- `allow-app-focus`\n- `allow-log`\n- `allow-ipc-reply`\n- `allow-ipc-emit`\n- `allow-ipc-emit-skip`\n- `allow-disable-anonymous-analytics`\n- `allow-disable-ads-optimization`\n- `allow-disable-ads-fpd`\n- `allow-is-cmp-required`\n- `allow-open-cmp-window`\n- `allow-open-ad-privacy-settings-window`\n- `allow-set-user-email-hashes`\n- `allow-set-external-payment-user-id`\n- `allow-analytics-set-user-enabled`\n- `allow-app-record-browser-args`\n- `allow-packages-snapshot`\n- `allow-packages-relaunch`\n- `allow-packages-set-channel`\n- `allow-packages-get-available-channels`\n- `allow-packages-get-channel`\n- `allow-window-create`\n- `allow-window-load`\n- `allow-window-close-reply`\n- `allow-window-destroy`\n- `allow-window-eval`\n- `allow-window-devtools`\n- `allow-window-set-name`\n- `allow-screen-snapshot`\n- `allow-shell-open-external`\n- `allow-shell-open-path`\n- `allow-shell-show-item-in-folder`\n- `allow-dialog-open`\n- `allow-dialog-save`\n- `allow-dialog-message`\n- `allow-global-shortcut-register`\n- `allow-global-shortcut-unregister`\n- `allow-fs-read-text`\n- `allow-fs-write-text`\n- `allow-fs-exists`\n- `allow-fs-mkdir`\n- `allow-updater-configure`\n- `allow-updater-check`\n- `allow-updater-download`\n- `allow-updater-quit-and-install`"
         },
         {
-          "description": "Commands of UI and overlay webviews (`bw-*`): the IPC router, `executeJavaScript` results and `<owadview>` guests.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-ipc-invoke`\n- `allow-ipc-send`\n- `allow-ipc-skip`\n- `allow-eval-result`\n- `allow-adview-mount`\n- `allow-adview-update`\n- `allow-adview-unmount`\n- `allow-adview-command`",
+          "description": "Commands of UI and overlay webviews (`bw-*`): the IPC router, `executeJavaScript` results, external links and `<owadview>` guests.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-ipc-invoke`\n- `allow-ipc-send`\n- `allow-ipc-skip`\n- `allow-eval-result`\n- `allow-navigation-external`\n- `allow-adview-mount`\n- `allow-adview-update`\n- `allow-adview-unmount`\n- `allow-adview-command`",
           "type": "string",
           "const": "renderer",
-          "markdownDescription": "Commands of UI and overlay webviews (`bw-*`): the IPC router, `executeJavaScript` results and `<owadview>` guests.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-ipc-invoke`\n- `allow-ipc-send`\n- `allow-ipc-skip`\n- `allow-eval-result`\n- `allow-adview-mount`\n- `allow-adview-update`\n- `allow-adview-unmount`\n- `allow-adview-command`"
+          "markdownDescription": "Commands of UI and overlay webviews (`bw-*`): the IPC router, `executeJavaScript` results, external links and `<owadview>` guests.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-ipc-invoke`\n- `allow-ipc-send`\n- `allow-ipc-skip`\n- `allow-eval-result`\n- `allow-navigation-external`\n- `allow-adview-mount`\n- `allow-adview-update`\n- `allow-adview-unmount`\n- `allow-adview-command`"
         }
       ]
     }

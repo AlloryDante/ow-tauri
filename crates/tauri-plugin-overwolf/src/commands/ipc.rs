@@ -56,6 +56,12 @@ pub(crate) async fn ipc_subscribe<R: Runtime>(
         host.report_user_agent(ua);
     }
     let label = webview.label().to_owned();
+    if require_main(&webview).is_err() {
+        // A new document of a UI webview: element ids start again at `e1`,
+        // so guests of an earlier document (one whose page load the
+        // platform did not report) must not receive its mounts (B.3.4).
+        host.close_guests_of(&label);
+    }
     let epoch = uuid::Uuid::new_v4().simple().to_string();
     let now = host.now();
     host.with_core(|c| {

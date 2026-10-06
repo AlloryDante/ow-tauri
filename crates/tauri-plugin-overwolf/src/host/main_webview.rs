@@ -57,6 +57,21 @@ pub(crate) fn monitors<R: Runtime>(
     (all, primary)
 }
 
+/// The cursor position in DIP, or `None` when `os_queries` is off or the
+/// platform cannot report it.
+pub(crate) fn read_cursor<R: Runtime>(
+    app: &AppHandle<R>,
+    os_queries: bool,
+) -> Option<crate::screen::Point> {
+    if !os_queries {
+        return None;
+    }
+    let (all, _) = monitors(app, true);
+    app.cursor_position()
+        .ok()
+        .map(|p| crate::screen::physical_to_dip(&all, p.x, p.y))
+}
+
 /// Displays in Electron's shape and the primary display id.
 pub(crate) fn read_displays<R: Runtime>(
     app: &AppHandle<R>,
@@ -151,6 +166,9 @@ impl<R: Runtime> Host<R> {
             builder = builder.additional_browser_args(&self.info.browser_args);
         }
         let window = builder.build()?;
+        // A.6 crash signals: WebView2 `ProcessFailed`, WebKitGTK
+        // `web-process-terminated` (macOS: the app forwards them, A.5).
+        self.install_app_hooks(window.as_ref());
         if !keeps_timers {
             let _ = window.set_ignore_cursor_events(true);
         }

@@ -13,6 +13,8 @@
     reason = "test helpers outside #[test] functions fail the test on any unexpected error"
 )]
 
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -27,23 +29,25 @@ use tauri::{
 use tauri_plugin_overwolf::{Builder, COMMANDS, OverwolfExt};
 
 /// Commands only `bw-*` webviews may call.
-const RENDERER_ONLY: [&str; 8] = [
+const RENDERER_ONLY: [&str; 9] = [
     "ipc_invoke",
     "ipc_send",
     "ipc_skip",
     "eval_result",
+    "navigation_external",
     "adview_mount",
     "adview_update",
     "adview_unmount",
     "adview_command",
 ];
 /// The `overwolf:renderer` set.
-const RENDERER: [&str; 9] = [
+const RENDERER: [&str; 10] = [
     "ipc_subscribe",
     "ipc_invoke",
     "ipc_send",
     "ipc_skip",
     "eval_result",
+    "navigation_external",
     "adview_mount",
     "adview_update",
     "adview_unmount",
@@ -484,9 +488,14 @@ fn bootstrap_matches_the_snapshot_shape() {
         "primaryDisplayId",
         "packages",
         "flags",
+        "firstLaunch",
+        "ipcLimits",
     ] {
         assert!(snapshot.get(key).is_some(), "missing {key}");
     }
+    assert_eq!(snapshot["ipcLimits"]["maxMessageBytes"], 8_388_608);
+    // The mock runtime has no cursor; the key is absent then.
+    assert!(snapshot.get("cursor").is_none());
     // F.2: no stored `utmParams` means the key is absent (`undefined`).
     assert!(snapshot.get("utmParams").is_none());
     assert_eq!(snapshot["manifest"]["productName"], "ACL Fixture");
@@ -1245,4 +1254,456 @@ fn a_custom_cmp_url_may_load_in_the_settings_window_only() {
     // Overwolf's own pages stay allowed.
     let overwolf = tauri::Url::parse(CMP_PAGE).unwrap();
     assert!(ow.test_navigation("ow-cmp", &overwolf));
+}
+
+#[test]
+fn navigation_external_opens_the_browser_and_reports_will_navigate() {
+    let (app, captured) = app("nav-external");
+    main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
+    let ow = app.overwolf();
+    invoke(
+        &app,
+        "bw-1",
+        "navigation_external",
+        json!({ "url": "https://example.com/docs?x=1" }),
+    )
+    .unwrap();
+    assert_eq!(ow.test_browser_opens(), ["https://example.com/docs?x=1"]);
+    let all = wait_for(&captured, |m| {
+        messages(m, "ow-main")
+            .iter()
+            .any(|x| x["event"] == "will-navigate")
+    });
+    let event = messages(&all, "ow-main")
+        .into_iter()
+        .find(|x| x["event"] == "will-navigate")
+        .unwrap();
+    assert_eq!(event["type"], "window");
+    assert_eq!(event["id"], 1);
+    assert_eq!(event["data"]["url"], "https://example.com/docs?x=1");
+    // Not a web URL, the app's own origin, and main-process callers: refused.
+    for url in ["file:///etc/hosts", "javascript:alert(1)", "not a url"] {
+        let r = invoke(&app, "bw-1", "navigation_external", json!({ "url": url }));
+        assert_eq!(r.unwrap_err()["code"], "invalid-argument", "{url}");
+    }
+    let own = format!("{}/index.html", origin());
+    let r = invoke(&app, "bw-1", "navigation_external", json!({ "url": own }));
+    assert_eq!(r.unwrap_err()["code"], "invalid-argument");
+    let r = invoke(
+        &app,
+        "ow-main",
+        "navigation_external",
+        json!({ "url": "https://example.com/" }),
+    );
+    assert_eq!(outcome(&r), Outcome::Acl, "{r:?}");
+    assert_eq!(ow.test_browser_opens().len(), 1);
+}
+
+#[test]
+fn a_minimized_window_hides_its_guests_until_restored() {
+    let (app, _) = app("guest-minimized");
+    main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
+    let ow = app.overwolf();
+    let guest = invoke(&app, "bw-1", "adview_mount", mount_body("e1")).unwrap()["guestLabel"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let state = |key: &str| ow.test_guest(&guest).unwrap()[key].clone();
+    assert_eq!(state("visibilityState"), "visible");
+    ow.test_window_minimized(1, true);
+    assert_eq!(state("embedderMinimized"), true);
+    assert_eq!(state("visibilityState"), "hidden");
+    // Shown but still minimized: still hidden.
+    ow.test_ads_window_visible(1, true);
+    assert_eq!(state("visibilityState"), "hidden");
+    ow.test_window_minimized(1, false);
+    assert_eq!(state("visibilityState"), "visible");
+}
+
+#[test]
+fn a_new_document_subscription_closes_the_old_documents_guests() {
+    let (app, _) = app("guest-resubscribe");
+    main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
+    let ow = app.overwolf();
+    let guest = invoke(&app, "bw-1", "adview_mount", mount_body("e1")).unwrap()["guestLabel"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(ow.test_guest(&guest).is_some());
+    invoke(
+        &app,
+        "bw-1",
+        "ipc_subscribe",
+        json!({ "onMessage": "__CHANNEL__:31" }),
+    )
+    .unwrap();
+    assert!(ow.test_guest(&guest).is_none());
+}
+
+/// The minisign public key and a prehashed signature of the four bytes
+/// `test` (the minisign-verify crate's test vector).
+const UPDATE_PUBKEY: &str = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
+const UPDATE_SIG: &str = "untrusted comment: signature from minisign secret key
+RUQf6LRCGA9i559r3g7V1qNyJDApGip8MfqcadIgT9CuhV3EMhHoN1mGTkUidF/z7SrlQgXdy8ofjb7bNJJylDOocrCo8KLzZwo=
+trusted comment: timestamp:1556193335\tfile:test
+y/rUw2y8/hOUYjZU71eHp/Wo1KZ40fGy2VJEDl34XMJM+TX48Ss/17u3IvIfbVR1FkZZSNCisQbuQY+bHwhEBg==";
+/// Base64 SHA-512 of `test`.
+const TEST_SHA512: &str =
+    "7iaw3Ur350mqGo7jwQrpkj9hiYB3Lkc/iBml1JQODbJ6wYX4oOHV+E+IvIh/1nsUNzLDBMxfqa2Ob1f1ACio/w==";
+
+type Routes = Arc<Mutex<Vec<(String, u16, Vec<u8>)>>>;
+
+/// A local feed server: path (without query) to status and body. Returns
+/// the base URL and the request log (full request targets).
+fn feed_server(routes: Routes) -> (String, Arc<Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let log: Arc<Mutex<Vec<String>>> = Arc::default();
+    let seen = Arc::clone(&log);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() {
+                continue;
+            }
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).unwrap_or(0) == 0 || header == "\r\n" {
+                    break;
+                }
+            }
+            let target = line.split(' ').nth(1).unwrap_or("/").to_owned();
+            seen.lock().unwrap().push(target.clone());
+            let path = target.split('?').next().unwrap_or("/").to_owned();
+            let found = routes
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(p, _, _)| *p == path)
+                .map(|(_, s, b)| (*s, b.clone()));
+            let (status, body) = found.unwrap_or((404, b"missing".to_vec()));
+            let head = format!(
+                "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&body);
+        }
+    });
+    (base, log)
+}
+
+fn feed_name() -> &'static str {
+    if cfg!(windows) {
+        "/feed/latest.yml"
+    } else if cfg!(target_os = "macos") {
+        "/feed/latest-mac.yml"
+    } else {
+        "/feed/latest-linux.yml"
+    }
+}
+
+fn feed(version: &str, sha512: &str, extra: &str) -> Vec<u8> {
+    format!(
+        "version: {version}\nfiles:\n  - url: App-Setup.exe\n    sha512: {sha512}\n    size: 4\n    IsAdminRightsRequired: false\n  - url: App-mac.zip\n    sha512: {sha512}\n    size: 4\n  - url: App.AppImage\n    sha512: {sha512}\n    size: 4\nreleaseDate: '2026-10-01T00:00:00.000Z'\n{extra}"
+    )
+    .into_bytes()
+}
+
+fn updater_events(all: &[(String, u32, Value)]) -> Vec<Value> {
+    messages(all, "ow-main")
+        .into_iter()
+        .filter(|m| m["type"] == "updater")
+        .collect()
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end story: configure, check, download, install"
+)]
+fn updater_checks_downloads_verifies_and_installs_at_exit() {
+    let routes: Routes = Arc::default();
+    let (base, log) = feed_server(Arc::clone(&routes));
+    {
+        let mut r = routes.lock().unwrap();
+        r.push((feed_name().into(), 200, feed("0.2.0", TEST_SHA512, "")));
+        for f in ["App-Setup.exe", "App-mac.zip", "App.AppImage"] {
+            r.push((format!("/feed/{f}"), 200, b"test".to_vec()));
+            r.push((
+                format!("/feed/{f}.sig"),
+                200,
+                UPDATE_SIG.as_bytes().to_vec(),
+            ));
+        }
+    }
+    let (app, captured) = app_with("updater", json!({ "updater": { "pubkey": UPDATE_PUBKEY } }));
+    main_and_window(&app);
+    subscribe_all(&app, &[]);
+    let ow = app.overwolf();
+
+    // Nothing configured yet.
+    let r = invoke(&app, "ow-main", "updater_check", json!({}));
+    assert_eq!(r.unwrap_err()["code"], "invalid-argument");
+    let r = invoke(&app, "ow-main", "updater_quit_and_install", json!({}));
+    assert_eq!(r.unwrap_err()["code"], "not-found");
+    // Plain http only for loopback hosts in debug builds.
+    for url in ["http://example.com/feed", "ftp://127.0.0.1/feed"] {
+        let r = invoke(
+            &app,
+            "ow-main",
+            "updater_configure",
+            json!({ "provider": "generic", "url": url }),
+        );
+        assert_eq!(r.unwrap_err()["code"], "invalid-argument", "{url}");
+    }
+    let r = invoke(
+        &app,
+        "ow-main",
+        "updater_configure",
+        json!({ "provider": "github", "url": format!("{base}/feed") }),
+    );
+    assert_eq!(r.unwrap_err()["code"], "invalid-argument");
+    invoke(
+        &app,
+        "ow-main",
+        "updater_configure",
+        json!({ "provider": "generic", "url": format!("{base}/feed"), "autoDownload": false }),
+    )
+    .unwrap();
+
+    let result = invoke(&app, "ow-main", "updater_check", json!({})).unwrap();
+    assert_eq!(result["isUpdateAvailable"], true);
+    assert_eq!(result["updateInfo"]["version"], "0.2.0");
+    assert_eq!(result["versionInfo"], result["updateInfo"]);
+    assert_eq!(
+        result["updateInfo"]["files"][0]["isAdminRightsRequired"],
+        false
+    );
+    let feed_request = log
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|t| t.starts_with(feed_name()))
+        .cloned()
+        .unwrap();
+    assert!(feed_request.contains("?noCache="), "{feed_request}");
+
+    let files = invoke(&app, "ow-main", "updater_download", json!({})).unwrap();
+    let file = PathBuf::from(files[0].as_str().unwrap());
+    assert_eq!(std::fs::read(&file).unwrap(), b"test");
+    assert!(
+        log.lock()
+            .unwrap()
+            .iter()
+            .any(|t| t.to_ascii_lowercase().ends_with(".sig"))
+    );
+    // A second download reuses the verified file.
+    let again = invoke(&app, "ow-main", "updater_download", json!({})).unwrap();
+    assert_eq!(again, files);
+
+    let all = wait_for(&captured, |m| {
+        updater_events(m)
+            .iter()
+            .any(|e| e["event"] == "update-downloaded")
+    });
+    let events: Vec<String> = updater_events(&all)
+        .iter()
+        .map(|e| e["event"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        events,
+        [
+            "error",
+            "error",
+            "checking-for-update",
+            "update-available",
+            "download-progress",
+            "update-downloaded"
+        ]
+    );
+    let downloaded = updater_events(&all).pop().unwrap();
+    assert_eq!(downloaded["info"]["downloadedFile"], files[0]);
+    let progress = updater_events(&all)
+        .into_iter()
+        .find(|e| e["event"] == "download-progress")
+        .unwrap();
+    assert_eq!(progress["progress"]["total"], 4);
+    assert_eq!(progress["progress"]["transferred"], 4);
+    assert_eq!(progress["progress"]["percent"], 100.0);
+
+    invoke(
+        &app,
+        "ow-main",
+        "updater_quit_and_install",
+        json!({ "isSilent": true, "isForceRunAfter": true }),
+    )
+    .unwrap();
+    let installs = tauri::async_runtime::block_on(ow.test_updater_install_at_exit());
+    assert_eq!(installs.len(), 1, "{installs:?}");
+    let install = &installs[0];
+    assert_eq!(install["silent"], true);
+    assert_eq!(install["forceRunAfter"], true);
+    if cfg!(windows) {
+        assert_eq!(install["args"], json!(["/S", "/UPDATE", "/R"]));
+        assert_eq!(install["relaunch"], false);
+    } else {
+        assert_eq!(install["relaunch"], true);
+    }
+    // The request is used once; the automatic install needs
+    // autoInstallOnAppQuit, which is on by default.
+    let installs = tauri::async_runtime::block_on(ow.test_updater_install_at_exit());
+    assert_eq!(installs.len(), 2);
+    assert_eq!(installs[1]["silent"], true);
+    assert_eq!(installs[1]["forceRunAfter"], false);
+    assert_eq!(installs[1]["relaunch"], false);
+
+    // The staging id is stored for the next launch (I.2 #5).
+    let state_file = std::fs::read_dir(temp_dir_path("updater").join("ow-electron"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path().join("ow-tauri.json"))
+        .find(|p| p.is_file())
+        .unwrap();
+    let state: Value = serde_json::from_slice(&std::fs::read(state_file).unwrap()).unwrap();
+    assert_eq!(state["stagingId"].as_str().unwrap().len(), 36);
+}
+
+/// The directory [`temp_dir`] made for `name`, without clearing it.
+fn temp_dir_path(name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("ow-tauri-acl-{name}-{}", std::process::id()))
+}
+
+#[test]
+fn updater_fails_closed() {
+    let routes: Routes = Arc::default();
+    let (base, _) = feed_server(Arc::clone(&routes));
+    let (app, captured) = app_with(
+        "updater-closed",
+        json!({ "updater": { "pubkey": UPDATE_PUBKEY } }),
+    );
+    main_and_window(&app);
+    subscribe_all(&app, &[]);
+    let configure = |extra: Value| {
+        let mut body =
+            json!({ "provider": "generic", "url": format!("{base}/feed"), "autoDownload": false });
+        if let (Some(b), Value::Object(e)) = (body.as_object_mut(), extra) {
+            b.extend(e);
+        }
+        invoke(&app, "ow-main", "updater_configure", body).unwrap();
+    };
+    let set_routes = |list: Vec<(String, u16, Vec<u8>)>| *routes.lock().unwrap() = list;
+    configure(json!({}));
+
+    // No feed: a network error.
+    let r = invoke(&app, "ow-main", "updater_check", json!({}));
+    assert_eq!(r.unwrap_err()["code"], "network");
+    // Not YAML: invalid-argument.
+    set_routes(vec![(feed_name().into(), 200, b"- [".to_vec())]);
+    let r = invoke(&app, "ow-main", "updater_check", json!({}));
+    assert_eq!(r.unwrap_err()["code"], "invalid-argument");
+    // The running version, an older one, a prerelease and a 0 % rollout
+    // are no update.
+    for (version, extra) in [
+        ("0.1.0", ""),
+        ("0.0.9", ""),
+        ("0.2.0-beta.1", ""),
+        ("0.2.0", "stagingPercentage: 0\n"),
+    ] {
+        set_routes(vec![(
+            feed_name().into(),
+            200,
+            feed(version, TEST_SHA512, extra),
+        )]);
+        let r = invoke(&app, "ow-main", "updater_check", json!({})).unwrap();
+        assert_eq!(r["isUpdateAvailable"], false, "{version} {extra}");
+        let d = invoke(&app, "ow-main", "updater_download", json!({}));
+        assert_eq!(d.unwrap_err()["code"], "not-found");
+    }
+    // Downgrades and prereleases when allowed.
+    configure(json!({ "allowDowngrade": true, "allowPrerelease": true }));
+    set_routes(vec![(
+        feed_name().into(),
+        200,
+        feed("0.0.9", TEST_SHA512, ""),
+    )]);
+    let r = invoke(&app, "ow-main", "updater_check", json!({})).unwrap();
+    assert_eq!(r["isUpdateAvailable"], true);
+    configure(json!({ "allowDowngrade": false }));
+
+    let files = |sha: &str, body: &[u8], sig: Option<&str>| {
+        let mut list = vec![(feed_name().to_owned(), 200, feed("0.3.0", sha, ""))];
+        for f in ["App-Setup.exe", "App-mac.zip", "App.AppImage"] {
+            list.push((format!("/feed/{f}"), 200, body.to_vec()));
+            if let Some(sig) = sig {
+                list.push((format!("/feed/{f}.sig"), 200, sig.as_bytes().to_vec()));
+            }
+        }
+        list
+    };
+    let wrong_sha = "AAAA".repeat(22);
+    // SHA-512 mismatch, size mismatch, a missing and a wrong signature: all
+    // `backend`, and nothing is left on disk.
+    for (routes_now, what) in [
+        (files(&wrong_sha, b"test", Some(UPDATE_SIG)), "sha"),
+        (files(TEST_SHA512, b"tests", Some(UPDATE_SIG)), "size"),
+        (files(TEST_SHA512, b"test", None), "no signature"),
+        (
+            files(TEST_SHA512, b"test", Some("garbage")),
+            "bad signature",
+        ),
+    ] {
+        set_routes(routes_now);
+        let r = invoke(&app, "ow-main", "updater_check", json!({})).unwrap();
+        assert_eq!(r["isUpdateAvailable"], true, "{what}");
+        let d = invoke(&app, "ow-main", "updater_download", json!({}));
+        assert_eq!(d.unwrap_err()["code"], "backend", "{what}");
+        let pending = temp_dir_path("updater-closed");
+        let leftovers: Vec<PathBuf> = walk(&pending)
+            .into_iter()
+            .filter(|p| p.to_string_lossy().contains("pending") && p.is_file())
+            .collect();
+        assert!(leftovers.is_empty(), "{what}: {leftovers:?}");
+    }
+    let r = invoke(&app, "ow-main", "updater_quit_and_install", json!({}));
+    assert_eq!(r.unwrap_err()["code"], "not-found");
+    let all = wait_for(&captured, |m| {
+        updater_events(m)
+            .iter()
+            .filter(|e| e["event"] == "error")
+            .count()
+            >= 10
+    });
+    let backend = updater_events(&all)
+        .into_iter()
+        .filter(|e| e["event"] == "error" && e["error"]["code"] == "backend")
+        .count();
+    assert_eq!(backend, 4);
+}
+
+fn walk(dir: &std::path::Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.filter_map(Result::ok) {
+            let p = e.path();
+            if p.is_dir() {
+                out.extend(walk(&p));
+            }
+            out.push(p);
+        }
+    }
+    out
+}
+
+#[test]
+fn updater_disabled_returns_null() {
+    let (app, _) = app_with("updater-off", json!({ "updater": { "enabled": false } }));
+    main_and_window(&app);
+    let r = invoke(&app, "ow-main", "updater_check", json!({})).unwrap();
+    assert_eq!(r, Value::Null);
 }

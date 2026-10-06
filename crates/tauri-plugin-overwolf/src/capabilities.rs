@@ -25,6 +25,16 @@ pub(crate) const MAIN_CAPABILITY: &str = "ow-tauri-main";
 pub(crate) const ADVIEW_GUEST_CAPABILITY: &str = "ow-tauri-adview-guest";
 /// Identifier of the consent windows' capability.
 pub(crate) const CMP_CAPABILITY: &str = "ow-tauri-cmp";
+/// Identifier of the UI windows' window-chrome capability.
+pub(crate) const UI_CHROME_CAPABILITY: &str = "ow-tauri-ui-chrome";
+
+/// Core permissions the renderer bootstrap of a `bw-*` webview needs for
+/// `-webkit-app-region: drag` (B.3.6): dragging its own window and the
+/// double-click maximize toggle. Nothing else of `core:window:*`.
+pub(crate) const UI_CHROME_PERMISSIONS: &[&str] = &[
+    "core:window:allow-start-dragging",
+    "core:window:allow-toggle-maximize",
+];
 
 /// Core permissions of `ow-main`: the default sets plus the window and
 /// webview commands the `BrowserWindow` facade calls. Creating windows or
@@ -111,6 +121,22 @@ pub(crate) fn main_capability() -> Result<Built, String> {
     }))
 }
 
+/// `ow-tauri-ui-chrome`: `bw-*` webviews, local content only, may drag and
+/// maximize their own window (B.3.6). Remote documents never match
+/// (`local: true`), so a remote page loaded into the webview cannot use it.
+pub(crate) fn ui_chrome_capability() -> Result<Built, String> {
+    Ok(Built(Capability {
+        identifier: UI_CHROME_CAPABILITY.into(),
+        description: "ow-tauri: app-region dragging in BrowserWindow webviews.".into(),
+        remote: None,
+        local: true,
+        windows: Vec::new(),
+        webviews: vec!["bw-*".into()],
+        permissions: entries(UI_CHROME_PERMISSIONS)?,
+        platforms: None,
+    }))
+}
+
 /// A capability for remote Overwolf pages: `webviews` and exact URL
 /// patterns, `local: false`. Used by the ads and consent modules.
 pub(crate) fn remote_capability(
@@ -187,6 +213,15 @@ mod tests {
         ] {
             assert!(!ids.iter().any(|p| p == forbidden), "{forbidden}");
         }
+    }
+
+    #[test]
+    fn ui_chrome_capability_is_local_and_minimal() {
+        let Built(c) = ui_chrome_capability().unwrap();
+        assert_eq!(c.webviews, vec!["bw-*"]);
+        assert!(c.windows.is_empty());
+        assert!(c.local && c.remote.is_none());
+        assert_eq!(c.permissions.len(), UI_CHROME_PERMISSIONS.len());
     }
 
     #[test]

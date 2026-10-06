@@ -21,11 +21,13 @@ pub(crate) fn local_time() -> LocalTime {
 /// `<major>.<minor>.<build>`, as Node's `os.release()` on Windows.
 #[cfg(feature = "plugin")]
 pub(crate) fn os_release() -> String {
-    let mut info = windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW::default();
-    info.dwOSVersionInfoSize = u32::try_from(std::mem::size_of::<
-        windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW,
-    >())
-    .unwrap_or(0);
+    let mut info = windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW {
+        dwOSVersionInfoSize: u32::try_from(size_of::<
+            windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW,
+        >())
+        .unwrap_or(0),
+        ..Default::default()
+    };
     // SAFETY: `info` is a valid OSVERSIONINFOW with its size field set;
     // RtlGetVersion only writes into it.
     let status = unsafe { windows_sys::Wdk::System::SystemServices::RtlGetVersion(&raw mut info) };

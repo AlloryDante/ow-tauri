@@ -125,6 +125,24 @@ impl<R: Runtime> Overwolf<R> {
         &self.0.info.manifest
     }
 
+    /// The update client (CONTRACT A.5, I): `configure`, `check`,
+    /// `download` and `quit_and_install`, with the behaviour of the
+    /// `updater_*` commands.
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # async fn example(app: &tauri::AppHandle) -> tauri_plugin_overwolf::Result<()> {
+    /// if let Some(result) = app.overwolf().updater().check().await? {
+    ///     println!("latest {}", result.update_info.version);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn updater(&self) -> &crate::updater::Updater<R> {
+        &self.0.updater_api
+    }
+
     /// The effective configuration (file, builder, environment, switches).
     ///
     /// ```no_run
@@ -273,7 +291,9 @@ impl<R: Runtime> Overwolf<R> {
     /// every `tauri::Builder::on_web_content_process_terminate` call (macOS)
     /// here: for `ow-main` it is [`Self::report_main_webview_crash`], for an
     /// ad guest (`owad-*`) the crash recovery of D.7, for a consent window
-    /// (`ow-cmp*`) its failure path (D.6.1). Other labels are ignored.
+    /// (`ow-cmp*`) its failure path (D.6.1), for a `BrowserWindow` webview
+    /// (`bw-*`, `bwr-*`) its `render-process-gone` event (A.3). Other labels
+    /// are ignored.
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::OverwolfExt;
@@ -288,7 +308,11 @@ impl<R: Runtime> Overwolf<R> {
             crate::window::WebviewClass::AdviewGuest | crate::window::WebviewClass::Cmp => {
                 self.0.web_content_terminated(label);
             }
-            _ => {}
+            crate::window::WebviewClass::Ui(id) | crate::window::WebviewClass::Remote(id) => {
+                self.0
+                    .window_render_process_gone(id, crate::ads::GoneReason::Crashed, 0);
+            }
+            crate::window::WebviewClass::Other => {}
         }
     }
 
@@ -413,8 +437,34 @@ impl<R: Runtime> Overwolf<R> {
         }
     }
 
+    /// The install-at-exit step of the update client (I.4) without the
+    /// exit; returns every install recorded so far (the mock runtime runs
+    /// no installer).
+    pub async fn test_updater_install_at_exit(&self) -> Vec<Value> {
+        self.0.updater_install_at_exit().await;
+        self.0.with_core(|c| c.updater.test_installs.clone())
+    }
+
+    /// As if window `id` was minimized (`true`) or restored (`false`): the
+    /// `minimize` / `restore` window events and its guests' visibility follow.
+    pub fn test_window_minimized(&self, id: u32, minimized: bool) {
+        let mut state = self
+            .0
+            .with_core(|c| c.windows.get(id).map(|e| e.state))
+            .unwrap_or_default();
+        state.minimized = minimized;
+        self.0.apply_window_state(id, state);
+    }
+
+    /// The URLs the plugin would have opened in the system browser (a host
+    /// without OS queries only records them).
+    #[must_use]
+    pub fn test_browser_opens(&self) -> Vec<String> {
+        self.0.with_core(|c| c.browser_opens.clone())
+    }
+
     /// The state of the ad guest `label`: `{ embedder, elementId, navigated,
-    /// ready, domReady, loads, recoveries, visible, embedderHidden,
+    /// ready, domReady, loads, recoveries, visible, embedderHidden, embedderMinimized,
     /// visibilityState, reloadScheduled }`, or `None` when it is gone.
     #[must_use]
     pub fn test_guest(&self, label: &str) -> Option<Value> {
@@ -430,6 +480,7 @@ impl<R: Runtime> Overwolf<R> {
                     "recoveries": g.recoveries,
                     "visible": g.visible,
                     "embedderHidden": g.embedder_hidden,
+                    "embedderMinimized": g.embedder_minimized,
                     "visibilityState": if g.sent_visible { "visible" } else { "hidden" },
                     "reloadScheduled": g.reload_at.is_some(),
                 })

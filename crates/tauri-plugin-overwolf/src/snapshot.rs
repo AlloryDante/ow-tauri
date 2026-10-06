@@ -24,7 +24,7 @@ use serde_json::{Map, Value};
 use crate::ipc::messages::{HostMessage, Patch};
 use crate::manifest::EmbeddedManifest;
 use crate::packages::PackagesSnapshot;
-use crate::screen::ElectronDisplay;
+use crate::screen::{ElectronDisplay, Point};
 
 /// `HostSnapshot.versions`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -80,6 +80,15 @@ pub struct Flags {
     pub ads_fpd_disabled: bool,
 }
 
+/// `HostSnapshot.ipcLimits`: the limits the main runtime checks itself
+/// (C.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IpcLimits {
+    /// `ipc.maxMessageBytes` (A.1): the encoded size cap per message.
+    pub max_message_bytes: usize,
+}
+
 /// The bootstrap snapshot.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -116,6 +125,16 @@ pub struct HostSnapshot {
     pub platform: String,
     /// Node `process.arch` (addition).
     pub arch: String,
+    /// `app.overwolf.__settings__.firstLaunch`: `true` when `ow-electron.json`
+    /// had no `firstLaunch` at setup, read before this launch writes it
+    /// (F.2, B.1.1).
+    pub first_launch: bool,
+    /// The cursor in DIP when the snapshot was taken; absent when the host
+    /// cannot query it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<Point>,
+    /// Limits the main runtime checks itself (`ipc.maxMessageBytes`).
+    pub ipc_limits: IpcLimits,
 }
 
 /// What a UI window's bootstrap receives: the subset the `process` shim needs.

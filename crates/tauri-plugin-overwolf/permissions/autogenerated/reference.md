@@ -1028,6 +1028,32 @@ Denies the main_ready command without any pre-configured scope.
 <tr>
 <td>
 
+`overwolf:allow-navigation-external`
+
+</td>
+<td>
+
+Enables the navigation_external command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-navigation-external`
+
+</td>
+<td>
+
+Denies the navigation_external command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `overwolf:allow-open-ad-privacy-settings-window`
 
 </td>
@@ -1366,6 +1392,110 @@ Denies the shell_show_item_in_folder command without any pre-configured scope.
 <tr>
 <td>
 
+`overwolf:allow-updater-check`
+
+</td>
+<td>
+
+Enables the updater_check command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-updater-check`
+
+</td>
+<td>
+
+Denies the updater_check command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:allow-updater-configure`
+
+</td>
+<td>
+
+Enables the updater_configure command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-updater-configure`
+
+</td>
+<td>
+
+Denies the updater_configure command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:allow-updater-download`
+
+</td>
+<td>
+
+Enables the updater_download command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-updater-download`
+
+</td>
+<td>
+
+Denies the updater_download command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:allow-updater-quit-and-install`
+
+</td>
+<td>
+
+Enables the updater_quit_and_install command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-updater-quit-and-install`
+
+</td>
+<td>
+
+Denies the updater_quit_and_install command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `overwolf:allow-window-close-reply`
 
 </td>
@@ -1553,7 +1683,7 @@ Denies the window_set_name command without any pre-configured scope.
 </td>
 <td>
 
-Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, the Overwolf API, packages, windows, screen, shell, dialogs, global shortcuts and scoped files.
+Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, the Overwolf API, packages, windows, screen, shell, dialogs, global shortcuts, scoped files and the update client.
 
 </td>
 </tr>
@@ -1566,7 +1696,7 @@ Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing
 </td>
 <td>
 
-Commands of UI and overlay webviews (`bw-*`): the IPC router, `executeJavaScript` results and `<owadview>` guests.
+Commands of UI and overlay webviews (`bw-*`): the IPC router, `executeJavaScript` results, external links and `<owadview>` guests.
 
 </td>
 </tr>

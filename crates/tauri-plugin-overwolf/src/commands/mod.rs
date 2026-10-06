@@ -12,6 +12,7 @@ mod ipc;
 pub(crate) mod list;
 mod shell;
 mod shortcut;
+mod updater;
 mod window;
 
 use std::sync::Arc;
@@ -140,10 +141,15 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         fs::fs_write_text,
         fs::fs_exists,
         fs::fs_mkdir,
+        updater::updater_configure,
+        updater::updater_check,
+        updater::updater_download,
+        updater::updater_quit_and_install,
         ipc::ipc_invoke,
         ipc::ipc_send,
         ipc::ipc_skip,
         window::eval_result,
+        window::navigation_external,
         ads::adview_mount,
         ads::adview_update,
         ads::adview_unmount,

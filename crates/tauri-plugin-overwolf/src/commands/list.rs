@@ -57,11 +57,17 @@ pub const COMMANDS: &[&str] = &[
     "fs_write_text",
     "fs_exists",
     "fs_mkdir",
+    // A.2.8 updater
+    "updater_configure",
+    "updater_check",
+    "updater_download",
+    "updater_quit_and_install",
     // A.2.5 UI windows
     "ipc_invoke",
     "ipc_send",
     "ipc_skip",
     "eval_result",
+    "navigation_external",
     "adview_mount",
     "adview_update",
     "adview_unmount",

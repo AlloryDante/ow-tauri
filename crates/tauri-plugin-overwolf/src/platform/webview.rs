@@ -159,9 +159,9 @@ pub(crate) fn load_shaped<R: Runtime>(
     webview.navigate(url.clone()).is_ok()
 }
 
-/// Platform reports from a guest that Tauri does not deliver.
+/// Platform reports from a webview that Tauri does not deliver.
 pub(crate) trait GuestReports: Send + Sync + 'static {
-    /// The guest's render process ended (`reason` is Electron's spelling).
+    /// The webview's render process ended (`reason` is Electron's spelling).
     fn crashed(&self, label: &str, reason: crate::ads::GoneReason, exit_code: i64);
     /// A main-frame load failed.
     #[cfg_attr(
@@ -174,6 +174,19 @@ pub(crate) trait GuestReports: Send + Sync + 'static {
     fn load_failed(&self, label: &str, error_code: i64, description: &str, url: &str);
 }
 
+/// Which kind of webview the platform hooks watch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HookTarget {
+    /// An ad guest or consent window: an unresponsive render process counts
+    /// as gone (it is recovered, D.7), and a load failure reports the ad
+    /// document URL.
+    Guest,
+    /// `ow-main` or a `bw-*` / `bwr-*` webview: only a render or browser
+    /// process that exited counts (Electron reports an unresponsive page
+    /// separately), and a load failure reports the document URL.
+    App,
+}
+
 /// Installs the per-guest platform hooks: on Windows the request shaping
 /// handler (D.8.3), `ProcessFailed` and `NavigationCompleted`; on Linux
 /// `web-process-terminated` and `load-failed`. macOS reports crashes through
@@ -183,20 +196,41 @@ pub(crate) fn install_guest_hooks<R: Runtime>(
     shaping: Option<Shaping>,
     reports: Arc<dyn GuestReports>,
 ) -> tauri::Result<()> {
+    install_hooks(webview, HookTarget::Guest, shaping, reports)
+}
+
+/// The crash and load-failure hooks of `ow-main` and the `bw-*` / `bwr-*`
+/// webviews (A.6 crash signals, A.3 `did-fail-load` and
+/// `render-process-gone`): Windows `ProcessFailed` and
+/// `NavigationCompleted`, Linux `web-process-terminated` and `load-failed`.
+/// macOS has no plugin-level hook (A.5).
+pub(crate) fn install_app_hooks<R: Runtime>(
+    webview: &Webview<R>,
+    reports: Arc<dyn GuestReports>,
+) -> tauri::Result<()> {
+    install_hooks(webview, HookTarget::App, None, reports)
+}
+
+fn install_hooks<R: Runtime>(
+    webview: &Webview<R>,
+    target: HookTarget,
+    shaping: Option<Shaping>,
+    reports: Arc<dyn GuestReports>,
+) -> tauri::Result<()> {
     let label = webview.label().to_owned();
     webview.with_webview(move |pw| {
         #[cfg(windows)]
         {
-            windows_impl::install(&pw.controller(), shaping, label, reports);
+            windows_impl::install(&pw.controller(), target, shaping, label, reports);
         }
         #[cfg(target_os = "linux")]
         {
-            let _ = shaping;
+            let _ = (shaping, target);
             linux::install(&pw.inner(), label, reports);
         }
         #[cfg(not(any(windows, target_os = "linux")))]
         {
-            let _ = (pw, shaping, label, reports);
+            let _ = (pw, target, shaping, label, reports);
         }
     })
 }
@@ -387,7 +421,8 @@ mod windows_impl {
     use std::sync::Arc;
 
     use webview2_com::Microsoft::Web::WebView2::Win32::{
-        COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
+        COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
+        COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
         COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE,
         COREWEBVIEW2_PROCESS_FAILED_REASON, COREWEBVIEW2_PROCESS_FAILED_REASON_CRASHED,
         COREWEBVIEW2_PROCESS_FAILED_REASON_LAUNCH_FAILED,
@@ -404,7 +439,9 @@ mod windows_impl {
     };
     use windows::core::{BOOL, HSTRING, Interface, PWSTR};
 
-    use super::{GuestReports, RequestShape, Shaping, request_shape, webview2_net_error};
+    use super::{
+        GuestReports, HookTarget, RequestShape, Shaping, request_shape, webview2_net_error,
+    };
     use crate::ads::GoneReason;
 
     pub(super) fn set_muted(controller: &ICoreWebView2Controller, muted: bool) {
@@ -427,10 +464,10 @@ mod windows_impl {
         unsafe {
             let request = args.Request()?;
             let mut uri = PWSTR::null();
-            request.Uri(&mut uri)?;
+            request.Uri(&raw mut uri)?;
             let uri = take_pwstr(uri);
             let mut context = COREWEBVIEW2_WEB_RESOURCE_CONTEXT::default();
-            args.ResourceContext(&mut context)?;
+            args.ResourceContext(&raw mut context)?;
             let headers = request.Headers()?;
             let document = context == COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT;
             match request_shape(&uri, document) {
@@ -458,12 +495,21 @@ mod windows_impl {
     }
 
     fn gone_reason(
+        target: HookTarget,
         kind: COREWEBVIEW2_PROCESS_FAILED_KIND,
         reason: COREWEBVIEW2_PROCESS_FAILED_REASON,
     ) -> Option<GoneReason> {
-        if kind != COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED
-            && kind != COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE
-        {
+        let counts = match target {
+            HookTarget::Guest => {
+                kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED
+                    || kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE
+            }
+            HookTarget::App => {
+                kind == COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED
+                    || kind == COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED
+            }
+        };
+        if !counts {
             return None;
         }
         Some(if reason == COREWEBVIEW2_PROCESS_FAILED_REASON_TERMINATED {
@@ -481,6 +527,7 @@ mod windows_impl {
 
     pub(super) fn install(
         controller: &ICoreWebView2Controller,
+        target: HookTarget,
         shaping: Option<Shaping>,
         label: String,
         reports: Arc<dyn GuestReports>,
@@ -512,7 +559,7 @@ mod windows_impl {
                             }
                             Ok(())
                         })),
-                        &mut token,
+                        &raw mut token,
                     )?;
                 }
                 let crash_label = label.clone();
@@ -522,38 +569,49 @@ mod windows_impl {
                     &ProcessFailedEventHandler::create(Box::new(move |_, args| {
                         let Some(args) = args else { return Ok(()) };
                         let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
-                        args.ProcessFailedKind(&mut kind)?;
+                        args.ProcessFailedKind(&raw mut kind)?;
                         let mut reason = COREWEBVIEW2_PROCESS_FAILED_REASON::default();
                         let mut exit_code = 0_i32;
                         if let Ok(a2) = args.cast::<ICoreWebView2ProcessFailedEventArgs2>() {
-                            let _ = a2.Reason(&mut reason);
-                            let _ = a2.ExitCode(&mut exit_code);
+                            let _ = a2.Reason(&raw mut reason);
+                            let _ = a2.ExitCode(&raw mut exit_code);
                         }
-                        if let Some(r) = gone_reason(kind, reason) {
+                        if let Some(r) = gone_reason(target, kind, reason) {
                             crash_reports.crashed(&crash_label, r, i64::from(exit_code));
                         }
                         Ok(())
                     })),
-                    &mut token,
+                    &raw mut token,
                 )?;
                 let mut token = 0_i64;
                 core.add_NavigationCompleted(
-                    &NavigationCompletedEventHandler::create(Box::new(move |_, args| {
+                    &NavigationCompletedEventHandler::create(Box::new(move |sender, args| {
                         let Some(args) = args else { return Ok(()) };
                         let mut ok = BOOL::default();
-                        args.IsSuccess(&mut ok)?;
+                        args.IsSuccess(&raw mut ok)?;
                         if !ok.as_bool() {
                             let mut status = COREWEBVIEW2_WEB_ERROR_STATUS::default();
-                            let _ = args.WebErrorStatus(&mut status);
+                            let _ = args.WebErrorStatus(&raw mut status);
                             // Operation canceled: a new navigation replaced it.
                             if status != COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED {
-                                let (code, name) = webview2_net_error(status.0);
-                                reports.load_failed(&label, code, name, crate::ads::ADVIEW_URL);
+                                let (error_code, error_name) = webview2_net_error(status.0);
+                                let url = match target {
+                                    HookTarget::Guest => crate::ads::ADVIEW_URL.to_owned(),
+                                    HookTarget::App => sender
+                                        .as_ref()
+                                        .and_then(|page| {
+                                            let mut source = PWSTR::null();
+                                            page.Source(&raw mut source).ok()?;
+                                            Some(take_pwstr(source))
+                                        })
+                                        .unwrap_or_default(),
+                                };
+                                reports.load_failed(&label, error_code, error_name, &url);
                             }
                         }
                         Ok(())
                     })),
-                    &mut token,
+                    &raw mut token,
                 )?;
                 Ok(())
             })()

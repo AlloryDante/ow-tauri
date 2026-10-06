@@ -2,7 +2,7 @@
 //! `bw-*` windows, and turning Tauri window events into `window` host
 //! messages (CONTRACT A.2.3, A.2.3.1, A.3).
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use serde_json::{Value, json};
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
@@ -76,7 +76,77 @@ fn read_state<R: Runtime>(window: &tauri::Window<R>) -> WindowState {
     }
 }
 
+/// Platform crash and load-failure reports of `ow-main` and the `bw-*` /
+/// `bwr-*` webviews (A.3, A.6), routed to the host.
+pub(super) struct AppReports<R: Runtime>(pub(super) Weak<Host<R>>);
+
+impl<R: Runtime> crate::platform::webview::GuestReports for AppReports<R> {
+    fn crashed(&self, label: &str, reason: crate::ads::GoneReason, exit_code: i64) {
+        let Some(host) = self.0.upgrade() else { return };
+        match crate::window::classify(label) {
+            crate::window::WebviewClass::Main => host.main_crashed(),
+            crate::window::WebviewClass::Ui(id) | crate::window::WebviewClass::Remote(id) => {
+                host.window_render_process_gone(id, reason, exit_code);
+            }
+            _ => {}
+        }
+    }
+
+    fn load_failed(&self, label: &str, error_code: i64, description: &str, url: &str) {
+        let Some(host) = self.0.upgrade() else { return };
+        match crate::window::classify(label) {
+            crate::window::WebviewClass::Ui(id) | crate::window::WebviewClass::Remote(id) => {
+                host.send_main(HostMessage::window(
+                    id,
+                    WindowEventName::DidFailLoad,
+                    Some(json!({
+                        "errorCode": error_code,
+                        "errorDescription": description,
+                        "validatedURL": url,
+                    })),
+                ));
+            }
+            crate::window::WebviewClass::Main => host.log(
+                LogLevel::Error,
+                &format!("the main webview failed to load its page ({description})"),
+            ),
+            _ => {}
+        }
+    }
+}
+
 impl<R: Runtime> Host<R> {
+    /// Installs the crash and load-failure hooks of an app webview
+    /// (`ow-main`, `bw-*`, `bwr-*`).
+    pub(crate) fn install_app_hooks(self: &Arc<Self>, webview: &tauri::Webview<R>) {
+        let reports = Arc::new(AppReports(Arc::downgrade(self)));
+        if let Err(err) = crate::platform::webview::install_app_hooks(webview, reports) {
+            self.log(
+                LogLevel::Warn,
+                &format!("crash hooks for {} failed: {err}", webview.label()),
+            );
+        }
+    }
+
+    /// The render process of window `id`'s webview ended: `render-process-gone`
+    /// (A.3) with Electron's `{ reason, exitCode }` details.
+    pub(crate) fn window_render_process_gone(
+        self: &Arc<Self>,
+        id: u32,
+        reason: crate::ads::GoneReason,
+        exit_code: i64,
+    ) {
+        self.log(
+            LogLevel::Warn,
+            &format!("window {id}: render process gone ({})", reason.as_str()),
+        );
+        self.send_main(HostMessage::window(
+            id,
+            WindowEventName::RenderProcessGone,
+            Some(json!({ "reason": reason.as_str(), "exitCode": exit_code })),
+        ));
+    }
+
     /// `window_create`.
     #[expect(
         clippy::too_many_lines,
@@ -198,6 +268,7 @@ impl<R: Runtime> Host<R> {
             b = b.additional_browser_args(&self.info.browser_args);
         }
         let window = b.build().map_err(Error::from)?;
+        self.install_app_hooks(window.as_ref());
         if let Some(z) = o.web_preferences.as_ref().and_then(|w| w.zoom_factor) {
             let _ = window.set_zoom(z);
         }
@@ -292,9 +363,10 @@ impl<R: Runtime> Host<R> {
         {
             builder = builder.additional_browser_args(&self.info.browser_args);
         }
-        window
+        let remote = window
             .add_child(builder, LogicalPosition::new(0.0, 0.0), size)
             .map_err(Error::from)?;
+        self.install_app_hooks(&remote);
         if let Some(old) = self.app.get_webview(&ui_label(id))
             && let Err(err) = old.close()
         {
@@ -479,17 +551,20 @@ impl<R: Runtime> Host<R> {
         }
     }
 
-    fn apply_window_state(self: &Arc<Self>, id: u32, now: WindowState) {
-        self.with_core(|c| {
-            let Some(entry) = c.windows.get_mut(id) else {
-                return;
-            };
+    pub(crate) fn apply_window_state(self: &Arc<Self>, id: u32, now: WindowState) {
+        let minimized = self.with_core(|c| {
+            let entry = c.windows.get_mut(id)?;
             let events = derive_state_events(entry.state, now);
+            let changed = entry.state.minimized != now.minimized;
             entry.state = now;
             for e in events {
                 c.queue_main(HostMessage::window(id, e, None));
             }
+            changed.then_some(now.minimized)
         });
+        if let Some(minimized) = minimized {
+            self.ads_window_minimized(id, minimized);
+        }
     }
 
     /// Tauri window event for `bw-<id>`.
@@ -647,12 +722,7 @@ impl<R: Runtime> Host<R> {
                 ));
                 match crate::shell::validate_external_url(url.as_str()) {
                     Ok(u) => {
-                        if let Err(err) = tauri_plugin_opener::open_url(u.as_str(), None::<&str>) {
-                            self.log(
-                                LogLevel::Warn,
-                                &format!("opening a link in the system browser failed: {err}"),
-                            );
-                        }
+                        let _ = self.open_in_browser(&u);
                     }
                     Err(_) => self.log(LogLevel::Warn, "navigation to an invalid URL cancelled"),
                 }
@@ -666,6 +736,26 @@ impl<R: Runtime> Host<R> {
                 false
             }
         }
+    }
+
+    /// `navigation_external` (A.2.5): a top-level navigation of window `id`
+    /// that the renderer bootstrap cancelled on macOS and Linux (A.2.3.1).
+    /// The URL passes the `shell_open_external` checks and is not on the app
+    /// origin; it opens in the system browser and `ow-main` gets the same
+    /// `will-navigate` the Windows navigation hook sends.
+    pub(crate) fn navigation_external(self: &Arc<Self>, id: u32, url: &str) -> Result<(), Error> {
+        let target = crate::shell::validate_external_url(url)?;
+        if origin_string(&target) == origin_string(&self.info.app_origin) {
+            return Err(Error::invalid_argument(
+                "The URL is on the app origin; it loads in the window.",
+            ));
+        }
+        self.send_main(HostMessage::window(
+            id,
+            WindowEventName::WillNavigate,
+            Some(json!({ "url": target.as_str() })),
+        ));
+        self.open_in_browser(&target)
     }
 
     /// The `window.open` handler of window `id`'s webviews: the request is

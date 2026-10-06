@@ -68,6 +68,8 @@ pub(crate) struct Guest {
     pub(crate) host_key: String,
     /// The embedder window is hidden.
     pub(crate) embedder_hidden: bool,
+    /// The embedder window is minimized.
+    pub(crate) embedder_minimized: bool,
     /// The visibility the shim reports to the page (`visible` when true).
     pub(crate) sent_visible: bool,
     /// Last load or recovery (`sessionTS`, E.2 #8).
@@ -283,7 +285,8 @@ impl<R: Runtime> Host<R> {
         let window_title = document_title.unwrap_or_else(|| window.title().unwrap_or_default());
         let focused = window.is_focused().unwrap_or(false);
         let embedder_hidden = !window.is_visible().unwrap_or(true);
-        let sent_visible = mount.visible && !embedder_hidden;
+        let embedder_minimized = window.is_minimized().unwrap_or(false);
+        let sent_visible = mount.visible && !embedder_hidden && !embedder_minimized;
         let host_key = format!("_{}", uuid::Uuid::new_v4().simple());
         let flags = self.with_core(|c| c.flags);
         let system_info = self.system_info();
@@ -368,6 +371,7 @@ impl<R: Runtime> Host<R> {
             finish_pending: None,
             host_key,
             embedder_hidden,
+            embedder_minimized,
             sent_visible,
             last_load_ms: now,
             loads: 0,
@@ -437,11 +441,7 @@ impl<R: Runtime> Host<R> {
         };
         match decision {
             Ok(()) => {
-                if let Err(err) = tauri_plugin_opener::open_url(url.as_str(), None::<&str>) {
-                    self.log(
-                        LogLevel::Warn,
-                        &format!("opening an ad click failed: {err}"),
-                    );
+                if self.open_in_browser(url).is_err() {
                     return;
                 }
                 self.guest_deliver(label, "ad-clicked", Some(&Value::from(url.as_str())));
@@ -504,12 +504,14 @@ impl<R: Runtime> Host<R> {
     }
 
     /// Tells the shim of `label` its visibility (`document.visibilityState`,
-    /// D.5): visible when the element is visible and its window is shown.
+    /// D.5): visible when the element is visible and its window is shown
+    /// and not minimized (Chromium hides the documents of a minimized
+    /// window).
     /// Sends only a change, unless `force` (a new document).
     fn sync_visibility(self: &Arc<Self>, label: &str, force: bool) {
         let send = self.with_core(|c| {
             c.ads.guests.get_mut(label).and_then(|g| {
-                let visible = g.visible && !g.embedder_hidden;
+                let visible = g.visible && !g.embedder_hidden && !g.embedder_minimized;
                 let changed = std::mem::replace(&mut g.sent_visible, visible) != visible;
                 (changed || force).then_some(visible)
             })
@@ -1146,6 +1148,20 @@ impl<R: Runtime> Host<R> {
             if changed && hidden {
                 self.guest_deliver(&l, "window-hidden", None);
             }
+            self.sync_visibility(&l, false);
+        }
+    }
+
+    /// The embedder window `id` was minimized or restored: its guests'
+    /// documents are hidden while it is minimized. Nothing is sent to the
+    /// page (D.5: no message for minimize or restore).
+    pub(crate) fn ads_window_minimized(self: &Arc<Self>, id: u32, minimized: bool) {
+        for l in self.guests_of_window(id) {
+            self.with_core(|c| {
+                if let Some(g) = c.ads.guests.get_mut(&l) {
+                    g.embedder_minimized = minimized;
+                }
+            });
             self.sync_visibility(&l, false);
         }
     }

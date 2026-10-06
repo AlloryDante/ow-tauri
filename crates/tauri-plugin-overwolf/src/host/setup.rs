@@ -22,7 +22,9 @@ use crate::packages::{PackagesBackend, PackagesSnapshot, logs_folder_path};
 use crate::paths::{BaseDirs, TargetOs, electron_paths, node_arch, user_data_dir};
 use crate::platform::machine::{MachineIds, machine_ids};
 use crate::screen::ElectronDisplay;
-use crate::snapshot::{Flags, HostSnapshot, IdentityInfo, StateHub, SwitchesInfo, Versions};
+use crate::snapshot::{
+    Flags, HostSnapshot, IdentityInfo, IpcLimits, StateHub, SwitchesInfo, Versions,
+};
 use crate::state::StateDir;
 use crate::state::log::{LogLevel, Logger};
 use crate::state::ow_electron::{FileStatus, OwElectronFile};
@@ -48,6 +50,8 @@ pub(crate) struct SetupOptions {
     pub(crate) argv: Option<Vec<String>>,
     /// Query monitors and the cursor (off on a mock runtime, which has none).
     pub(crate) os_queries: bool,
+    /// The embedded `dev-app-update.yml` (I.1 `forceDevUpdateConfig`).
+    pub(crate) dev_app_update: Option<&'static str>,
 }
 
 impl std::fmt::Debug for SetupOptions {
@@ -331,6 +335,11 @@ pub(crate) fn setup<R: Runtime>(
         flags: Flags::default(),
         platform: os.node_platform().to_owned(),
         arch: node_arch().to_owned(),
+        first_launch: !shared.state.first_launch,
+        cursor: super::main_webview::read_cursor(app, options.os_queries),
+        ipc_limits: IpcLimits {
+            max_message_bytes: config.ipc.max_message_bytes,
+        },
     };
     let snapshot_value = serde_json::to_value(&snapshot)?;
 
@@ -359,6 +368,8 @@ pub(crate) fn setup<R: Runtime>(
         ticks: 0,
         ads: super::ads::AdsCore::default(),
         consent: super::consent::ConsentCore::default(),
+        browser_opens: Vec::new(),
+        updater: crate::updater::UpdaterCore::default(),
     };
 
     let label = super::analytics::host_label(&config.analytics);
@@ -393,7 +404,8 @@ pub(crate) fn setup<R: Runtime>(
         !shared.state.first_launch,
     );
 
-    let host = Arc::new(Host {
+    let host = Arc::new_cyclic(|weak| Host {
+        updater_api: crate::updater::Updater(weak.clone()),
         app: app.clone(),
         info: Info {
             app_origin: app_origin(app),

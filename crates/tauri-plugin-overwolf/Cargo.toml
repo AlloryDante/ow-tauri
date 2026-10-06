@@ -58,6 +58,11 @@ md5 = { workspace = true }
 base64 = { workspace = true }
 # WHATWG URL parsing for `shell_open_external` checks (pure, also in tests).
 url = { workspace = true }
+# The update client (CONTRACT I): electron-updater feed YAML, versions and
+# the detached minisign signature. Pure Rust, no default features.
+yaml-rust2 = { version = "0.13.0", default-features = false }
+semver = { workspace = true }
+minisign-verify = "0.3.0"
 
 tauri = { workspace = true, optional = true, features = ["unstable"] }
 tauri-plugin-opener = { workspace = true, optional = true }
@@ -74,7 +79,7 @@ log = { workspace = true, optional = true }
 libc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, features = ["Win32_System_Registry"] }
+windows-sys = { workspace = true, features = ["Win32_System_Registry", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 # Guest webview hooks (mute, request shaping, crash and load-failure
 # reports, D.7, D.8.3): the versions Tauri 2.12's wry uses.
 webview2-com = { version = "0.39.1", optional = true }

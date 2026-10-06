@@ -152,6 +152,11 @@ pub(crate) struct Core {
     pub(crate) ads: ads::AdsCore,
     /// The consent service (D.6).
     pub(crate) consent: consent::ConsentCore,
+    /// URLs a host without OS queries (Tauri's mock runtime) would have
+    /// opened in the system browser; tests read them.
+    pub(crate) browser_opens: Vec<String>,
+    /// The update client (I).
+    pub(crate) updater: crate::updater::UpdaterCore,
 }
 
 impl std::fmt::Debug for Core {
@@ -203,6 +208,8 @@ pub(crate) struct Host<R: Runtime> {
     /// The analytics service (E).
     pub(crate) analytics: analytics::AnalyticsHost,
     pub(crate) options: SetupOptions,
+    /// The `Overwolf::updater` handle (A.5).
+    pub(crate) updater_api: crate::updater::Updater<R>,
     core: Mutex<Core>,
     started: Instant,
     flush_scheduled: AtomicBool,
@@ -440,7 +447,7 @@ impl<R: Runtime> Host<R> {
                 .await;
             host.send_main(HostMessage::lifecycle("quit", None, Some(exit_code)));
             host.flush_on_main_thread().await;
-            crate::updater::install_pending();
+            host.updater_install_at_exit().await;
             host.log(LogLevel::Info, &format!("exiting with code {exit_code}"));
             host.app.exit(exit_code);
         });
@@ -517,9 +524,35 @@ impl<R: Runtime> Host<R> {
         }
     }
 
-    /// The current snapshot (`bootstrap`).
+    /// The current snapshot (`bootstrap`, and the one injected into a new
+    /// `ow-main`), with the cursor read now (A.2.1 `cursor`).
     pub(crate) fn snapshot(&self) -> Value {
-        self.lock().state.snapshot().clone()
+        let mut value = self.lock().state.snapshot().clone();
+        if let (Some(cursor), Value::Object(map)) = (
+            main_webview::read_cursor(&self.app, self.options.os_queries),
+            &mut value,
+        ) && let Ok(cursor) = serde_json::to_value(cursor)
+        {
+            map.insert("cursor".into(), cursor);
+        }
+        value
+    }
+
+    /// Opens `url` in the system browser through `tauri-plugin-opener`. A
+    /// host without OS queries (Tauri's mock runtime) only records it, so
+    /// tests never launch a browser.
+    pub(crate) fn open_in_browser(self: &Arc<Self>, url: &Url) -> Result<(), Error> {
+        if !self.options.os_queries {
+            self.with_core(|c| c.browser_opens.push(url.to_string()));
+            return Ok(());
+        }
+        tauri_plugin_opener::open_url(url.as_str(), None::<&str>).map_err(|err| {
+            self.log(
+                LogLevel::Warn,
+                &format!("opening a URL in the system browser failed: {err}"),
+            );
+            Error::io("The system could not open the URL.")
+        })
     }
 
     /// Reads a text file from the embedded app assets.

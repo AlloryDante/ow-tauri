@@ -5,7 +5,7 @@
 # `BrowserWindow` facade calls (see `capabilities.rs`).
 [[set]]
 identifier = "main"
-description = "Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, the Overwolf API, packages, windows, screen, shell, dialogs, global shortcuts and scoped files."
+description = "Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, the Overwolf API, packages, windows, screen, shell, dialogs, global shortcuts, scoped files and the update client."
 permissions = [
   "allow-ipc-subscribe",
   "allow-bootstrap",
@@ -55,4 +55,8 @@ permissions = [
   "allow-fs-write-text",
   "allow-fs-exists",
   "allow-fs-mkdir",
+  "allow-updater-configure",
+  "allow-updater-check",
+  "allow-updater-download",
+  "allow-updater-quit-and-install",
 ]

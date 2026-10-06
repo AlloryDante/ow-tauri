@@ -152,7 +152,11 @@ impl Builder {
         self
     }
 
-    /// Whether the plugin adds its runtime capabilities (default `true`).
+    /// Whether the plugin adds its runtime capabilities (default `true`):
+    /// `overwolf:main` and the facade's core permissions for `ow-main`, the
+    /// one command of ad guests and consent windows, and window dragging
+    /// (`core:window:allow-start-dragging`, `allow-toggle-maximize`) for the
+    /// app-region emulation in `bw-*` webviews.
     /// Apps that grant `overwolf:main` to `ow-main` in their own
     /// capability files, and test harnesses with an empty ACL, turn it off.
     ///
@@ -188,6 +192,21 @@ impl Builder {
     /// ```
     pub fn argv(mut self, argv: Vec<String>) -> Self {
         self.options.argv = Some(argv);
+        self
+    }
+
+    /// The embedded `dev-app-update.yml`, read when the app sets
+    /// `autoUpdater.forceDevUpdateConfig` in a debug build (CONTRACT I.1).
+    /// Pass [`embedded_dev_app_update!`](crate::embedded_dev_app_update);
+    /// an empty text means there is none.
+    ///
+    /// ```rust
+    /// let builder = tauri_plugin_overwolf::Builder::new()
+    ///     .dev_app_update_yml("provider: generic\nurl: http://localhost:8080/\n");
+    /// # let _ = builder;
+    /// ```
+    pub fn dev_app_update_yml(mut self, yaml: &'static str) -> Self {
+        self.options.dev_app_update = Some(yaml);
         self
     }
 
@@ -247,6 +266,7 @@ fn setup<R: Runtime>(
         app.add_capability(capability)?;
         app.add_capability(crate::capabilities::adview_guest_capability()?)?;
         app.add_capability(crate::capabilities::cmp_capability()?)?;
+        app.add_capability(crate::capabilities::ui_chrome_capability()?)?;
     }
     if host.options.companion_plugins {
         register_companions(app);

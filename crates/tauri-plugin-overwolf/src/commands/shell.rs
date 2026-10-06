@@ -16,13 +16,12 @@ use crate::shell::{
 #[tauri::command]
 pub(crate) async fn shell_open_external<R: Runtime>(
     webview: Webview<R>,
-    _state: State<'_, Overwolf<R>>,
+    state: State<'_, Overwolf<R>>,
     url: String,
 ) -> Result<()> {
     require_main(&webview)?;
     let url = validate_external_url(&url)?;
-    tauri_plugin_opener::open_url(url.as_str(), None::<&str>)
-        .map_err(|_| Error::io("The system could not open the URL."))
+    host(&state).open_in_browser(&url)
 }
 
 /// The A.2.3.2 checks. Returns the path to open or the Electron-style error

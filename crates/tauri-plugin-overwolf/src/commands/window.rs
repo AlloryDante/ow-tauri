@@ -216,3 +216,17 @@ pub(crate) async fn eval_result<R: Runtime>(
     let args: EvalResultArgs = body(&request, "eval_result")?;
     host.eval_result(window, args.id, args.ok, args.value, args.error)
 }
+
+/// `navigation_external` (A.2.5, A.2.3.1): macOS and Linux only report the
+/// top-level navigations the renderer bootstrap cancelled; the plugin opens
+/// them in the system browser and tells `ow-main` (`will-navigate`).
+#[tauri::command]
+pub(crate) async fn navigation_external<R: Runtime>(
+    webview: Webview<R>,
+    state: State<'_, Overwolf<R>>,
+    url: String,
+) -> Result<()> {
+    let host = host(&state);
+    let window = require_ui(&webview, host)?;
+    host.navigation_external(window, &url)
+}

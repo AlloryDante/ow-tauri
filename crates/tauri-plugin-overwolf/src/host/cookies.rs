@@ -193,11 +193,8 @@ pub(crate) fn from_set_cookie(header: &str, url: &Url) -> Option<Cookie<'static>
     Some(cookie)
 }
 
-/// Now, in Unix seconds.
-#[cfg_attr(
-    not(any(target_os = "macos", test)),
-    expect(dead_code, reason = "only macOS matches cookies itself")
-)]
+/// Now, in Unix seconds (only macOS matches cookies itself).
+#[cfg(target_os = "macos")]
 fn now_secs() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

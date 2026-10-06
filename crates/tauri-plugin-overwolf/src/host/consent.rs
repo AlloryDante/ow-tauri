@@ -244,12 +244,8 @@ impl<R: Runtime> Host<R> {
             .on_new_window(move |url, _| {
                 if let Some(host) = weak.upgrade()
                     && url.scheme() == "https"
-                    && let Err(err) = tauri_plugin_opener::open_url(url.as_str(), None::<&str>)
                 {
-                    host.log(
-                        LogLevel::Warn,
-                        &format!("opening a consent page link failed: {err}"),
-                    );
+                    let _ = host.open_in_browser(&url);
                 }
                 NewWindowResponse::Deny
             });
