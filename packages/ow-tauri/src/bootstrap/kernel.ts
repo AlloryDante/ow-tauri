@@ -27,7 +27,7 @@ import {
   type WindowMessage,
 } from '../shared/protocol.js';
 import { fromWireError } from '../shared/wire-error.js';
-import type { FacadeKernel, HostMessageHandler } from './facade-kernel.js';
+import { MAIN_READY_HOLD_MS, type FacadeKernel, type HostMessageHandler } from './facade-kernel.js';
 import { IpcServer, remoteError } from './ipc-main.js';
 import { IpcClient, IpcRenderer } from './ipc-renderer.js';
 import type { LogLevel } from './services.js';
@@ -115,6 +115,9 @@ export class Kernel implements FacadeKernel {
   readonly #resetHooks = new Set<() => void>();
   readonly #warned = new Set<string>();
   readonly #evalBegun = new Set<number>();
+  #holds: Promise<unknown>[] = [];
+  #mainReadySent = false;
+  #browserArgs: readonly string[] | undefined;
 
   /**
    * @param options - transport and test hooks
@@ -301,6 +304,29 @@ export class Kernel implements FacadeKernel {
     return subscription;
   }
 
+  /** {@inheritDoc FacadeKernel.deferMainReady} */
+  deferMainReady(task: Promise<unknown>): void {
+    if (this.#mainReadySent) return;
+    this.#holds.push(
+      task.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+  }
+
+  /** {@inheritDoc FacadeKernel.recordBrowserArgs} */
+  recordBrowserArgs(args: readonly string[]): void {
+    const list = Object.freeze(args.filter((a): a is string => typeof a === 'string'));
+    this.#browserArgs = list;
+    if (this.context !== 'main' || !this.#transport.available()) return;
+    this.deferMainReady(
+      this.command('app_record_browser_args', { args: [...list] }).catch((error: unknown) => {
+        this.log('debug', `app_record_browser_args failed: ${(error as Error).message}`);
+      }),
+    );
+  }
+
   /**
    * Resolves once the main webview's `ipc_main_ready` and `main_ready` were
    * acknowledged (`whenHostReady()` of `ow-tauri/main`).
@@ -382,6 +408,9 @@ export class Kernel implements FacadeKernel {
     this.#isReady = false;
     this.#ready = deferred();
     this.#evalBegun.clear();
+    this.#holds = [];
+    this.#mainReadySent = false;
+    this.#browserArgs = undefined;
     this.#warned.clear();
     this.#detected = null;
     for (const hook of [...this.#resetHooks]) safeCall(hook);
@@ -534,8 +563,17 @@ export class Kernel implements FacadeKernel {
     // Each step is sent even when the other failed: analytics and packages
     // wait for main_ready, IPC for ipc_main_ready.
     for (const command of ['ipc_main_ready', 'main_ready']) {
+      if (command === 'main_ready') {
+        await this.#awaitHolds();
+        if (generation !== this.#generation) return;
+        this.#mainReadySent = true;
+      }
+      const args =
+        command === 'main_ready' && this.#browserArgs !== undefined
+          ? { pendingBrowserArgs: [...this.#browserArgs] }
+          : undefined;
       try {
-        await this.command(command);
+        await this.command(command, args);
       } catch (error) {
         this.log('error', `${command} was not acknowledged: ${(error as Error).message}`);
       }
@@ -544,6 +582,29 @@ export class Kernel implements FacadeKernel {
     if (generation !== this.#generation) return;
     this.#isReady = true;
     this.#ready.resolve();
+  }
+
+  /** Waits for the `deferMainReady` tasks, including ones added meanwhile, for at most {@link MAIN_READY_HOLD_MS}. */
+  async #awaitHolds(): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const limit = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => {
+        resolve('timeout');
+      }, MAIN_READY_HOLD_MS);
+    });
+    try {
+      while (this.#holds.length > 0) {
+        const batch = this.#holds;
+        this.#holds = [];
+        if ((await Promise.race([Promise.all(batch), limit])) === 'timeout') {
+          this.log('warn', 'main_ready was held for too long by startup calls; sending it now');
+          this.#holds = [];
+          return;
+        }
+      }
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   #runEval(id: number, fn: () => unknown, wantValue: boolean): void {

@@ -150,7 +150,7 @@ function isUnsafeKey(key: string): boolean {
 
 function structuredCloneSafe(value: Record<string, unknown>): Record<string, unknown> {
   try {
-    return structuredClone(value) as Record<string, unknown>;
+    return structuredClone<Record<string, unknown>>(value);
   } catch {
     return { ...value };
   }

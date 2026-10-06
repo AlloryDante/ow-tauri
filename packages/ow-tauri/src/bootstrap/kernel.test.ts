@@ -529,7 +529,7 @@ describe('process shim (B.2.5)', () => {
     expect(archFromUserAgent('x86_64')).toBe('x64');
   });
 
-  it('is frozen, has no electron version, and exposes OVERWOLF_APP_UID after main_ready', async () => {
+  it('is frozen, has no electron version, and exposes OVERWOLF_APP_UID from the start', async () => {
     vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(
       'Mozilla/5.0 (Windows NT 10.0) Chrome/130.0.0.0 Edg/130.0.0.0',
     );
@@ -540,9 +540,12 @@ describe('process shim (B.2.5)', () => {
     expect(shim.arch).toBe('x64');
     expect(shim.argv).toEqual(['test-app']);
     expect(shim.versions).toEqual({ owTauri: '0.1.0', tauri: '2.12.1', chrome: '130.0.0.0' });
-    expect(shim.env['OVERWOLF_APP_UID']).toBeUndefined();
+    expect(shim.env['OVERWOLF_APP_UID']).toBe('testuid');
     await kernel.whenHostReady();
     expect(shim.env['OVERWOLF_APP_UID']).toBe('testuid');
+    setHostContext('ui');
+    expect(shim.env['OVERWOLF_APP_UID']).toBeUndefined();
+    setHostContext(null);
   });
 
   it("has Electron's type, a microtask nextTick and an assignable env", async () => {

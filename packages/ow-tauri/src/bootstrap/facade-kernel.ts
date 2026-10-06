@@ -27,6 +27,9 @@ import { RUNTIME_API_VERSION } from '../shared/protocol.js';
 
 export { RUNTIME_API_VERSION };
 
+/** Longest time `main_ready` waits for tasks passed to `FacadeKernel.deferMainReady`. */
+export const MAIN_READY_HOLD_MS = 2000;
+
 /** Called for each host message of one `type`. */
 export type HostMessageHandler = (message: HostMessage) => void;
 
@@ -46,6 +49,14 @@ export interface FacadeStateCache {
    * @returns a function that unsubscribes
    */
   onChange(listener: StateListener): () => void;
+  /**
+   * Writes a value at a dotted path: the synchronous writes of B.1.6 item 5.
+   * Optional (added without a facade API change); facades check for it.
+   *
+   * @param path - the path, e.g. `flags.adsFpdDisabled`
+   * @param value - the new value
+   */
+  set?(path: string, value: unknown): void;
 }
 
 /** App-visible window ids and their plugin ids (see `WindowIdMap`). */
@@ -184,6 +195,25 @@ export interface FacadeKernel extends KernelServices {
    * @returns the readiness promise
    */
   whenHostReady(): Promise<void>;
+  /**
+   * Holds `main_ready` until `task` settles (at most {@link MAIN_READY_HOLD_MS}
+   * in total), so startup calls such as `disableAnonymousAnalytics()` reach
+   * the plugin before the launch sequence starts (CONTRACT A.2.2, E.3).
+   * Ignored once `main_ready` was sent. Optional: added in the same facade
+   * API version; facades check for it before use.
+   *
+   * @param task - a command the plugin must see before `main_ready`
+   */
+  deferMainReady?(task: Promise<unknown>): void;
+  /**
+   * Records the browser switches for the next launch (CONTRACT A.1.1):
+   * sends `app_record_browser_args { args }` with the session's full set and
+   * repeats the set as `main_ready { pendingBrowserArgs }`. Optional, like
+   * {@link FacadeKernel.deferMainReady}.
+   *
+   * @param args - every switch recorded so far, e.g. `['--disable-gpu']`
+   */
+  recordBrowserArgs?(args: readonly string[]): void;
   /**
    * Starts the runtime (subscribes the host channel); idempotent.
    *

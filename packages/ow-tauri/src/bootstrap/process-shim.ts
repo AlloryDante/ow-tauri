@@ -21,7 +21,8 @@ export interface ProcessShim {
   /** The app's process arguments. */
   readonly argv: readonly string[];
   /**
-   * `OVERWOLF_APP_UID` (read-only, defined once the main webview is ready);
+   * `OVERWOLF_APP_UID` (read-only, the app uid in the main webview from the
+   * first script on, as ow-electron sets it before the main module loads);
    * other keys may be assigned, as in Node.
    */
   readonly env: Record<string, string | undefined>;
@@ -83,7 +84,8 @@ export function createProcessShim(kernel: FacadeKernel): ProcessShim {
   if (platform === 'win32' && chrome !== undefined) versions['chrome'] = chrome;
   const argv = kernel.state.get('switches.argv');
   const env = Object.defineProperty({}, 'OVERWOLF_APP_UID', {
-    get: () => (kernel.isReady ? stringAt(kernel, 'identity.uid') : undefined),
+    // ow-electron sets it before the main module loads [OBS] (CONTRACT B.1.1).
+    get: () => (kernel.context === 'main' ? stringAt(kernel, 'identity.uid') : undefined),
     enumerable: true,
   }) as Record<string, string | undefined>;
   return Object.freeze({
