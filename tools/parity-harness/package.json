@@ -1,0 +1,22 @@
+{
+  "name": "ow-tauri-parity-harness",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Black-box observation harness for @overwolf/ow-electron: records ads, consent, analytics and identity behaviour so ow-tauri can match it.",
+  "license": "MIT",
+  "author": "ow-tauri contributors",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "run": "node run.mjs",
+    "uid-matrix": "node uid-matrix.mjs",
+    "muid-probe": "node muid-probe.mjs",
+    "parse-netlog": "node lib/netlog-parse.mjs"
+  },
+  "dependencies": {
+    "@overwolf/ow-cli": "0.1.10",
+    "@overwolf/ow-electron": "42.11.4"
+  }
+}
