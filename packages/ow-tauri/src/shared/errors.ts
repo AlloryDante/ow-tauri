@@ -115,16 +115,35 @@ export class OwTauriError extends Error {
   readonly code: OwTauriErrorCode;
 
   /**
+   * Code-specific details, for example `{ channel }`, `{ reason }`, `{ raw }`
+   * (the original text of a rejection Tauri produced before the command ran)
+   * or `{ name, message }` (a remote handler's error). `undefined` when there
+   * are none.
+   */
+  readonly data: unknown;
+
+  /**
    * @param code - the machine-readable reason
    * @param message - a human-readable description
-   * @param options - standard `ErrorOptions`, e.g. `{ cause }`
+   * @param options - standard `ErrorOptions` (e.g. `{ cause }`) plus optional `data`
    */
-  constructor(code: OwTauriErrorCode, message: string, options?: ErrorOptions) {
-    super(message, options);
+  constructor(code: OwTauriErrorCode, message: string, options?: OwTauriErrorOptions) {
+    super(message, options?.cause === undefined ? undefined : { cause: options.cause });
     this.name = 'OwTauriError';
     this.code = code;
+    this.data = options?.data;
     Object.defineProperty(this, BRANDS, { value: brandsOf(new.target), enumerable: false });
   }
+}
+
+/**
+ * Options accepted by the {@link OwTauriError} constructor.
+ */
+export interface OwTauriErrorOptions {
+  /** The underlying error, as in the standard `ErrorOptions`. */
+  cause?: unknown;
+  /** Code-specific details; becomes {@link OwTauriError.data}. */
+  data?: unknown;
 }
 
 /**
@@ -155,9 +174,10 @@ export class OwTauriUnsupportedError extends OwTauriError {
   /**
    * @param api - the member that was called, in `Class#method` or `module.member` form
    * @param reason - why it is unsupported, and the alternative if there is one
+   * @param options - optional `cause` and `data`
    */
-  constructor(api: string, reason: string) {
-    super('unsupported', `ow-tauri does not support ${api}: ${reason}`);
+  constructor(api: string, reason: string, options?: OwTauriErrorOptions) {
+    super('unsupported', `ow-tauri does not support ${api}: ${reason}`, options);
     this.name = 'OwTauriUnsupportedError';
     this.api = api;
   }
