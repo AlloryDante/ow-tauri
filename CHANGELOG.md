@@ -56,6 +56,27 @@ the npm package share one version number.
   `render-process-gone`, navigation and console events on the element
   (B.3.5); `__settings__.adsOptimization` (B.1.1); OQ-38.
 - `docs/PARITY.md`: round-2 results, round-3 list, a deviations table.
+- Plugin host runtime: configuration, embedded manifest and uid, the state
+  files, the hidden main webview with its liveness measures, soft restart,
+  crash relaunch and quit sequence, windows behind the `BrowserWindow`
+  facade with the navigation policy, the IPC router with per-webview
+  channels and reorder buffers, screen, shell, dialogs, global shortcuts and
+  scoped files (CONTRACT A.1 to A.6).
+- JS runtime: the injected bootstrap with the `FacadeKernel` interface, the
+  OTJ codec, the IPC client and server, the state cache and the `process`
+  shim; `ow-tauri/electron` (`app`, `BrowserWindow`, `webContents`,
+  `ipcMain`, `ipcRenderer`, `contextBridge`, `screen`, `shell`, `dialog`,
+  `globalShortcut`, `nativeTheme`), `ow-tauri/renderer` and `ow-tauri/testing`
+  (CONTRACT B, C).
+- CONTRACT: commands `ipc_emit_skip`, `app_record_browser_args` and
+  `navigation_external`; `main_ready { pendingBrowserArgs }`; `HostSnapshot`
+  fields `platform`, `arch`, `cursor`, `ipcLimits` and `paths.appPath`;
+  window events `will-navigate` and `new-window` and the `data` of every
+  window event; `lifecycle` messages `second-instance` and `activate`;
+  `RuntimeGlobal.api` and the `FacadeKernel` rule (ADR 0012); the build
+  variables `OW_TAURI_ALLOW_MISSING_JS` and `OW_TAURI_REQUIRE_JS`;
+  `Overwolf::report_main_webview_crash`, the `test-util` feature;
+  `mainCrashes` in `ow-tauri.json`.
 
 ### Changed
 
@@ -93,6 +114,25 @@ the npm package share one version number.
   rejections are asynchronous (H.1); `app_cuid` stays the computed uid when
   `overwolf.uid` is set (G.2); the 3 s ad wait is measured from the mount
   (D.6.5). The test-mode `unit` guard is now a documented deviation.
+- Contract reconciled with the first implementation: every rejected IPC call
+  reports its sequence number, in both directions (C.3, C.5); the main
+  runtime checks reply sizes and Electron's exact error text travels as
+  `data.text` (C.2, C.8); navigation policy split by platform, because only
+  WebView2 reports top-level navigations alone (A.2.3.1); relaunches start
+  at `RunEvent::Exit` and crash signals are listed per platform (A.6,
+  ADR 0009); `Builder::build` returns `TauriPlugin<R, Option<Config>>`;
+  companion plugins are registered from a task posted by the setup hook;
+  `packages` and `updater` messages carry their kind as `event`; the
+  `process` shim's `env` is writable and it gains `type` and `nextTick`;
+  `nativeTheme` follows `prefers-color-scheme`; `useContentSize`,
+  `blur()`, `setMovable()` and `app.focus({ steal })` are partial; uids
+  from configuration or the manifest are 1 to 64 ASCII letters or digits;
+  `ow-tauri.json` is parsed field by field and a corrupt file is set aside;
+  the `shell.openPath` denylist is longer and covers macOS bundles.
+- SECURITY.md: all three consent windows, the platform split for
+  navigation, and the machine-id muid. CONTRIBUTING.md: the live-ad lab rules
+  of ADR 0005, the injected-script build rule, and generated reference docs
+  stay out of git.
 
 ### Removed
 

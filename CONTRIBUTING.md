@@ -23,9 +23,14 @@ pull request.
    Game fixtures and scenarios use well-known public game ids that are already
    in Overwolf's public game-events status data (for example 5426); adding
    another title needs a reviewer's agreement.
-5. **Test ads only.** Never commit a configuration that loads live ads, and never
-   click ad creatives in automated tests. Headless tests only; no test opens an
-   app window.
+5. **Ads in tests and labs** ([ADR 0005](docs/adr/0005-ads-test-live-parity.md)).
+   Test ads (`--test-ad`) are the default for every test and lab run, and no
+   committed configuration, script or fixture enables live ads. A lab run that
+   must show live fill may load live ads, at most 10 loads per run, each one
+   logged. Never click an ad or send input to an ad guest, and never show a
+   window: windows stay hidden (or at alpha 0 inside the screen bounds when an
+   ad must fill), with the dock icon hidden on macOS. Automated tests are
+   headless.
 
 ## Setup
 
@@ -61,10 +66,14 @@ npm run docs
 CI also runs cargo-deny, `npm audit`, a check that every `@overwolf/*`
 package is on its `latest` dist-tag (`node scripts/check-overwolf-dist-tags.mjs`),
 an MSRV build, and, weekly, the newest stable Rust with the newest tauri 2.x
-and a main-webview liveness soak. Once the injected scripts exist, CI also
-rebuilds `crates/tauri-plugin-overwolf/js/` and fails if the committed output
-differs: run `npm run build:injected` and commit the result whenever you
-change `packages/ow-tauri/src/{bootstrap,guest}`.
+and a main-webview liveness soak. CI also rebuilds
+`crates/tauri-plugin-overwolf/js/` and fails if the committed output differs:
+run `npm run build:injected --workspace ow-tauri` and commit the result
+whenever you change `packages/ow-tauri/src/{bootstrap,guest}`. A release
+build of the crate fails while a script is missing; a debug build embeds a
+placeholder and prints a warning. A job that builds the crate in release mode
+without running the app sets `OW_TAURI_ALLOW_MISSING_JS=1`
+([CONTRACT A.1](docs/CONTRACT.md#a1-configuration)).
 
 Keep heavy jobs serial on small machines: `-j 4` for cargo, two Vitest workers
 (set in `vitest.config.ts`).
@@ -79,7 +88,9 @@ Keep heavy jobs serial on small machines: `-j 4` for cargo, two Vitest workers
 - No `unwrap()`, `expect()` or `panic!` outside tests. Every `unsafe` block has
   a `// SAFETY:` comment.
 - Unit tests sit next to the code; IPC and permission tests use Tauri's mock
-  runtime (`tauri::test`). The permission matrix covers every command against
+  runtime (`tauri::test`). The mock runtime fires no window, navigation,
+  page-load or exit-request events; the crate's `test-util` feature exposes
+  hidden `Overwolf::test_*` hooks that drive those handlers. The permission matrix covers every command against
   every webview class, including a child webview inside a `bw-*` window and a
   remote page in a `bw-*` window; the router tests include property tests for
   ordering (CONTRACT C.3).
@@ -145,8 +156,11 @@ final review before a release checks the list.
 | `docs/OPEN-QUESTIONS.md` | questions for Overwolf with interim behaviour | present |
 | `docs/PORT-MAP.md` | the sample's port, file by file | present |
 | `docs/MIGRATION.md` | step-by-step guide: pre-flight audit (Node built-ins and Electron-only libraries, each with its replacement), bundler recipes (webpack, Vite, esbuild), typings (`tsconfig` paths), network (`fetch` and CORS, scoped HTTP), sync-to-async checklist, capability and CSP templates, debugging `ow-main`, what changes for users; full Electron to ow-tauri mapping tables | **to write** |
-| `docs/PACKAGE-RUNTIME.md` | guide for package runtime authors: trait, sidecar, C ABI, remote values, conformance tests | **to write** |
-| `docs/api/` | reference per area (main, electron, renderer, plugin Rust API), generated from TypeDoc and rustdoc plus hand-written overviews | **to write** |
+| `docs/api/` | reference per area (main, electron, renderer, plugin Rust API): hand-written overviews that link to the generated references. TypeDoc writes to `packages/ow-tauri/docs-out/` (`npm run docs`) and rustdoc to `target/doc/`; both are generated, git-ignored and never committed | **to write** |
 | `examples/packages-sample/CHANGES-FROM-UPSTREAM.md` | every change against upstream `8a27053` | **to write** (with the port) |
 | `examples/packages-sample/.env.example` | dev-mode variable names, no values | **to write** (with the port) |
 | `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE` | | present |
+
+The package runtime interface for Overwolf has no separate guide while
+packages are out of scope: its design is
+[CONTRACT Appendix P](docs/CONTRACT.md#appendix-p-deferred-design-package-runtime-interface).

@@ -33,10 +33,10 @@ built on ow-tauri must do itself.
 | Actor | Runs in | Can | Cannot |
 |---|---|---|---|
 | App code (main-process code) | `ow-main` | everything `overwolf:main` grants | anything outside the plugin's commands; no Node, no shell |
-| App UI and any script injected into it (XSS, a compromised dependency) | a `bw-*` webview | call **every** `ipcMain` handler on every channel, with any arguments (`ipc_invoke` is reachable from any script in the page, whatever the preload exposes); mount ads | call `overwolf:main` commands; observe other webviews' traffic; navigate the webview away from the app origin |
-| A remote page shown in a `BrowserWindow` | a `bwr-*` webview | nothing on the host | any IPC |
+| App UI and any script injected into it (XSS, a compromised dependency) | a `bw-*` webview | call **every** `ipcMain` handler on every channel, with any arguments (`ipc_invoke` is reachable from any script in the page, whatever the preload exposes); mount ads | call `overwolf:main` commands; observe other webviews' traffic; run app code or reach IPC from a remote document (on Windows top-level navigations away from the app origin are cancelled; on macOS and Linux a script can still load a remote page into the window, which then has no IPC) |
+| A remote page shown in a `BrowserWindow` | a `bwr-*` webview (or, on macOS and Linux, a `bw-*` webview a script navigated away; embedded frames anywhere) | nothing on the host; open new windows only through the app's `setWindowOpenHandler` | any IPC or command |
 | Overwolf's ad page **and every third-party ad script in it** | an `owad-*` webview | call `adview_event` with any name and data, at the per-guest rate limits; open a few `http(s)` URLs per minute in the system browser after a reported gesture | reach the IPC router, other slots, other webviews, files or OS APIs; open other schemes; exceed the limits |
-| The consent page | `ow-cmp` | save a validated consent string, toggle ad optimisation, close itself | anything else |
+| Overwolf's consent pages | `ow-cmp-startup` (hidden, every launch), `ow-cmp-default` (hidden, first settings-window call), `ow-cmp` (the settings window) | call `cmp_event`: save a validated consent string, toggle ad optimisation, close the window | anything else; calls from a page outside Overwolf's consent path are refused |
 | A network attacker | between the app and Overwolf's or the developer's servers | nothing beyond TLS failures | tamper with updates undetected (hash plus publisher signature, failing closed) |
 
 ### Mitigations
@@ -46,9 +46,13 @@ built on ow-tauri must do itself.
   class check in every command.
 - **Per-webview IPC channels.** Rust never uses Tauri events, so no webview
   can listen to another's messages.
-- **No app scripts in remote documents.** Initialization scripts are guarded by
-  origin, app webviews cannot navigate away from the app origin, and a window
-  that loads a remote URL gets a fresh webview without scripts.
+- **No app scripts in remote documents.** Initialization scripts are guarded
+  by origin, the UI capability is local-only, and a window that loads a
+  remote URL gets a fresh webview without scripts. Top-level navigations away
+  from the app origin are cancelled and opened in the system browser (on
+  macOS and Linux for link clicks and form submissions, which the runtime
+  intercepts, because those engines report frame and top-level navigations
+  alike).
 - **Guest limits.** One scoped command per guest, validated names and sizes,
   token-bucket rate limits, one external open per gesture and a per-minute
   cap (ADR 0011).
@@ -63,9 +67,14 @@ built on ow-tauri must do itself.
   queued channel payloads and large invoke responses could be fetched by
   other webviews. ow-tauri moves all host traffic over channels and places
   remote webviews next to app webviews, so it requires the fix.
-- **Privacy defaults.** Extra analytics fields are off by default, the machine
-  id strategy defaults to a per-install id, and ow-tauri never scans user data
-  for email addresses.
+- **Privacy.** ow-tauri sends the analytics ow-electron sends and nothing
+  more (no extra host fields). The muid is derived from the machine id
+  exactly as ow-electron derives it, so it is stable per machine and shared
+  with the ow-electron build of the same app; it is hashed and never logged,
+  and `analytics.muidStrategy: "per-install"` is a non-parity option for apps
+  that want a random per-install id. Logging is off by default, email
+  addresses are hashed in memory and never stored, and ow-tauri never scans
+  user data for email addresses.
 
 ### What the app must do
 
