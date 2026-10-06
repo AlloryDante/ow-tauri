@@ -297,6 +297,61 @@ describe('discovery and attach (B.3.1)', () => {
     expect(el.getAttribute('pageurl')).toBe('');
   });
 
+  it('defines the attribute-backed own properties in ow-electron order [OBS]', async () => {
+    await startRuntime();
+    const el = createAd({ adstyle: 'high-impact-ad;', unit: 'u1' });
+    (el as unknown as Record<string, unknown>)['slotsize'] = '400x600';
+    (el as unknown as Record<string, unknown>)['performance'] = null;
+    document.body.append(el);
+    await tick();
+    const own = Object.keys(el).filter((key) => !['box', 'shown'].includes(key));
+    expect(own.filter((key) => !key.startsWith('getBoundingClientRect'))).toEqual(
+      expect.arrayContaining(['cid', 'slotsize', 'pageUrl', 'performance', 'unit', 'adstyle']),
+    );
+    const order = [
+      'cid',
+      'slotsize',
+      'pageUrl',
+      'performance',
+      'unit',
+      'adstyle',
+      'customTracking',
+    ];
+    expect(Object.keys(el).filter((key) => order.includes(key))).toEqual(order);
+    const view = el as unknown as Record<string, unknown>;
+    expect(callsOf('adview_mount')[0]).toMatchObject({ attributes: { slotsize: '400x600' } });
+    expect(view['cid']).toBe('main');
+    expect(view['slotsize']).toBe('400x600');
+    expect(view['unit']).toBe('u1');
+    expect(view['adstyle']).toBe('high-impact-ad;');
+    expect(view['performance']).toBe(false);
+    view['performance'] = 1;
+    expect(el.getAttribute('performance')).toBe('');
+    expect(view['performance']).toBe(true);
+    view['performance'] = false;
+    expect(el.hasAttribute('performance')).toBe(false);
+    view['unit'] = null;
+    expect(el.hasAttribute('unit')).toBe(false);
+    expect(view['unit']).toBe('');
+    view['cid'] = 7;
+    expect(el.getAttribute('cid')).toBe('7');
+  });
+
+  it('adopts the default style again when the page replaces adoptedStyleSheets', async () => {
+    await startRuntime();
+    const sheets = [...document.adoptedStyleSheets];
+    expect(sheets).toHaveLength(1);
+    document.adoptedStyleSheets = [];
+    const el = createAd({}, { width: 0, height: 0 });
+    document.body.append(el);
+    await tick();
+    expect(document.adoptedStyleSheets).toEqual(sheets);
+    expect(services.warnings.join('\n')).toContain('owadview:style');
+    // Adopted: an empty box does not adopt it twice.
+    runtime.flush();
+    expect(document.adoptedStyleSheets).toHaveLength(1);
+  });
+
   it('keeps values set on the plain element by moving them into attributes', async () => {
     await startRuntime();
     const el = createAd();
@@ -433,6 +488,137 @@ describe('lifecycle (B.3.2, B.3.4)', () => {
         rect: { x: 50, y: 20, width: 300, height: 250, devicePixelRatio: 1 },
       },
     ]);
+  });
+
+  it('never sends an update made for one mount to another (remount race)', async () => {
+    let release!: () => void;
+    let first = true;
+    services.impls['adview_mount'] = () => {
+      if (!first) return null;
+      first = false;
+      return new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    };
+    await startRuntime();
+    const el = createAd();
+    document.body.append(el);
+    await tick();
+    const firstId = runtime.elementId(el);
+    el.box.x = 50;
+    runtime.flush(); // update A, for mount 1
+    el.setAttribute('cid', 'other');
+    await tick(); // unmount + mount 2 at x = 50
+    const secondId = runtime.elementId(el);
+    expect(secondId).not.toBe(firstId);
+    el.box.x = 99;
+    runtime.flush(); // update B, for mount 2
+    release();
+    await tick();
+    expect(
+      services.calls.map((c) => [
+        c.name,
+        c.args['elementId'],
+        (c.args['rect'] as Box | undefined)?.x,
+      ]),
+    ).toEqual([
+      ['adview_mount', firstId, 10],
+      ['adview_unmount', firstId, undefined],
+      ['adview_mount', secondId, 50],
+      ['adview_update', secondId, 99],
+    ]);
+  });
+
+  it('drops late events of a replaced guest', async () => {
+    await startRuntime();
+    const el = createAd();
+    document.body.append(el);
+    await tick();
+    const oldId = runtime.elementId(el);
+    el.setAttribute('cid', 'other');
+    await tick();
+    const listener = vi.fn();
+    el.addEventListener('display_ad_loaded', listener);
+    services.emit({ elementId: oldId, name: 'display_ad_loaded', source: 'guest' });
+    expect(listener).not.toHaveBeenCalled();
+    services.emit({ elementId: runtime.elementId(el), name: 'display_ad_loaded', source: 'guest' });
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes an element whose mount fails after an update attribute changed meanwhile', async () => {
+    let reject!: (error: Error) => void;
+    services.impls['adview_mount'] = () =>
+      new Promise<void>((_resolve, fail) => {
+        reject = fail;
+      });
+    await startRuntime();
+    const el = createAd();
+    document.body.append(el);
+    await tick();
+    el.setAttribute('customtracking', '{"a":1}');
+    await tick();
+    vi.useFakeTimers();
+    try {
+      reject(new Error('no guest'));
+      await vi.advanceTimersByTimeAsync(0);
+      el.box.x = 70;
+      await vi.advanceTimersByTimeAsync(VISIBILITY_POLL_MS * 3);
+      runtime.flush();
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(names()).toEqual(['adview_mount']);
+    el.setAttribute('cid', 'retry');
+    await tick();
+    expect(names()).toEqual(['adview_mount', 'adview_mount']);
+  });
+
+  it('runs a geometry pass when content elsewhere moves a mounted element', async () => {
+    const frames: (() => void)[] = [];
+    await startRuntime({
+      frame: (callback) => {
+        frames.push(callback);
+      },
+    });
+    const el = createAd();
+    document.body.append(el);
+    await tick();
+    for (const frame of frames.splice(0)) frame();
+    runtime.flush();
+    await tick();
+    services.calls.length = 0;
+    frames.length = 0;
+    // A sibling above grows: no resize of the element, no scroll.
+    const banner = document.createElement('div');
+    document.body.prepend(banner);
+    el.box.y = 120;
+    await tick();
+    expect(frames.length).toBeGreaterThan(0);
+    for (const frame of frames.splice(0)) frame();
+    await tick();
+    expect(callsOf('adview_update')).toEqual([
+      {
+        elementId: runtime.elementId(el),
+        rect: { x: 10, y: 120, width: 300, height: 250, devicePixelRatio: 1 },
+      },
+    ]);
+    services.calls.length = 0;
+    banner.className = 'tall';
+    el.box.y = 200;
+    await tick();
+    for (const frame of frames.splice(0)) frame();
+    await tick();
+    expect(callsOf('adview_update')).toHaveLength(1);
+    // Nothing mounted: the layout observer is off.
+    el.remove();
+    await tick();
+    for (const frame of frames.splice(0)) frame();
+    await tick();
+    frames.length = 0;
+    banner.className = 'short';
+    await tick();
+    expect(frames).toHaveLength(0);
   });
 
   it('unmounts when the element or an ancestor leaves the document', async () => {
@@ -702,7 +888,7 @@ describe('events (B.3.5)', () => {
     services.emit({ elementId: 'e999', name: 'impression' });
     expect(listener).not.toHaveBeenCalled();
     expect(services.logs.join('\n')).toContain(
-      "adview-event 'impression' for unknown element e999",
+      "adview-event 'impression' for unknown or replaced element e999",
     );
   });
 
@@ -787,26 +973,34 @@ describe('stop and the runtime singleton', () => {
     expect(env.now()).toBeGreaterThan(0);
   });
 
-  it('adviewRuntimeOf() keeps one runtime per kernel and stops it on reset', async () => {
-    const hooks: (() => void)[] = [];
-    const singletons = new Map<string, unknown>();
+  it('adviewRuntimeOf() registers one runtime per kernel and stops it on reset', async () => {
+    const hooks = new Set<() => void>();
     const kernel: AdviewKernel = {
       ...fakeServices(),
-      singleton: <T>(key: string, factory: () => T): T => {
-        if (!singletons.has(key)) singletons.set(key, factory());
-        return singletons.get(key) as T;
-      },
       onReset: (hook) => {
-        hooks.push(hook);
-        return () => undefined;
+        hooks.add(hook);
+        return () => hooks.delete(hook);
       },
     };
-    runtime = adviewRuntimeOf(kernel);
+    runtime = adviewRuntimeOf(kernel) as AdviewRuntime;
+    expect(kernel.owadview).toBe(runtime);
     expect(adviewRuntimeOf(kernel)).toBe(runtime);
     expect(runtime.started).toBe(true);
-    for (const hook of hooks) hook();
+    for (const hook of [...hooks]) hook();
+    expect(hooks.size).toBe(0);
     expect(runtime.started).toBe(false);
+    expect(kernel.owadview).toBeUndefined();
     await tick();
+  });
+
+  it('adviewRuntimeOf() uses the runtime another copy registered', () => {
+    const registered = { upgrade: vi.fn(), elements: () => [] };
+    const kernel: AdviewKernel = {
+      ...fakeServices(),
+      owadview: registered,
+      onReset: () => () => undefined,
+    };
+    expect(adviewRuntimeOf(kernel)).toBe(registered);
   });
 });
 

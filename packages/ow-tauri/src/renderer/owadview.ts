@@ -18,7 +18,7 @@
  *
  * @packageDocumentation
  */
-import type { HostMessageHandler } from '../bootstrap/facade-kernel.js';
+import type { FacadeOwadview, HostMessageHandler } from '../bootstrap/facade-kernel.js';
 import type { LogLevel } from '../bootstrap/services.js';
 import type { HostContext } from '../shared/protocol.js';
 import {
@@ -51,6 +51,9 @@ export const VISIBLE_RATIO = 0.5;
 
 /** How often `checkVisibility()` is polled while guests are mounted (B.3.4). */
 export const VISIBILITY_POLL_MS = 500;
+
+/** Attributes whose change anywhere in the document triggers a geometry pass while guests are mounted. */
+const LAYOUT_ATTRIBUTES = ['style', 'class', 'hidden', 'width', 'height', 'open'] as const;
 
 /** The kernel services the runtime uses (a subset of `FacadeKernel`). */
 export interface AdviewServices {
@@ -143,10 +146,24 @@ export function browserEnvironment(): AdviewEnvironment {
   };
 }
 
+/** An `adview_update` not sent yet, bound to the mount it was made for. */
+interface PendingUpdate {
+  readonly gen: number;
+  readonly id: string;
+  readonly patch: Record<string, unknown>;
+}
+
 /** Per-element state. */
 interface Entry {
   readonly el: HTMLElement;
-  readonly id: string;
+  /** Stable key of the element in the runtime (its first element id). */
+  readonly key: string;
+  /** The element id on the wire; a remount gets a fresh one, so late events of the old guest are dropped. */
+  id: string;
+  /** Whether {@link Entry.id} was already used for a mount. */
+  used: boolean;
+  /** Mount generation: incremented by every mount and unmount. */
+  gen: number;
   tracked: boolean;
   mounted: boolean;
   closed: boolean;
@@ -156,7 +173,7 @@ interface Entry {
   visible: boolean | undefined;
   ratio: number | undefined;
   chain: Promise<void>;
-  pendingUpdate: Record<string, unknown> | undefined;
+  pendingUpdate: PendingUpdate | undefined;
   lastGuestClick: number;
 }
 
@@ -193,12 +210,17 @@ function isAdview(node: Node): node is HTMLElement {
  * The per-document `<owadview>` runtime. The bootstrap starts one in every
  * UI window; `ow-tauri/renderer` exposes it as `owadview`.
  */
-export class AdviewRuntime {
+export class AdviewRuntime implements FacadeOwadview {
   readonly #services: AdviewServices;
   readonly #env: AdviewEnvironment;
   readonly #entries = new WeakMap<Element, Entry>();
   readonly #tracked = new Map<string, Entry>();
+  /** Mounted elements by their current wire id (events of other ids are dropped). */
+  readonly #live = new Map<string, Entry>();
   #nextId = 0;
+  #sheet: CSSStyleSheet | undefined;
+  #layout: MutationObserver | undefined;
+  #layoutObserved = false;
   #started = false;
   #scheduled = false;
   #poll: ReturnType<typeof setInterval> | undefined;
@@ -263,6 +285,9 @@ export class AdviewRuntime {
     win.addEventListener('resize', onChange);
     doc.addEventListener('scroll', onChange, { capture: true, passive: true });
     doc.addEventListener('visibilitychange', onChange);
+    // A CSS transition or animation moves content without a mutation.
+    doc.addEventListener('transitionend', onChange, { capture: true, passive: true });
+    doc.addEventListener('animationend', onChange, { capture: true, passive: true });
     this.#cleanups.push(
       () => {
         win.removeEventListener('resize', onChange);
@@ -272,6 +297,10 @@ export class AdviewRuntime {
       },
       () => {
         doc.removeEventListener('visibilitychange', onChange);
+      },
+      () => {
+        doc.removeEventListener('transitionend', onChange, { capture: true });
+        doc.removeEventListener('animationend', onChange, { capture: true });
       },
       this.#services.on('adview-event', (message) => {
         this.#onHostEvent(message as AdviewEventMessage);
@@ -285,6 +314,8 @@ export class AdviewRuntime {
     if (!this.#started) return;
     this.#started = false;
     this.#mutations?.disconnect();
+    this.#layout?.disconnect();
+    this.#layoutObserved = false;
     this.#resize?.disconnect();
     this.#intersection?.disconnect();
     for (const cleanup of this.#cleanups.splice(0)) cleanup();
@@ -292,6 +323,7 @@ export class AdviewRuntime {
     this.#poll = undefined;
     for (const entry of this.#tracked.values()) entry.tracked = false;
     this.#tracked.clear();
+    this.#live.clear();
     this.#scheduled = false;
   }
 
@@ -320,7 +352,8 @@ export class AdviewRuntime {
 
   /**
    * The runtime-assigned id of an element (`"e1"`, `"e2"`, ...), or
-   * `undefined` for an element the runtime has not seen.
+   * `undefined` for an element the runtime has not seen. A remount gives the
+   * element a fresh id; this returns the current (or last) one.
    *
    * @param el - the element
    * @returns the id
@@ -354,6 +387,7 @@ export class AdviewRuntime {
         const sheet = new Sheet();
         sheet.replaceSync(DEFAULT_STYLE);
         doc.adoptedStyleSheets = [...doc.adoptedStyleSheets, sheet];
+        this.#sheet = sheet;
         return;
       }
     } catch {
@@ -366,6 +400,24 @@ export class AdviewRuntime {
     };
     if ((doc.documentElement as Element | null) !== null) insert();
     else doc.addEventListener('DOMContentLoaded', insert, { once: true });
+  }
+
+  /**
+   * Adopts the default style again when the page replaced
+   * `document.adoptedStyleSheets` (instead of appending to it), which drops
+   * it and leaves unstyled elements at 0x0.
+   */
+  #ensureStyle(): void {
+    const sheet = this.#sheet;
+    const doc = this.#env.document;
+    if (!sheet || !Array.isArray(doc.adoptedStyleSheets) || doc.adoptedStyleSheets.includes(sheet))
+      return;
+    doc.adoptedStyleSheets = [...doc.adoptedStyleSheets, sheet];
+    this.#services.warnOnce(
+      'owadview:style',
+      'document.adoptedStyleSheets was replaced, which removed the default <owadview> style; it was added again',
+    );
+    this.schedule();
   }
 
   #wrapCreateElement(): void {
@@ -417,9 +469,13 @@ export class AdviewRuntime {
   #register(el: HTMLElement): Entry {
     let entry = this.#entries.get(el);
     if (!entry) {
+      const id = `e${String(++this.#nextId)}`;
       entry = {
         el,
-        id: `e${String(++this.#nextId)}`,
+        key: id,
+        id,
+        used: false,
+        gen: 0,
         tracked: false,
         mounted: false,
         closed: false,
@@ -447,7 +503,7 @@ export class AdviewRuntime {
       return;
     }
     entry.tracked = true;
-    this.#tracked.set(entry.id, entry);
+    this.#tracked.set(entry.key, entry);
     this.#resize?.observe(entry.el);
     this.#intersection?.observe(entry.el);
   }
@@ -455,7 +511,7 @@ export class AdviewRuntime {
   #untrack(entry: Entry): void {
     if (!entry.tracked) return;
     entry.tracked = false;
-    this.#tracked.delete(entry.id);
+    this.#tracked.delete(entry.key);
     this.#resize?.unobserve(entry.el);
     this.#intersection?.unobserve(entry.el);
     entry.ratio = undefined;
@@ -488,6 +544,8 @@ export class AdviewRuntime {
       for (const entry of [...this.#tracked.values()])
         if (!entry.el.isConnected) touched.add(entry);
     }
+    // Content inserted or removed elsewhere can move a mounted element.
+    if (this.#live.size > 0) this.schedule();
     for (const entry of touched) {
       if (!entry.el.isConnected) {
         this.#untrack(entry);
@@ -525,10 +583,13 @@ export class AdviewRuntime {
     }
     if (entry.closed) return;
     const rect = this.#rect(el, attributes.performance);
-    if (!attributes.performance && (rect.width <= 0 || rect.height <= 0)) return;
+    if (!attributes.performance && (rect.width <= 0 || rect.height <= 0)) {
+      this.#ensureStyle();
+      return;
+    }
     if (attributes.performance && this.#otherPerformance(entry)) {
       this.#services.warnOnce(
-        `owadview:performance:${entry.id}`,
+        `owadview:performance:${entry.key}`,
         'a window shows at most one performance <owadview>; this one is ignored',
       );
       return;
@@ -547,28 +608,27 @@ export class AdviewRuntime {
     // Read again: defining the members moves values set on the plain element into attributes.
     const current = readAttributes(entry.el);
     const visible = this.#visible(entry, current.performance);
+    if (entry.used) entry.id = `e${String(++this.#nextId)}`;
+    entry.used = true;
+    const gen = ++entry.gen;
+    const id = entry.id;
     entry.mounted = true;
     entry.attributes = current;
     entry.rect = this.#rect(entry.el, current.performance);
     entry.visible = visible;
     entry.pendingUpdate = undefined;
-    const request = {
-      elementId: entry.id,
-      attributes: current,
-      rect: entry.rect,
-      visible,
-    };
+    this.#live.set(id, entry);
+    const request = { elementId: id, attributes: current, rect: entry.rect, visible };
     this.#enqueue(entry, async () => {
       try {
         await this.#services.command('adview_mount', request);
       } catch (error) {
-        this.#services.log(
-          'warn',
-          `<owadview> ${entry.id} did not mount: ${(error as Error).message}`,
-        );
-        if (entry.attributes === current) {
-          entry.mounted = false;
+        this.#services.log('warn', `<owadview> ${id} did not mount: ${(error as Error).message}`);
+        // Only when no unmount or remount happened meanwhile.
+        if (entry.gen === gen) {
+          this.#forget(entry);
           entry.closed = true;
+          this.#updatePoll();
         }
       }
     });
@@ -576,22 +636,27 @@ export class AdviewRuntime {
   }
 
   #unmount(entry: Entry): void {
+    const id = entry.id;
+    this.#forget(entry);
+    this.#enqueue(entry, async () => {
+      try {
+        await this.#services.command('adview_unmount', { elementId: id });
+      } catch (error) {
+        this.#services.log('debug', `adview_unmount ${id} failed: ${(error as Error).message}`);
+      }
+    });
+    this.#updatePoll();
+  }
+
+  /** Marks an element unmounted and drops what belonged to its mount. */
+  #forget(entry: Entry): void {
+    entry.gen++;
     entry.mounted = false;
     entry.attributes = undefined;
     entry.rect = undefined;
     entry.visible = undefined;
     entry.pendingUpdate = undefined;
-    this.#enqueue(entry, async () => {
-      try {
-        await this.#services.command('adview_unmount', { elementId: entry.id });
-      } catch (error) {
-        this.#services.log(
-          'debug',
-          `adview_unmount ${entry.id} failed: ${(error as Error).message}`,
-        );
-      }
-    });
-    this.#updatePoll();
+    this.#live.delete(entry.id);
   }
 
   #updateGeometry(entry: Entry, performance: boolean): void {
@@ -609,30 +674,32 @@ export class AdviewRuntime {
     if (Object.keys(patch).length > 0) this.#update(entry, patch);
   }
 
-  /** Queues an `adview_update`, merged with one not sent yet. */
+  /**
+   * Queues an `adview_update` for the current mount, merged with one not
+   * sent yet. An update made for a mount that was unmounted or replaced
+   * before it ran is dropped: the new mount carries the geometry of its time.
+   */
   #update(entry: Entry, patch: Record<string, unknown>): void {
-    if (entry.pendingUpdate) {
+    const pending = entry.pendingUpdate;
+    if (pending?.gen === entry.gen) {
       const { attributes, ...rest } = patch;
-      Object.assign(entry.pendingUpdate, rest);
+      Object.assign(pending.patch, rest);
       if (attributes !== undefined)
-        entry.pendingUpdate['attributes'] = {
-          ...(entry.pendingUpdate['attributes'] ?? {}),
+        pending.patch['attributes'] = {
+          ...(pending.patch['attributes'] ?? {}),
           ...attributes,
         };
       return;
     }
-    entry.pendingUpdate = { ...patch };
+    const next: PendingUpdate = { gen: entry.gen, id: entry.id, patch: { ...patch } };
+    entry.pendingUpdate = next;
     this.#enqueue(entry, async () => {
-      const update = entry.pendingUpdate;
-      entry.pendingUpdate = undefined;
-      if (!update || !entry.mounted) return;
+      if (entry.pendingUpdate === next) entry.pendingUpdate = undefined;
+      if (next.gen !== entry.gen || !entry.mounted) return;
       try {
-        await this.#services.command('adview_update', { elementId: entry.id, ...update });
+        await this.#services.command('adview_update', { elementId: next.id, ...next.patch });
       } catch (error) {
-        this.#services.log(
-          'debug',
-          `adview_update ${entry.id} failed: ${(error as Error).message}`,
-        );
+        this.#services.log('debug', `adview_update ${next.id} failed: ${(error as Error).message}`);
       }
     });
   }
@@ -686,8 +753,13 @@ export class AdviewRuntime {
     return width > 0 && height > 0 ? (width * height) / area : 0;
   }
 
+  /**
+   * Runs the visibility poll and the layout observer while any guest is
+   * mounted. The layout observer catches changes that move an element
+   * without resizing it (a sibling grows, a class or style changes).
+   */
   #updatePoll(): void {
-    const any = [...this.#tracked.values()].some((entry) => entry.mounted);
+    const any = this.#started && this.#live.size > 0;
     if (any && this.#poll === undefined) {
       this.#poll = setInterval(() => {
         this.schedule();
@@ -696,41 +768,65 @@ export class AdviewRuntime {
       clearInterval(this.#poll);
       this.#poll = undefined;
     }
+    if (any && !this.#layoutObserved) {
+      this.#layout ??= new this.#env.MutationObserver(() => {
+        this.schedule();
+      });
+      this.#layout.observe(this.#env.document, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: [...LAYOUT_ATTRIBUTES],
+      });
+      this.#layoutObserved = true;
+    } else if (!any && this.#layoutObserved) {
+      this.#layout?.disconnect();
+      this.#layoutObserved = false;
+    }
   }
 
   /**
    * Defines the members ow-electron's element has after attach (B.3.3), once
-   * per element, and the open shadow root (B.3.4). A value an app assigned to
-   * `customTracking` or `pageUrl` on the plain element is moved into the
-   * attribute first, so it is not lost.
+   * per element, and the open shadow root (B.3.4). The element's own
+   * properties are `cid`, `slotsize`, `pageUrl`, `performance`, `unit`,
+   * `adstyle` and `customTracking`, in ow-electron's order [OBS], each backed
+   * by its attribute (`performance` is a boolean) [DEC]. A value an app
+   * assigned to one of them on the plain element is moved into the attribute
+   * first, so it is not lost.
    */
   #defineMembers(entry: Entry): void {
     if (entry.membersDefined) return;
     entry.membersDefined = true;
     const el = entry.el;
-    const own = (key: string): unknown => {
-      const descriptor = Object.getOwnPropertyDescriptor(el, key);
-      if (!descriptor || !('value' in descriptor)) return undefined;
-      Reflect.deleteProperty(el, key);
-      return descriptor.value;
-    };
-    const tracking = own('customTracking');
-    if (tracking !== undefined && tracking !== null)
-      el.setAttribute('customtracking', domString(tracking));
-    const pageUrl = own('pageUrl');
-    if (pageUrl !== undefined && pageUrl !== null) el.setAttribute('pageurl', domString(pageUrl));
+    for (const [property, attribute] of REFLECTED) {
+      const descriptor = Object.getOwnPropertyDescriptor(el, property);
+      if (!descriptor || !('value' in descriptor)) continue;
+      Reflect.deleteProperty(el, property);
+      const value: unknown = descriptor.value;
+      if (value !== undefined && value !== null) setReflected(el, attribute, value);
+    }
+    const accessor = (attribute: string): PropertyDescriptor => ({
+      get: () =>
+        attribute === 'performance'
+          ? el.hasAttribute(attribute)
+          : (el.getAttribute(attribute) ?? ''),
+      set: (value: unknown) => {
+        setReflected(el, attribute, value);
+      },
+      enumerable: true,
+      configurable: true,
+    });
     const command = (name: string, args: unknown[]): void => {
       if (!entry.mounted) {
         this.#services.log('debug', `<owadview> ${entry.id}: ${name}() before attach is ignored`);
         return;
       }
+      const { gen, id } = entry;
       this.#enqueue(entry, async () => {
+        if (entry.gen !== gen) return;
         try {
-          await this.#services.command('adview_command', {
-            elementId: entry.id,
-            command: name,
-            args,
-          });
+          await this.#services.command('adview_command', { elementId: id, command: name, args });
         } catch (error) {
           this.#services.log('debug', `adview_command ${name} failed: ${(error as Error).message}`);
         }
@@ -742,24 +838,10 @@ export class AdviewRuntime {
       configurable: true,
       enumerable: false,
     });
+    const members: PropertyDescriptorMap = {};
+    for (const [property, attribute] of REFLECTED) members[property] = accessor(attribute);
     Object.defineProperties(el, {
-      customTracking: {
-        get: () => el.getAttribute('customtracking') ?? '',
-        set: (value: unknown) => {
-          if (value === undefined || value === null) el.removeAttribute('customtracking');
-          else el.setAttribute('customtracking', domString(value));
-        },
-        enumerable: true,
-        configurable: true,
-      },
-      pageUrl: {
-        get: () => el.getAttribute('pageurl') ?? '',
-        set: (value: unknown) => {
-          el.setAttribute('pageurl', value === undefined || value === null ? '' : domString(value));
-        },
-        enumerable: true,
-        configurable: true,
-      },
+      ...members,
       setPageUrl: method((url: unknown) => {
         el.setAttribute('pageurl', url === undefined || url === null ? '' : domString(url));
       }),
@@ -802,9 +884,12 @@ export class AdviewRuntime {
     const { elementId, name, data, source } = message;
     if (typeof elementId !== 'string' || typeof name !== 'string' || name === '') return;
     if (name.startsWith('__host:')) return;
-    const entry = this.#tracked.get(elementId);
+    const entry = this.#live.get(elementId);
     if (!entry) {
-      this.#services.log('debug', `adview-event '${name}' for unknown element ${elementId}`);
+      this.#services.log(
+        'debug',
+        `adview-event '${name}' for unknown or replaced element ${elementId}`,
+      );
       return;
     }
     const now = this.#env.now();
@@ -836,14 +921,8 @@ function jsonArgs(args: unknown[]): unknown[] {
 
 /** Kernel members {@link adviewRuntimeOf} needs. */
 export interface AdviewKernel extends AdviewServices {
-  /**
-   * The webview's singleton under `key`.
-   *
-   * @param key - the key
-   * @param factory - creates the value
-   * @returns the singleton
-   */
-  singleton<T>(key: string, factory: () => T): T;
+  /** The registered `<owadview>` runtime (`FacadeKernel.owadview`). */
+  owadview?: FacadeOwadview | undefined;
   /**
    * Registers a hook that a runtime reset runs.
    *
@@ -854,22 +933,61 @@ export interface AdviewKernel extends AdviewServices {
 }
 
 /**
- * The document's `<owadview>` runtime (one per webview, shared by every copy
- * of the package), started when the document is a UI window.
+ * The document's `<owadview>` runtime (one per webview), started when the
+ * document is a UI window. The first copy of the package that asks (normally
+ * the injected bootstrap) creates it and registers it as
+ * `FacadeKernel.owadview`; every other copy uses that registration, which
+ * is part of the versioned facade API (ADR 0012), never the other copy's
+ * class.
  *
  * @param kernel - the runtime kernel
  * @returns the runtime
  */
-export function adviewRuntimeOf(kernel: AdviewKernel): AdviewRuntime {
-  const runtime = kernel.singleton('renderer.owadview', () => {
-    const created = new AdviewRuntime(kernel);
-    kernel.onReset(() => {
-      created.stop();
-    });
-    return created;
+export function adviewRuntimeOf(kernel: AdviewKernel): FacadeOwadview {
+  const registered = kernel.owadview;
+  if (registered) return registered;
+  const runtime = new AdviewRuntime(kernel);
+  kernel.owadview = runtime;
+  const off = kernel.onReset(() => {
+    off();
+    runtime.stop();
+    if (kernel.owadview === runtime) kernel.owadview = undefined;
   });
   runtime.start();
   return runtime;
+}
+
+/**
+ * The element's attribute-backed own properties after attach, in
+ * ow-electron's order [OBS], with their attributes.
+ */
+const REFLECTED: readonly (readonly [string, string])[] = [
+  ['cid', 'cid'],
+  ['slotsize', 'slotsize'],
+  ['pageUrl', 'pageurl'],
+  ['performance', 'performance'],
+  ['unit', 'unit'],
+  ['adstyle', 'adstyle'],
+  ['customTracking', 'customtracking'],
+];
+
+/**
+ * Writes an attribute-backed property: `performance` is a boolean
+ * attribute set when the value is truthy; `pageUrl` stores `""` for `null` or `undefined`; the others
+ * remove the attribute for `null` or `undefined` [DEC].
+ *
+ * @param el - the element
+ * @param attribute - the attribute name
+ * @param value - the assigned value
+ */
+function setReflected(el: Element, attribute: string, value: unknown): void {
+  if (attribute === 'performance') {
+    if (value) el.setAttribute(attribute, '');
+    else el.removeAttribute(attribute);
+  } else if (value === undefined || value === null) {
+    if (attribute === 'pageurl') el.setAttribute(attribute, '');
+    else el.removeAttribute(attribute);
+  } else el.setAttribute(attribute, domString(value));
 }
 
 /**

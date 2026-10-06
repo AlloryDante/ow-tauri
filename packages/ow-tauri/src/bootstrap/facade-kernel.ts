@@ -30,6 +30,27 @@ export { RUNTIME_API_VERSION };
 /** Longest time `main_ready` waits for tasks passed to `FacadeKernel.deferMainReady`. */
 export const MAIN_READY_HOLD_MS = 2000;
 
+/**
+ * The document's `<owadview>` runtime as other copies of the package may use
+ * it (`FacadeKernel.owadview`). Part of the facade API: changing it
+ * increments {@link RUNTIME_API_VERSION}.
+ */
+export interface FacadeOwadview {
+  /**
+   * Registers an `<owadview>` element the runtime has not seen and mounts it
+   * if it is ready.
+   *
+   * @param el - the element
+   */
+  upgrade(el: Element): void;
+  /**
+   * The `<owadview>` elements the runtime tracks, in discovery order.
+   *
+   * @returns the elements
+   */
+  elements(): HTMLElement[];
+}
+
 /** Called for each host message of one `type`. */
 export type HostMessageHandler = (message: HostMessage) => void;
 
@@ -163,6 +184,13 @@ export interface FacadeKernel extends KernelServices {
   readonly server: FacadeIpcServer;
   /** The document's `ipcRenderer`. */
   readonly ipcRenderer: IpcRenderer;
+  /**
+   * The document's `<owadview>` runtime (UI windows), registered by the copy
+   * of the package that started it, normally the injected bootstrap.
+   * Optional: added in the same facade API version; `undefined` until a
+   * runtime is registered.
+   */
+  owadview?: FacadeOwadview | undefined;
   /**
    * The singleton stored under `key`, created with `factory` the first time;
    * shared by every copy of the package in the webview.

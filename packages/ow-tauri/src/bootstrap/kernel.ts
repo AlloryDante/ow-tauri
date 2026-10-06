@@ -27,7 +27,12 @@ import {
   type WindowMessage,
 } from '../shared/protocol.js';
 import { fromWireError } from '../shared/wire-error.js';
-import { MAIN_READY_HOLD_MS, type FacadeKernel, type HostMessageHandler } from './facade-kernel.js';
+import {
+  MAIN_READY_HOLD_MS,
+  type FacadeKernel,
+  type FacadeOwadview,
+  type HostMessageHandler,
+} from './facade-kernel.js';
 import { IpcServer, remoteError } from './ipc-main.js';
 import { IpcClient, IpcRenderer } from './ipc-renderer.js';
 import type { LogLevel } from './services.js';
@@ -96,6 +101,8 @@ export class Kernel implements FacadeKernel {
   readonly client: IpcClient;
   /** The `ipcRenderer` object. */
   readonly ipcRenderer: IpcRenderer;
+  /** {@inheritDoc FacadeKernel.owadview} */
+  owadview: FacadeOwadview | undefined = undefined;
 
   readonly #transport: Transport;
   readonly #mismatch: OwTauriError | undefined;
