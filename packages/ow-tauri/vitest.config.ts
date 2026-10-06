@@ -23,6 +23,8 @@ export default defineConfig({
         'src/shared/**': { lines: 90 },
         'src/bootstrap/**': { lines: 90 },
         'src/electron/**': { lines: 80 },
+        'src/main/**': { lines: 90 },
+        'src/renderer/**': { lines: 90 },
       },
     },
   },
