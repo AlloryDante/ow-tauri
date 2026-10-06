@@ -47,6 +47,10 @@ devtools = ["plugin", "tauri/devtools"]
 # `Overwolf::test_*` methods that drive the window, navigation, page-load and
 # exit-request handlers the mock runtime never fires. Not a stable API.
 test-util = ["plugin"]
+# Lets `build::embed_manifest` compile and link the `OWEINTEGRITY/OWE` PE
+# resource of a signed Windows release build (CONTRACT G.4 c). Enable it on
+# the build-dependency.
+embed-resource = ["dep:embed-resource"]
 
 [dependencies]
 serde = { workspace = true }
@@ -63,6 +67,8 @@ url = { workspace = true }
 yaml-rust2 = { version = "0.13.0", default-features = false }
 semver = { workspace = true }
 minisign-verify = "0.3.0"
+# Build-script only: compiles the OWEINTEGRITY/OWE resource script.
+embed-resource = { version = "3.0.12", optional = true }
 
 tauri = { workspace = true, optional = true, features = ["unstable"] }
 tauri-plugin-opener = { workspace = true, optional = true }

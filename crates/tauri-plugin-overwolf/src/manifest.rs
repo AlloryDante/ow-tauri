@@ -50,7 +50,8 @@ pub struct EmbeddedManifest {
     pub overwolf: OverwolfBlock,
     /// The `build.overwolf` block, with the builder's defaults applied.
     pub build_overwolf: BuildOverwolf,
-    /// The whole `package.json` minus `devDependencies` and `scripts`.
+    /// The packaged form of `package.json` ([`packaged_form`]); in a signed
+    /// release build, the signed `package.json` from `ow-tauri sign`.
     pub raw: Map<String, Value>,
 }
 
@@ -423,9 +424,7 @@ pub fn parse_package_json(text: &str) -> Result<ParsedManifest, ManifestError> {
         ));
     }
 
-    let mut raw = root;
-    raw.remove("devDependencies");
-    raw.remove("scripts");
+    let raw = packaged_form(&root);
 
     Ok(ParsedManifest {
         manifest: EmbeddedManifest {
@@ -441,32 +440,157 @@ pub fn parse_package_json(text: &str) -> Result<ParsedManifest, ManifestError> {
     })
 }
 
-/// Release-build warnings for the signing flags (CONTRACT G.1, OQ-09).
+/// Top-level keys the builder never ships (G.3).
+const UNSHIPPED_KEYS: [&str; 11] = [
+    "dist",
+    "gitHead",
+    "build",
+    "jspm",
+    "ava",
+    "xo",
+    "nyc",
+    "eslintConfig",
+    "contributors",
+    "bundleDependencies",
+    "tags",
+];
+
+/// Merges `source` into `target` the way the builder's `deepAssign` does:
+/// objects merge key by key, everything else (arrays included) replaces.
+fn deep_assign(target: &mut Map<String, Value>, source: &Map<String, Value>) {
+    for (key, value) in source {
+        match (target.get_mut(key), value) {
+            (Some(Value::Object(current)), Value::Object(update)) => deep_assign(current, update),
+            _ => {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
+/// The packaged form of `package.json` (CONTRACT G.3, `raw`): what
+/// Overwolf's builder ships and signs. `build.extraMetadata` is merged in,
+/// then keys starting with `_`, the builder's build-only keys (`build`,
+/// `dist`, `gitHead`, …), `scripts` and `keywords` (unless
+/// `build.removePackageScripts` / `removePackageKeywords` is `false`),
+/// `devDependencies`, and `babel` when no dependency is a Babel package,
+/// are removed. `ow-tauri sign` sends the same object.
+///
+/// ```
+/// use tauri_plugin_overwolf::manifest::packaged_form;
+/// let pkg = serde_json::json!({
+///     "name": "demo", "_id": "x", "scripts": {}, "keywords": ["a"],
+///     "devDependencies": {}, "build": { "extraMetadata": { "main": "app.js" } },
+/// });
+/// let packaged = packaged_form(pkg.as_object().unwrap());
+/// assert_eq!(serde_json::Value::Object(packaged), serde_json::json!({ "name": "demo", "main": "app.js" }));
+/// ```
+#[must_use]
+pub fn packaged_form(root: &Map<String, Value>) -> Map<String, Value> {
+    let build = root.get("build").and_then(Value::as_object);
+    let mut out = root.clone();
+    if let Some(extra) = build
+        .and_then(|b| b.get("extraMetadata"))
+        .and_then(Value::as_object)
+    {
+        deep_assign(&mut out, extra);
+    }
+    let keeps = |key: &str| build.and_then(|b| b.get(key)) == Some(&Value::Bool(false));
+    let remove_scripts = !keeps("removePackageScripts");
+    let remove_keywords = !keeps("removePackageKeywords");
+    let remove_babel = out
+        .get("dependencies")
+        .and_then(Value::as_object)
+        .is_some_and(|deps| !deps.keys().any(|name| name.starts_with("babel")));
+    out.retain(|key, _| {
+        !(key.starts_with('_')
+            || UNSHIPPED_KEYS.contains(&key.as_str())
+            || (remove_scripts && key == "scripts")
+            || (remove_keywords && key == "keywords")
+            || key == "devDependencies"
+            || (remove_babel && key == "babel"))
+    });
+    out
+}
+
+/// Release-build warnings for the signing flags (CONTRACT G.1, G.4).
+///
+/// `release` is a release build for a target the builder signs (Windows);
+/// `signed` is whether the output of `ow-tauri sign` was applied.
 ///
 /// ```
 /// use tauri_plugin_overwolf::manifest::{signing_warnings, BuildOverwolf};
-/// assert_eq!(signing_warnings(&BuildOverwolf::default(), true).len(), 1);
-/// assert!(signing_warnings(&BuildOverwolf::default(), false).is_empty());
+/// let unsigned = signing_warnings(&BuildOverwolf::default(), true, false);
+/// assert_eq!(unsigned[0].path, "build.overwolf.requireSigning");
+/// assert!(signing_warnings(&BuildOverwolf::default(), true, true).is_empty());
+/// assert!(signing_warnings(&BuildOverwolf::default(), false, false).is_empty());
 /// ```
 #[must_use]
-pub fn signing_warnings(build: &BuildOverwolf, release: bool) -> Vec<ManifestWarning> {
+pub fn signing_warnings(
+    build: &BuildOverwolf,
+    release: bool,
+    signed: bool,
+) -> Vec<ManifestWarning> {
     let mut out = Vec::new();
-    if !release {
+    if !release || signed {
         return out;
     }
     if build.require_signing {
         out.push(warn(
             "build.overwolf.requireSigning",
-            "Overwolf signing for Tauri builds is not defined yet (OQ-09); the build is not Overwolf-signed",
+            "this release build is not Overwolf-signed: run `npx ow-tauri sign` before `tauri build` (it fails when signing is required and cannot complete), or set requireSigning to false",
         ));
     }
     if build.enable_ow_cert_signing {
         out.push(warn(
             "build.overwolf.enableOWCertSigning",
-            "signing with Overwolf's certificate is not available for Tauri builds yet (OQ-09)",
+            "Overwolf certificate signing needs the output of `npx ow-tauri sign`",
         ));
     }
     out
+}
+
+/// Warns when `enableOWCertSigning` is set but `tauri.conf.json`
+/// `bundle.windows.signCommand` does not run `ow-tauri sign-exe`, the step
+/// that posts the app exe to the certificate service (CONTRACT G.4 d).
+///
+/// ```
+/// use tauri_plugin_overwolf::manifest::{sign_command_warnings, BuildOverwolf};
+/// let b = BuildOverwolf { enable_ow_cert_signing: true, ..BuildOverwolf::default() };
+/// let conf = serde_json::json!({ "bundle": { "windows": { "signCommand": "npx ow-tauri sign-exe %1" } } });
+/// assert!(sign_command_warnings(&b, &conf).is_empty());
+/// assert_eq!(sign_command_warnings(&b, &serde_json::json!({})).len(), 1);
+/// ```
+#[must_use]
+pub fn sign_command_warnings(build: &BuildOverwolf, conf: &Value) -> Vec<ManifestWarning> {
+    if !build.enable_ow_cert_signing {
+        return Vec::new();
+    }
+    let command = match conf.pointer("/bundle/windows/signCommand") {
+        Some(Value::String(line)) => line.clone(),
+        Some(Value::Object(spec)) => {
+            let mut words = vec![spec.get("cmd").and_then(Value::as_str).unwrap_or_default()];
+            if let Some(Value::Array(args)) = spec.get("args") {
+                words.extend(args.iter().filter_map(Value::as_str));
+            }
+            words.join(" ")
+        }
+        _ => String::new(),
+    };
+    // `npx ow-tauri sign-exe`, `node …/ow-tauri/dist/cli/index.js sign-exe`, …
+    let words: Vec<&str> = command.split_whitespace().collect();
+    let runs_sign_exe = words
+        .iter()
+        .position(|w| *w == "sign-exe")
+        .is_some_and(|at| words[..at].iter().any(|w| w.contains("ow-tauri")));
+    if runs_sign_exe {
+        Vec::new()
+    } else {
+        vec![warn(
+            "build.overwolf.enableOWCertSigning",
+            "tauri.conf.json bundle.windows.signCommand does not run `ow-tauri sign-exe %1`, so the app exe is not signed with Overwolf's certificate",
+        )]
+    }
 }
 
 /// Warnings for `tauri.conf.json` values that disagree with the manifest
@@ -699,10 +823,16 @@ mod tests {
             enable_ow_cert_signing: true,
             ..BuildOverwolf::default()
         };
-        assert_eq!(signing_warnings(&b, true).len(), 2);
+        assert_eq!(signing_warnings(&b, true, false).len(), 2);
+        assert!(signing_warnings(&b, true, true).is_empty());
+        let object = serde_json::json!({"bundle":{"windows":{"signCommand":{"cmd":"node_modules/.bin/ow-tauri","args":["sign-exe","%1"]}}}});
+        assert!(sign_command_warnings(&b, &object).is_empty());
+        let other = serde_json::json!({"bundle":{"windows":{"signCommand":"signtool sign %1"}}});
+        assert_eq!(sign_command_warnings(&b, &other).len(), 1);
         b.require_signing = false;
         b.enable_ow_cert_signing = false;
-        assert!(signing_warnings(&b, true).is_empty());
+        assert!(signing_warnings(&b, true, false).is_empty());
+        assert!(sign_command_warnings(&b, &other).is_empty());
 
         let m = EmbeddedManifest::minimal("Demo", "S", "1.0.0");
         let ok = serde_json::json!({"productName":"Demo","version":"../package.json"});
@@ -718,5 +848,40 @@ mod tests {
         let back: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(back["name"], "overwolf-official-sample-app");
         assert!(back.get("scripts").is_none());
+        assert!(back.get("build").is_none());
+        assert!(back.get("devDependencies").is_none());
+    }
+
+    #[test]
+    fn packaged_form_follows_the_builder() {
+        let pkg = serde_json::json!({
+            "name": "demo",
+            "babel": {},
+            "keywords": ["k"],
+            "scripts": {"a": "b"},
+            "dependencies": {"left-pad": "1"},
+            "overwolf": {"packages": ["gep"]},
+            "build": {
+                "removePackageScripts": false,
+                "removePackageKeywords": false,
+                "extraMetadata": {"overwolf": {"uid": "abc"}, "tags": ["x"]}
+            }
+        });
+        let out = Value::Object(packaged_form(pkg.as_object().unwrap()));
+        assert_eq!(
+            out,
+            serde_json::json!({
+                "name": "demo",
+                "keywords": ["k"],
+                "scripts": {"a": "b"},
+                "dependencies": {"left-pad": "1"},
+                "overwolf": {"packages": ["gep"], "uid": "abc"}
+            })
+        );
+        let babel =
+            serde_json::json!({"name": "d", "babel": {}, "dependencies": {"babel-core": "6"}});
+        assert!(packaged_form(babel.as_object().unwrap()).contains_key("babel"));
+        let no_deps = serde_json::json!({"name": "d", "babel": {}});
+        assert!(packaged_form(no_deps.as_object().unwrap()).contains_key("babel"));
     }
 }

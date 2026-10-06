@@ -79,6 +79,42 @@ It registers `tauri-plugin-opener`, `tauri-plugin-dialog` and
 `tauri-plugin-global-shortcut` itself unless the app already did. No webview
 is granted their permissions; the plugin calls them from Rust.
 
+### Overwolf signing (Windows release builds)
+
+Run `npx ow-tauri sign` before `tauri build` with `OW_CLI_EMAIL`,
+`OW_CLI_API_KEY` and `OW_BUILD_KEY` set. It writes `ow-tauri-signed/` next
+to `package.json`; a release build of `embed_manifest` takes the signed uid
+from it and, with the `embed-resource` feature on the build-dependency,
+links the `OWEINTEGRITY/OWE` resource into the Windows exe:
+
+```toml
+[build-dependencies]
+tauri-plugin-overwolf = { version = "0.1", default-features = false, features = ["embed-resource"] }
+```
+
+```json
+{
+  "bundle": {
+    "resources": {
+      "../ow-tauri-signed/integrity.dll": "integrity.dll",
+      "../ow-tauri-signed/_metadata.json": "_metadata.json"
+    },
+    "windows": {
+      "signCommand": {
+        "cmd": "npx.cmd",
+        "args": ["ow-tauri", "sign-exe", "%1", "--fallback", "signtool sign /fd sha256 /a %1"]
+      }
+    }
+  }
+}
+```
+
+`sign-exe` sends the app exe to Overwolf's certificate service when the app
+is eligible and asks for it (`enableOWCertSigning`), and runs `--fallback`
+(your own signing) for every other binary. Use the object form: Tauri
+splits a string `signCommand` on spaces. `ow-tauri sign --dry-run` prints
+the request without sending it.
+
 ## Tests
 
 - `cargo test -p tauri-plugin-overwolf`: unit and property tests of the pure
