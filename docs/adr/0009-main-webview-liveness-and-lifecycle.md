@@ -1,6 +1,6 @@
 # ADR 0009: Keep the main webview alive and give it one lifecycle
 
-- Status: Accepted
+- Status: Accepted (amended 2026-10-06)
 - Date: 2026-10-06
 - Extends: [ADR 0001](0001-hidden-main-webview.md)
 
@@ -29,8 +29,9 @@ registry, `ipcMain` handlers, hotkeys, package listeners) exists only there.
 
 ## Decision
 
-1. **One browser-argument set for all webviews** (CONTRACT A.1.1), computed at
-   setup. On Windows it adds `--disable-background-timer-throttling
+1. **One browser-argument set per webview environment** (CONTRACT A.1.1),
+   computed at setup; the ads environment adds its own switches to the app
+   set. On Windows the app set adds `--disable-background-timer-throttling
    --disable-renderer-backgrounding --disable-backgrounding-occluded-windows`
    to wry's default `--disable-features=...` value. Runtime calls that would
    change arguments (`appendSwitch`, `disableHardwareAcceleration`) apply from
@@ -39,20 +40,37 @@ registry, `ipcMain` handlers, hotkeys, package listeners) exists only there.
    `BackgroundThrottlingPolicy::Disabled`.
 3. **macOS 12 and 13, Linux**: `ow-main` is a technically visible window:
    1 x 1, fully transparent, ignores the cursor, skips the taskbar and the
-   window switcher, never focused.
+   window switcher, never focused. On macOS 12 and 13 transparency needs
+   Tauri's private-API switch (`macOSPrivateApi`); without it the window is
+   an opaque 1 x 1 pixel, and timers still run.
 4. **A measurable requirement and a soak test.** A 1 s interval in `ow-main`
    keeps a median period under 1.5 s for 10 minutes with every app window
    hidden. A scheduled CI job checks it on all three platforms.
 5. **No navigation in release builds.** After its first load `ow-main` cannot
-   navigate. In debug builds a reload is a soft restart: every other window is
-   closed, the router and registries are cleared, and the app's main code runs
-   again from a fresh snapshot.
+   navigate. In debug builds a reload (a navigation to the current document
+   URL, nothing else) is a soft restart: every other window is closed, the
+   router and registries are cleared, and the app's main code runs again
+   from a fresh snapshot. An exit request during a soft restart waits until
+   the new document has loaded.
 6. **A crash relaunches the app**, up to `main.crashRestartLimit` times per
-   60 s, then the app exits with an error. There is no rehydration protocol.
-7. **One quit sequence** for every exit path, including OS-initiated ones
+   60 s, then the app exits with an error. The crash times are stored in
+   `ow-tauri.json`, so the limit holds across relaunches. There is no
+   rehydration protocol. Crash signals: WebView2 `ProcessFailed`, WebKitGTK
+   `web-process-terminated`, and on macOS the web-content termination hook,
+   which Tauri offers only on the app's builder, so the app forwards it to
+   the plugin; the `ow-main` window's `Destroyed` event outside an exit
+   counts too.
+7. **Relaunch at `RunEvent::Exit`.** `app.relaunch()` and the crash path
+   start the new process when Tauri delivers `RunEvent::Exit`, which reaches
+   plugins in registration order. `tauri-plugin-single-instance` is
+   registered first (CONTRACT A.5), so its lock is already released and the
+   new process is not turned away as a second instance.
+8. **One quit sequence** for every exit path, including OS-initiated ones
    (`RunEvent::ExitRequested` with `prevent_exit`): `before-quit`, window
    `close` events, `will-quit`, each answerable within 5 s, then analytics
-   drain and exit (CONTRACT A.6).
+   drain and exit (CONTRACT A.6). Without a main webview nobody can answer
+   `before-quit`, so an exit request then goes straight to the drain and
+   exits with code 0.
 
 ## Consequences
 
@@ -75,3 +93,13 @@ registry, `ipcMain` handlers, hotkeys, package listeners) exists only there.
   code can recreate. Rejected as unreliable.
 - **Periodic keep-alive pings from Rust.** They wake the page but do not stop
   timer clamping. Rejected.
+
+## Amendments
+
+- 2026-10-06, first implementation: one argument set per webview
+  environment (decision 1); macOS 12 and 13 transparency needs Tauri's
+  private-API switch (decision 3); only a navigation to the current URL is a
+  reload, and an exit request waits for a soft restart (decision 5); crash
+  signals per platform and the crash history in `ow-tauri.json`
+  (decision 6); relaunches start at `RunEvent::Exit` (decision 7, new); an
+  exit request without a main webview skips the sequence (decision 8).

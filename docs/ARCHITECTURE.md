@@ -101,9 +101,9 @@ flowchart LR
 | manifest + identity | `crates/.../manifest`, `identity` | Read the embedded `package.json` (`overwolf`, `build.overwolf`, `productName`, `name`, `author`, `version`); compute the app uid with ow-electron's rule, honour the signed `overwolf.uid` (CONTRACT G.2); muid, muidV2 and phase percent from the machine id (CONTRACT E.4, [ADR 0014](adr/0014-machine-id-parity.md)). |
 | state file | `state` | Read and write the per-app `ow-electron.json` with ow-electron's exact encoding, and `ow-tauri.json` (ow-tauri keys), atomically (CONTRACT F, [ADR 0007](adr/0007-state-file-continuity.md)). |
 | IPC router | `ipc` | Route `ipcRenderer.invoke/send` from UI windows to `ipcMain` in the main webview, and `webContents.send` back, by webview label, over one ordered channel per webview ([ADR 0010](adr/0010-per-webview-ipc-channels.md)). |
-| window manager | `window` | Create the windows behind the `BrowserWindow` facade, inject preload scripts, forward window events, enforce the window class of each webview. |
-| ads host | `adview` | One native child webview per `<owadview>` element in the ads environment; layout, visibility, mute, popups, crash recovery, plain DOM events, host-to-guest messages. |
-| request shaping | `adview`, `platform/*` | The headers ow-electron sends for ad guests: `Referer` and `Origin` on the ad document, `Origin` on subresources, `x-ow-*` on `owads.min.js`, per OS (CONTRACT D.8, [ADR 0013](adr/0013-request-shaping-per-os.md)). |
+| window manager | `window`, `host` | Create the windows behind the `BrowserWindow` facade, inject preload scripts, forward window events, enforce the window class of each webview. |
+| ads host | `ads` | One native child webview per `<owadview>` element in the ads environment; layout, visibility, mute, popups, crash recovery, plain DOM events, host-to-guest messages. |
+| request shaping | `ads`, `platform/*` | The headers ow-electron sends for ad guests: `Referer` and `Origin` on the ad document, `Origin` on subresources, `x-ow-*` on `owads.min.js`, per OS (CONTRACT D.8, [ADR 0013](adr/0013-request-shaping-per-os.md)). |
 | consent | `consent` | `isCMPRequired` from `cmp-eu-only`, the hidden startup consent window and the settings window, consent storage, the cookie fallback, ad sequencing; email hashes and the FPD switch (CONTRACT D.6, [ADR 0015](adr/0015-startup-consent-window.md)). |
 | analytics | `analytics` | ow-electron's anonymous analytics (Counter and InsertStats requests) in the observed order, labelled through `analytics.hostLabel`, with the mandatory subset and the opt-outs (CONTRACT E). |
 | package manager | `packages` | `app.overwolf.packages` as ow-electron reports it where packages are unavailable: no events, observed results (CONTRACT H). |
@@ -170,7 +170,7 @@ pattern, what it may load and what it may call ([section 5](#5-security-model)).
 | Class | Label pattern | Created by | Loads | Notes |
 |---|---|---|---|---|
 | main | `ow-main` | the plugin, at setup | app asset `plugins.overwolf.main.url` | Hidden. Never shown, never focused. One per app. |
-| ui | `bw-<id>` | `new BrowserWindow(...)` with a local URL or file | app assets only (navigation policy, CONTRACT A.2.3.1) | `<id>` is the Electron-style integer `BrowserWindow.id`; window and webview share the label. |
+| ui | `bw-<id>` | `new BrowserWindow(...)` with a local URL or file | app assets; remote documents only as frames, or on macOS and Linux after a script-driven top-level navigation, and then without IPC (navigation policy, CONTRACT A.2.3.1) | `<id>` is the Electron-style integer `BrowserWindow.id`; window and webview share the label. |
 | overlay | reserved | none: `overlay.createWindow` needs a package runtime (CONTRACT H, Appendix P) | | Kept so a future runtime does not change the class table. |
 | remote | webview `bwr-<id>` in window `bw-<id>` | `loadURL('http(s)://...')` on a `BrowserWindow` | any URL | No IPC, no initialization scripts, no capability. Loading a remote URL closes the app webview and creates this fresh child webview in the same window, because Tauri cannot remove initialization scripts from a webview. Never moves back. |
 | adview-guest | `owad-<embedder>-<n>` | the ads host, per `<owadview>` | `https://www.overwolf.com/monsdk/electron/latest/adview.html` | Child webview inside the embedder's window; ads environment; requests shaped (CONTRACT D.8). |
@@ -229,9 +229,13 @@ set that disables background throttling on Windows, disables it through
 Tauri on macOS 14+, and keeps `ow-main` as a 1 x 1 transparent, technically
 visible window on macOS 12 and 13 and on Linux. A scheduled soak test checks
 timer cadence on all three platforms. In release builds `ow-main` cannot
-navigate; a crash relaunches the app (bounded), and every exit path runs one
-quit sequence with `before-quit` and `will-quit`. Details: CONTRACT A.6 and
-[ADR 0009](adr/0009-main-webview-liveness-and-lifecycle.md).
+navigate; a crash relaunches the app (bounded, the crash times kept in
+`ow-tauri.json`), and every exit path runs one quit sequence with
+`before-quit` and `will-quit`. Relaunches start at `RunEvent::Exit`, after
+the app's single-instance plugin has released its lock. On macOS the app
+forwards web-content process terminations of `ow-main` to the plugin,
+because Tauri exposes that hook only on the app's builder. Details: CONTRACT
+A.6 and [ADR 0009](adr/0009-main-webview-liveness-and-lifecycle.md).
 
 ## 4. Data flows
 
@@ -432,11 +436,14 @@ this section is the design.
 3. **No webview observes another.** Rust sends to a webview only through the
    channel that webview subscribed itself; Tauri events are not used
    ([ADR 0010](adr/0010-per-webview-ipc-channels.md)).
-4. **Remote pages never share a webview with app code.** Ads and consent run
-   in their own webviews; their scripts run only in the main frame of their
-   own origin. A `BrowserWindow` that loads a remote URL gets a fresh webview
-   with no initialization scripts, and app webviews cannot navigate away from
-   the app origin (CONTRACT A.2.3.1).
+4. **Remote pages never get app code or IPC.** Ads and consent run in their
+   own webviews; their scripts run only in the main frame of their own
+   origin. A `BrowserWindow` that loads a remote URL gets a fresh webview
+   with no initialization scripts. Every app script is origin-guarded and the
+   UI capability is local-only, so a remote document that does end up in an
+   app webview (an embedded frame, or on macOS and Linux a script-driven
+   top-level navigation the engine cannot tell from a frame) runs no app
+   code and can call no command (CONTRACT A.2.3.1).
 5. **No shell strings, no blind execution.** URLs and paths go through the
    opener plugin; URLs are parsed and limited to `http`, `https` and `mailto`;
    `shell.openPath` is limited to the file scope and refuses executables by
@@ -473,20 +480,23 @@ the plugin grants nothing to a webview unless a capability below names it.
 
 | Class | Capability (who adds it) | Webviews | Permission sets | Origin |
 |---|---|---|---|---|
-| main | `ow-tauri-main` (plugin) | `ow-main` | `overwolf:main`, `core:app:default`, `core:path:default`, `core:window:default`, `core:webview:default`, and the `core:window:allow-*` / `core:webview:allow-*` commands the `BrowserWindow` facade calls (listed in the plugin's `permissions/main.toml`); no `core:event:*` | `local: true` |
+| main | `ow-tauri-main` (plugin) | `ow-main` | `overwolf:main`, `core:app:default`, `core:path:default`, `core:window:default`, `core:webview:default`, and the `core:window:allow-*` / `core:webview:allow-*` commands the `BrowserWindow` facade calls (named in the runtime capability itself, not through a permission set); no `core:event:*` | `local: true` |
 | ui | the app (template in `examples/packages-sample/src-tauri/capabilities/ui.json`) | `bw-*` | `overwolf:renderer`, `core:window:allow-start-dragging` | `local: true` |
 | remote | none | `bwr-*` | none | |
 | adview-guest | `ow-tauri-adview-guest` (plugin) | `owad-*` | `overwolf:adview-guest` (one command: `adview_event`) | `https://www.overwolf.com/monsdk/electron/*` |
 | cmp-startup, cmp-default, cmp | `ow-tauri-cmp` (plugin) | `ow-cmp-startup`, `ow-cmp-default`, `ow-cmp` | `overwolf:cmp-window` (one command: `cmp_event`) | `https://content.overwolf.com/monsdk/electron/*` |
 
 The opener, dialog and global-shortcut plugins are called from Rust only; no
-webview holds their permissions. The plugin registers them in its setup hook
-unless the app already did. `tauri-plugin-single-instance` must be the first
+webview holds their permissions. The plugin registers them unless the app
+already did, from a task its setup hook posts to the event loop (Tauri holds
+its plugin-store lock during setup, so registering inside the hook
+deadlocks). `tauri-plugin-single-instance` must be the first
 plugin an app registers, so the app registers it and forwards to
 `Overwolf::emit_second_instance` (CONTRACT A.5).
 
 Enforcement is defence in depth: every command also checks the caller's
-class and returns `forbidden` when it does not match, so a mis-scoped
+class and returns `forbidden` when it does not match (a `bw-*` caller must be
+a window the plugin created with `window_create`), so a mis-scoped
 capability cannot widen access. The plugin's test suite runs the full matrix
 on Tauri's mock runtime: every command against every class, including a child
 webview inside a `bw-*` window and a remote page in a `bw-*` window.
@@ -553,8 +563,10 @@ scripts are injected by the webview as initialization scripts, not as page
 | Concern | Windows (WebView2) | macOS (WKWebView) | Linux (WebKitGTK) |
 |---|---|---|---|
 | Child webviews (`Window::add_child`) | yes, needs Tauri `unstable` | yes, needs Tauri `unstable` | yes, needs Tauri `unstable` |
-| Main webview liveness (A.6) | shared browser arguments disable background throttling | macOS 14+: `BackgroundThrottlingPolicy::Disabled`; 12 and 13: 1 x 1 transparent visible window | 1 x 1 transparent visible window |
-| Browser arguments (A.1.1) | one set for every webview (WebView2 requires it per data directory) | none | none |
+| Main webview liveness (A.6) | shared browser arguments disable background throttling | macOS 14+: `BackgroundThrottlingPolicy::Disabled`; 12 and 13: 1 x 1 visible window, transparent only with Tauri's `macOSPrivateApi` | 1 x 1 transparent visible window |
+| Main webview crash signal (A.6) | `ProcessFailed` | web-content termination, forwarded by the app (`report_main_webview_crash`) | `web-process-terminated` |
+| Navigation hook (A.2.3.1) | top-level navigations only: external links cancelled and opened in the system browser | also sees frames: external `http(s)` allowed; the bootstrap intercepts top-level link clicks and form submissions | as macOS |
+| Browser arguments (A.1.1) | one set per webview environment (app, ads), because WebView2 requires one set per data directory | none | none |
 | Guest mute | `ICoreWebView2_8::put_IsMuted` | private `_setPageMuted:` guarded by `respondsToSelector:` (risk below) | `webkit_web_view_set_is_muted` |
 | Guest crash detection | `ProcessFailed` | `on_web_content_process_terminate` | `web-process-terminated` |
 | User-initiated popups | `NewWindowRequested.IsUserInitiated` | gesture window only | gesture window only |
@@ -584,9 +596,14 @@ Risks we track:
 
 ```
 crates/tauri-plugin-overwolf/
-  src/        lib.rs, error.rs, config.rs, manifest.rs, identity.rs, state.rs,
-              ipc/, window/, adview/, consent/, analytics/, packages/,
-              updater/, platform/{windows,macos,linux}.rs, build.rs
+  src/        lib.rs, plugin.rs (Builder, setup, run events), ext.rs (Rust API),
+              error.rs, config.rs, manifest.rs, identity.rs, paths.rs,
+              snapshot.rs, capabilities.rs, shell.rs, screen.rs, ...,
+              commands/ (one file per area), host/ (runtime state, main
+              webview, windows), ipc/ (router, reorder buffer, messages),
+              window/, state/ (ow-electron.json, ow-tauri.json, log),
+              ads/, consent/, analytics/, packages/, updater/,
+              platform/{windows,unix}.rs, build.rs
   js/         bootstrap.js, adview-host.js, cmp.js: built from
               packages/ow-tauri/src/{bootstrap,guest}, committed, embedded
               with include_str!, checked for drift in CI

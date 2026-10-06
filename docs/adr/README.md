@@ -16,10 +16,10 @@ is listed in its "Amendments" section.
 | [0006](0006-analytics-labelling.md) | Send ow-electron's analytics, labelled "tauri" through one setting | Accepted (amended) |
 | [0007](0007-state-file-continuity.md) | Share ow-electron's per-app state directory, file encoding and uid | Accepted (amended) |
 | [0008](0008-updater-client.md) | Ship an electron-updater compatible update client | Accepted (amended) |
-| [0009](0009-main-webview-liveness-and-lifecycle.md) | Keep the main webview alive and give it one lifecycle | Accepted |
+| [0009](0009-main-webview-liveness-and-lifecycle.md) | Keep the main webview alive and give it one lifecycle | Accepted (amended) |
 | [0010](0010-per-webview-ipc-channels.md) | Deliver host messages over one IPC channel per webview | Accepted |
 | [0011](0011-remote-guest-ipc.md) | Give each remote guest one scoped, rate-limited command | Accepted (amended) |
-| [0012](0012-js-runtime-singleton.md) | One injected JS runtime per webview, with thin npm facades | Accepted |
+| [0012](0012-js-runtime-singleton.md) | One injected JS runtime per webview, with thin npm facades | Accepted (amended) |
 | [0013](0013-request-shaping-per-os.md) | Shape ad guest requests like ow-electron, per OS | Accepted |
 | [0014](0014-machine-id-parity.md) | Derive the machine id exactly as ow-electron does | Accepted |
 | [0015](0015-startup-consent-window.md) | Run ow-electron's hidden startup consent window on every launch | Accepted (amended) |

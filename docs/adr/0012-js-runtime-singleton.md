@@ -1,6 +1,6 @@
 # ADR 0012: One injected JS runtime per webview, with thin npm facades
 
-- Status: Accepted
+- Status: Accepted (amended 2026-10-06)
 - Date: 2026-10-06
 
 ## Context
@@ -27,7 +27,18 @@ but the Rust CI job and `cargo publish` never run npm.
   any page script. It owns the IPC channel, the sequence counters, the
   listener registries, the `<owadview>` runtime and the `process` shim.
 - The npm entry points are facades: they attach to that object on first use
-  and fail with a clear error when its contract version differs.
+  and fail with a clear error when its versions differ from their own.
+- The facades use the runtime only through one documented, versioned
+  interface, `FacadeKernel`, and are typed against it alone, so the compiler
+  rejects any use of a private kernel member. The runtime global carries
+  `api`, the version of that interface, next to `contract`. A facade attaches
+  only when **both** match; adding an optional member keeps `api`, removing or
+  changing a member or its behaviour increments it. The bootstrap ships with
+  the crate and the facades with npm, so the two are checked separately: the
+  wire contract can stay the same while the facade interface changes, and
+  the other way round.
+- Where no runtime is installed at all (a page outside Tauri, unit tests, a
+  dev page in a browser), the first facade installs one itself.
 - Errors carry a `Symbol.for` brand and the classes implement
   `Symbol.hasInstance`, so `instanceof` works across copies.
 - The bootstrap and the guest shims are TypeScript in
@@ -39,6 +50,8 @@ but the Rust CI job and `cargo publish` never run npm.
 ## Consequences
 
 - One source of truth per webview, however many bundles import the package.
+- A crate and an npm package from different releases fail loudly at first
+  use, naming both versions, instead of misbehaving.
 - `cargo build` works without Node; the committed bundle is reviewable in
   pull requests.
 - Contributors who change bootstrap or guest code must run the build and
@@ -51,3 +64,10 @@ but the Rust CI job and `cargo publish` never run npm.
   come from the app bundle. Rejected.
 - **Build the JS from `build.rs`.** Makes every Rust build depend on Node and
   npm. Rejected.
+
+## Amendments
+
+- 2026-10-06, first implementation: the runtime global carries `api`, the
+  version of the `FacadeKernel` interface the facades are typed against;
+  facades attach only when both `contract` and `api` match, and install a
+  runtime themselves where none exists (CONTRACT B).

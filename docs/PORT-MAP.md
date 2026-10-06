@@ -44,7 +44,7 @@ in place; the note says what and why), **Replaced** (rewritten for Tauri).
 | `__dirname` | webpack `DefinePlugin` `'/browser'`; `loadFile` resolves app-root paths to assets |
 | `fs` | `files` from `ow-tauri/main` (scoped, async; CONTRACT B.1.7) |
 | `child_process.exec('explorer.exe ...')` | `shell.openPath` (opener plugin) |
-| global `process` (`process.argv`, `process.platform` in `index.ts`; `process.versions` in the preload), used without an import | the bootstrap installs a frozen `globalThis.process` shim in `ow-main` and every UI webview before app scripts run (CONTRACT B.2.5); no source change |
+| global `process` (`process.argv`, `process.platform` in `index.ts`; `process.versions` in the preload), used without an import | the bootstrap installs a `globalThis.process` shim in `ow-main` and every UI webview before app scripts run (CONTRACT B.2.5); no source change |
 | `process.env.NODE_ENV` | webpack 5 defines it from `mode` (`optimization.nodeEnv`); no source change |
 | `electron-updater` | `autoUpdater` from `ow-tauri/main` |
 
