@@ -10,8 +10,7 @@
     "windows": [],
     "security": {
       "csp": "default-src 'self'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
-      "dangerousDisableAssetCspModification": ["style-src"],
-      "freezePrototype": true
+      "dangerousDisableAssetCspModification": ["style-src"]
     }
   },
   "bundle": {

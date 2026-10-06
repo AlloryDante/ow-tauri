@@ -103,6 +103,25 @@ export class ExclusiveModeWindowService {
   }
 
   /**
+   * Hides the exclusive mode custom window, if it exists.
+   */
+  public hideExclusiveModeCustomWindow(): void {
+    this._exclusiveWindow?.window.hide();
+  }
+
+  /**
+   * Tells the exclusive mode custom window page (exclusive.ts) whether
+   * exclusive mode was entered or exited, if the window exists.
+   * @param exclusiveMode Whether exclusive mode is now active
+   */
+  public sendExclusiveModeChanged(exclusiveMode: boolean): void {
+    this._exclusiveWindow?.window.webContents.send(
+      'EXCLUSIVE_MODE',
+      exclusiveMode,
+    );
+  }
+
+  /**
    * Exits exclusive mode.
    */
   public exitExclusiveMode(): void {

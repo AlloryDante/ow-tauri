@@ -1,12 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "ui",
-  "description": "The app's BrowserWindow webviews (bw-*): the renderer permission set, plus window dragging and title-bar double-click for frameless windows. Matched by webview label only, so ad guests and remote pages (bwr-*) get nothing.",
+  "description": "The app's BrowserWindow webviews (bw-*): the renderer permission set. Window dragging comes from the plugin's ow-tauri-ui-chrome capability. Matched by webview label only, so ad guests and remote pages (bwr-*) get nothing.",
   "local": true,
   "webviews": ["bw-*"],
-  "permissions": [
-    "overwolf:renderer",
-    "core:window:allow-start-dragging",
-    "core:window:allow-toggle-maximize"
-  ]
+  "permissions": ["overwolf:renderer"]
 }

@@ -235,18 +235,18 @@ export class MainWindowController {
       });
     });
 
-    ipcMain.handle('open-folder', (...args) => {
+    ipcMain.handle('open-folder', async (...args) => {
       try {
         if (!args[1]) {
           return false;
         }
 
         // Opens the folder in the OS file manager without a shell
-        shell.openPath(String(args[1])).then((error) => {
-          if (error) {
-            console.error(`Error: ${error}`);
-          }
-        });
+        const error = await shell.openPath(String(args[1]));
+        if (error) {
+          console.error(`Error: ${error}`);
+          return false;
+        }
         return true;
       } catch {
         return false;

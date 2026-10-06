@@ -14,6 +14,7 @@ dist
 src-tauri/target/
 src-tauri/gen/
 src-tauri/windows/hooks.nsh
+ow-tauri-signed/
 
 
 # Diagnostic reports (https://nodejs.org/api/report.html)

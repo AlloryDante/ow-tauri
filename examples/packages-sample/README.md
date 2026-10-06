@@ -28,11 +28,16 @@ npm run build --workspace ow-tauri
 | `npm run build:start` | `build`, then `tauri dev` |
 | `npm run start-ad` | `tauri dev` with `--test-ad`: test ad inventory (`OW_TAURI_TEST_AD=1` does the same) |
 | `npm run build:dev` | webpack in watch mode |
-| `npm run build:ow-tauri` | `ow-tauri sign` (Overwolf signing, CONTRACT G.4), then `tauri build` (NSIS installer on Windows) |
+| `npm run build:ow-tauri` | loads `.env`, then `ow-tauri sign` (Overwolf signing, CONTRACT G.4) and `tauri build` (NSIS installer on Windows) |
+| `npm run typecheck` | `tsc --noEmit` on the TypeScript app |
+| `npm run check:rust` | `cargo fmt --check` and `cargo clippy -D warnings` on `src-tauri` (its own workspace and `Cargo.lock`) |
 
-`npm run build:ow-tauri` replaces `build:ow-electron`. Signing runs when
-`OW_CLI_EMAIL`, `OW_CLI_API_KEY` and `OW_BUILD_KEY` are set in the
-environment; [.env.example](.env.example) lists every optional variable. On
+`npm run build:ow-tauri` replaces `build:ow-electron` and, like it, loads
+`.env` through `dotenv --override --no-expand` (values in `.env` win over the
+environment). Signing runs when `OW_CLI_EMAIL`, `OW_CLI_API_KEY` and
+`OW_BUILD_KEY` are set; copy [.env.example](.env.example), which lists every
+optional variable, to `.env`. Run `npm run build` first: `ow-tauri sign`
+hashes the built main bundle. On
 Windows, set `OW_TAURI_REMOTE_DEBUGGING_PORT=9222` to attach a debugger to the
 webviews (see [.vscode/launch.json](.vscode/launch.json)).
 
@@ -66,6 +71,13 @@ ow-electron without a package runtime.
 - `electron-updater` is replaced by `autoUpdater` from `ow-tauri/main`, with
   the same properties, methods and events.
 - `crashReporter.start` is a documented no-op; use a Rust crash handler.
+- "Open folder" uses `shell.openPath`, which opens folders inside the
+  `plugins.overwolf.fs.scope` of `src-tauri/tauri.conf.json` only. A capture
+  folder picked elsewhere, or the logs folder (which nothing creates while
+  packages are unavailable), is refused; the button then returns `false` and
+  the reason is logged.
+- The DPI test window loads a remote page, so it has native window
+  decorations instead of the injected drag header: remote pages get no IPC.
 - `app.disableHardwareAcceleration()` (`--test-osr-app-level-disable-gpu`)
   records `--disable-gpu` for the next launch on Windows (Tauri fixes the
   browser arguments before app code runs) and is a no-op elsewhere.

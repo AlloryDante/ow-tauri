@@ -5,9 +5,6 @@ import {
 } from '@overwolf/ow-electron-packages-types';
 import { OverlayHotkeysService } from '../../services/overlay/overlay-hotkeys.service';
 import { ipcMain } from 'electron';
-
-// Name of the custom exclusive mode window (ExclusiveModeWindowService)
-const EXCLUSIVE_WINDOW_NAME = 'exclusiveMode';
 import { OverlayChannels } from '../../../common/channels/channels';
 import { ExclusiveModeWindowService } from '../../services/overlay/exclusive-mode-window.service';
 
@@ -19,7 +16,6 @@ type ExclusiveBehaviorTypes = 'Toggle' | 'AutoRelease';
 export class ExclusiveModeWindowController {
   private _exclusiveModeWindowService: ExclusiveModeWindowService;
   private _hotkeysService: OverlayHotkeysService;
-  private _overlayApi: IOverwolfOverlayApi;
 
   // Exclusive mode hotkey behavior, in this sample, we default to 'Toggle'
   private _exclusiveModeHotkeyBehavior: ExclusiveBehaviorTypes = 'Toggle';
@@ -32,7 +28,6 @@ export class ExclusiveModeWindowController {
       overlayApi,
     );
     this._hotkeysService = hotkeysService;
-    this._overlayApi = overlayApi;
     this.registerIPC();
     this.registerExclusiveModeHotkey();
   }
@@ -70,19 +65,9 @@ export class ExclusiveModeWindowController {
     }
 
     // Tell the custom exclusive mode page (exclusive.ts) about the change
-    this.exclusiveWindow()?.window.webContents.send(
-      'EXCLUSIVE_MODE',
+    this._exclusiveModeWindowService.sendExclusiveModeChanged(
       inputInfo.exclusiveMode === true,
     );
-  }
-
-  /**
-   * The custom exclusive mode window, when it exists.
-   */
-  private exclusiveWindow() {
-    return this._overlayApi
-      .getAllWindows()
-      .find((w) => w.name === EXCLUSIVE_WINDOW_NAME);
   }
 
   /**
@@ -137,7 +122,7 @@ export class ExclusiveModeWindowController {
   private registerIPC(): void {
     // The custom exclusive mode page asks to be hidden after its exit animation
     ipcMain.on('HIDE_EXCLUSIVE', () => {
-      this.exclusiveWindow()?.window.hide();
+      this._exclusiveModeWindowService.hideExclusiveModeCustomWindow();
     });
 
     ipcMain.handle(
