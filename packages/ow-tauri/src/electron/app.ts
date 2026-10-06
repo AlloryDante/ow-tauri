@@ -1,8 +1,8 @@
 /**
  * Electron's `app` (`docs/CONTRACT.md` section B.2.1), main webview only.
  *
- * `app.overwolf` is added by `ow-tauri/main` (section B.1.1) and is not part
- * of this module.
+ * `app.overwolf` is the same object as `ow-tauri/main`'s `overwolf`
+ * (section B.1.1).
  *
  * @packageDocumentation
  */
@@ -10,6 +10,7 @@ import type { FacadeKernel } from '../bootstrap/facade-kernel.js';
 import { EventEmitter, emitFromHost } from '../shared/emitter.js';
 import { OwTauriUnsupportedError } from '../shared/errors.js';
 import type { ElectronPathName, LifecycleMessage } from '../shared/protocol.js';
+import { overwolfOf, type Overwolf } from '../main/overwolf.js';
 import { defineUnsupported } from '../shared/unsupported.js';
 import { windowHooks } from './browser-window.js';
 import { createEvent, kernel } from './runtime.js';
@@ -163,6 +164,7 @@ export class App extends EventEmitter {
   declare readonly dock: undefined;
   readonly #kernel: FacadeKernel;
   readonly #appended: string[] = [];
+  #gpuDisabled = false;
   readonly #paths = new Map<string, string>();
   #name: string | undefined;
   #generation = 0;
@@ -187,12 +189,31 @@ export class App extends EventEmitter {
     };
     k.onReset(() => {
       this.#appended.length = 0;
+      this.#gpuDisabled = false;
       this.#paths.clear();
       this.#name = undefined;
       this.removeAllListeners();
       this.#armReady();
     });
     this.#armReady();
+  }
+
+  /**
+   * The Overwolf API (CONTRACT B.1.1), the same object as `ow-tauri/main`'s
+   * `overwolf`.
+   *
+   * @example
+   * ```ts
+   * import { app } from 'electron'; // aliased to ow-tauri/electron
+   *
+   * app.overwolf.disableAnonymousAnalytics();
+   * await app.whenReady();
+   * console.log(app.overwolf.uid, await app.overwolf.isCMPRequired());
+   * ```
+   */
+  get overwolf(): Overwolf {
+    this.#require('app.overwolf');
+    return overwolfOf(this.#kernel);
   }
 
   /**
@@ -380,12 +401,13 @@ export class App extends EventEmitter {
       this.#require('app.commandLine.appendSwitch');
       this.#appended.push(value === undefined ? `--${name}` : `--${name}=${value}`);
       const why = NEXT_LAUNCH_SWITCHES.has(name)
-        ? 'set plugins.overwolf.webview in tauri.conf.json instead; webviews that already exist keep their browser arguments'
+        ? 'it applies from the next launch (Windows); set plugins.overwolf.webview in tauri.conf.json for the first launch'
         : 'it has no effect on Tauri webviews';
       this.#kernel.warnOnce(
         `appendSwitch:${name}`,
         `app.commandLine.appendSwitch('${name}') is recorded only: ${why}`,
       );
+      this.#recordBrowserArgs();
     },
     appendArgument: (value) => {
       this.#require('app.commandLine.appendArgument');
@@ -396,6 +418,7 @@ export class App extends EventEmitter {
         const entry = this.#appended[i] ?? '';
         if (entry === `--${name}` || entry.startsWith(`--${name}=`)) this.#appended.splice(i, 1);
       }
+      this.#recordBrowserArgs();
     },
   };
 
@@ -407,8 +430,10 @@ export class App extends EventEmitter {
     this.#require('app.disableHardwareAcceleration');
     this.#kernel.warnOnce(
       'disableHardwareAcceleration',
-      'app.disableHardwareAcceleration() cannot change webviews that already exist; set plugins.overwolf.webview.disableGpu',
+      'app.disableHardwareAcceleration() applies from the next launch (Windows); set plugins.overwolf.webview.disableGpu for the first launch',
     );
+    this.#gpuDisabled = true;
+    this.#recordBrowserArgs();
   }
 
   /**
@@ -508,6 +533,17 @@ export class App extends EventEmitter {
       else if (arg.startsWith(`${flag}=`)) value = arg.slice(flag.length + 1);
     }
     return value;
+  }
+
+  /**
+   * Sends the session's browser switches for the next launch (CONTRACT
+   * A.1.1): every `--` switch from `appendSwitch` plus `--disable-gpu` from
+   * `disableHardwareAcceleration()`. The plugin keeps the ones that apply.
+   */
+  #recordBrowserArgs(): void {
+    const args = this.#appended.filter((a) => a.startsWith('--'));
+    if (this.#gpuDisabled && !args.includes('--disable-gpu')) args.push('--disable-gpu');
+    this.#kernel.recordBrowserArgs?.(args);
   }
 
   #string(path: string): string | undefined {
