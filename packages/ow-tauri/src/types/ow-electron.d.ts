@@ -5,7 +5,7 @@
 // `paths['@overwolf/ow-electron']` at this file.
 
 /// <reference types="node" />
-import type { BrowserWindow, Event } from '../electron/index.js';
+import type { App, BrowserWindow, Event } from '../electron/index.js';
 import type { errorMonitor } from 'events';
 
 export {};
@@ -13,10 +13,19 @@ export {};
 declare global {
   namespace overwolf {
     /**
-     * @deprecated Use {@link overwolf.OverwolfApi}; kept for code written
-     * against older ow-electron typings.
+     * Electron's `app` with `overwolf`, as ow-electron declares it
+     * (`interface OverwolfApp extends App`), so `app as overwolf.OverwolfApp`
+     * keeps `getPath`, `name` and the other `app` members.
+     *
+     * @deprecated Prefer `app` from `electron`: `app.overwolf` is typed
+     * directly. Kept for backwards compatibility, as in ow-electron.
      */
-    type OverwolfApp = OverwolfApi;
+    interface OverwolfApp extends Omit<App, 'overwolf'> {
+      /**
+       * Overwolf additional api's
+       */
+      overwolf: OverwolfApi;
+    }
 
     /**
      * The Overwolf APIs, exposed on Electron's `app` object as `app.overwolf`.
