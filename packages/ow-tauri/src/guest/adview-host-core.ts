@@ -41,7 +41,6 @@ export function hostKeyOf(config: Record<string, unknown>): string {
   return typeof key === 'string' && HOST_KEY_PATTERN.test(key) ? key : DEFAULT_HOST_KEY;
 }
 
-
 /** Most `onmessage` handlers kept (D.3). */
 export const MAX_HANDLERS = 16;
 

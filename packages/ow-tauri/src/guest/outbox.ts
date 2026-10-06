@@ -187,9 +187,7 @@ export class Outbox {
  * @param body - what the function does
  * @returns the page-facing function
  */
-export function hostFunction<A extends unknown[], R>(
-  body: (...args: A) => R,
-): (...args: A) => R {
+export function hostFunction<A extends unknown[], R>(body: (...args: A) => R): (...args: A) => R {
   const bound = ((...args: A) => body(...args)).bind(undefined);
   Object.defineProperty(bound, 'name', { value: '' });
   return Object.freeze(bound);
