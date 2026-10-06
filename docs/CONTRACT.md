@@ -54,8 +54,9 @@ design in [Appendix P](#appendix-p-deferred-design-package-runtime-interface)
 - **Labels** (see [ARCHITECTURE section 3.1](ARCHITECTURE.md#31-window-classes)):
   `ow-main`, `bw-<id>` (local UI windows), `bwr-<id>` (a remote page shown in
   window `bw-<id>`), `owad-<embedderLabel>-<n>` (ad guests), `ow-cmp-startup`
-  (the hidden startup consent window, D.6.1) and `ow-cmp` (the consent
-  settings window, D.6.4). App code never sees labels; it sees Electron-style
+  (the hidden startup consent window, D.6.1), `ow-cmp-default` (the hidden
+  default-consent window of the first settings-window call, D.6.4) and
+  `ow-cmp` (the consent settings window, D.6.4). App code never sees labels; it sees Electron-style
   integer ids. Capabilities match webview labels only (ARCHITECTURE
   section 5.2).
 - **Time** values are milliseconds (`u64` in Rust, `number` in JS) unless a
@@ -86,8 +87,9 @@ Each behaviour copied from ow-electron names its source with a tag:
 
 Markers used in the text:
 
-- **Unknown (R2-n)**: not settled yet; harness round 2 item `R2-n`
-  ([PARITY.md](PARITY.md#harness-round-2)) will observe it. The text gives the
+- **Unknown (R2-n)** / **Unknown (R3-n)**: not settled yet; harness item
+  `R2-n` (round 2, still running or needing another OS) or `R3-n` (round 3)
+  ([PARITY.md](PARITY.md#harness-rounds)) will observe it. The text gives the
   interim behaviour.
 - **Interim (OQ-nn)**: an interim behaviour tied to an open question in
   [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md).
@@ -112,7 +114,7 @@ values exactly [DEC].
 
 | Where | ow-electron sends [OBS] | ow-tauri sends |
 |---|---|---|
-| Counter `Name` (E.2) | `electron_app_first_launch`, `electron_app_start`, `electron_app_heartbeat`, `electron_window_closed`, `electron_owadview_crashed` [POC] | `<label>_app_first_launch`, `<label>_app_start`, `<label>_app_heartbeat`, `<label>_window_closed`, `<label>_owadview_crashed` |
+| Counter `Name` (E.2) | `electron_app_first_launch`, `electron_app_start`, `electron_app_heartbeat`, `electron_window_closed`, `electron_owadview_crashed`, `electron_sub_info` | `<label>_app_first_launch`, `<label>_app_start`, `<label>_app_heartbeat`, `<label>_window_closed`, `<label>_owadview_crashed`, `<label>_sub_info` |
 | uninstall Counter from the installer (I.6) [BUILDER] | `ow_electron_app_uninstall` | `ow_<label>_app_uninstall` |
 | Counter `owver` | `42.11.4` | `<owVersion>` (`tauri-2.12.1`) |
 | InsertStats `owver` | `42_11_4` | `<owVersion>` with `.` replaced by `_` (`tauri-2_12_1`) |
@@ -191,11 +193,10 @@ line switches (last wins). Every field is optional.
         "testAd": false,              // true = test inventory (same as --test-ad)
         "requestShaping": true,       // D.8; always on, the switch exists for debugging only
         "owVersionOverride": null,    // string given to the guest owVersion and consent oweVersion (section 0)
-        "legacyHostMessages": false,  // ow-tauri option: window-minimized / window-hidden / consent messages (D.5)
         "macPrivateHeaderApi": false, // ow-tauri option: macOS private header SPI prototype (D.8.3)
         "gestureWindowMs": 1500,      // user-gesture window for guest top-level navigation
-        "maxRecoveries": 10,          // guest reloads after crashes, per element
-        "loadErrorRetryMs": 5000,     // reload delay after a failed guest load
+        "maxRecoveries": null,        // null = no cap, as ow-electron (D.7); a number is an ow-tauri option
+        "loadErrorRetryMs": 5000,     // reload interval after a failed main-frame load (D.7)
         "guestLimits": {              // per guest webview (D.4)
           "eventsPerSecond": 50, "eventBurst": 100,
           "bytesPerSecond": 262144,
@@ -210,7 +211,7 @@ line switches (last wins). Every field is optional.
       },
       "consent": {
         "cmpUrl": null,               // settings window page override; any https URL (D.6.4)
-        "readyTimeoutMs": 30000,      // consent windows are closed after this if still open (D.6)
+        "readyTimeoutMs": 30000,      // the hidden consent windows are closed after this if still open (D.6.1, D.6.4)
         "hostCookieFallback": "auto"  // "auto" | "never" (D.6.3)
       },
       "emailHashes": { "encoding": "hex" },   // "hex" (parity) | "base64" (ow-tauri option, OQ-10)
@@ -239,8 +240,10 @@ line switches (last wins). Every field is optional.
 
 Removed by the parity revision, and rejected with a build warning when
 present: `analytics.hostFields` (ow-electron sends no host fields),
-`ads.experimentalElementApi` (D.2, OQ-32), `ads.exposeEmailHashesToGuest`
-(OQ-11), `consent.gateAdsOnConsent` (replaced by the sequencing in D.6.5),
+`ads.experimentalElementApi` (the element members are now always defined,
+B.3.3, OQ-32), `ads.exposeEmailHashesToGuest` (OQ-11),
+`ads.legacyHostMessages` (the observed messages are always sent, D.5),
+`consent.gateAdsOnConsent` (replaced by the sequencing in D.6.5),
 `consent.cmpRequired` (replaced by the observed source in D.6.2), and the
 `packagesBackend` values `auto` and `simulated` (H).
 
@@ -279,7 +282,7 @@ ow-tauri therefore uses **two** webview environments:
 | Environment | Webviews | Data store | Windows browser arguments |
 |---|---|---|---|
 | app | `ow-main`, `bw-*`, `bwr-*` | Windows: user data folder `<appData>/<PN>/EBWebView` (the app's userData directory, F.1); macOS: the default `WKWebsiteDataStore`; Linux: the default WebKitGTK context | the app set below |
-| ads | `owad-*`, `ow-cmp-startup`, `ow-cmp` | the **ads data store** (D.8.1): Windows: user data folder `<appData>/<PN>/EBWebView-ow`; macOS: the default `WKWebsiteDataStore` (shared with the app environment, as ow-electron's guests share the default session [OBS]); Linux: the default WebKitGTK context | the app set plus `--disable-web-security --allow-running-insecure-content` |
+| ads | `owad-*`, `ow-cmp-startup`, `ow-cmp-default`, `ow-cmp` | the **ads data store** (D.8.1): Windows: user data folder `<appData>/<PN>/EBWebView-ow`; macOS: the default `WKWebsiteDataStore` (shared with the app environment, as ow-electron's guests share the default session [OBS]); Linux: the default WebKitGTK context | the app set plus `--disable-web-security --allow-running-insecure-content` |
 
 The app set is computed once at setup, from `webview.*`, the environment and
 the command line:
@@ -353,30 +356,33 @@ interface HostSnapshot {
 | Command | Arguments | Returns | Errors | Mirrors |
 |---|---|---|---|---|
 | `disable_anonymous_analytics` | none | `void` | none | `app.overwolf.disableAnonymousAnalytics()`. Before `main_ready`: the session sends only the mandatory set (E.3). After: applies to later events and logs a warning. Per session; not persisted. Guest `settings.anonymous` stays `false` [OBS]. |
-| `disable_ads_optimization` | none | `void` | none | `disableAdsOptimization()`. Sets `settings.disableOptimization: true` for guests mounted afterwards and delivers nothing to running guests. Per session. |
-| `disable_ads_fpd` | none | `void` | none | `disableAdsFPD()`. Clears stored hashes. Per session. |
-| `is_cmp_required` | none | `boolean` | none (never fails) | `isCMPRequired()`, D.6.2: awaits the one `cmp-eu-only` request of this launch; any failure or timeout resolves `true` [TYPES]. |
-| `open_cmp_window` | `{ options?: CmpWindowOptions }` | `void` | `invalid-argument` (`cmpURL` is not an `https:` URL), `io` | `openCMPWindow(options)`, deprecated upstream and kept as an alias of `open_ad_privacy_settings_window` [DOC]. |
-| `open_ad_privacy_settings_window` | `{ options?: CmpWindowOptions }` | `void` | `invalid-argument`, `io` | `openAdPrivacySettingsWindow(options)`: the consent settings window (D.6.4). **Interim (OQ-26), Unknown (R2-6):** resolves when the window closes, including the `consent.readyTimeoutMs` close. If one is open it is focused and the call resolves when it closes. |
-| `set_user_email_hashes` | `{ hashes?: EmailHashes \| null }` | `void` | none | `setUserEmailHashes()`. `null`, absent, or all fields empty clears. Ignored (with a warning) after `disable_ads_fpd`. Stored for the session; not delivered to guests until R2-2 shows how ow-electron delivers them (OQ-11). |
-| `set_external_payment_user_id` | `{ options: ExternalPaymentUserIdOptions }` | `void` | `invalid-argument` (missing `userId`), `not-ready` (before `main_ready`, message exactly `ow-electron is not ready yet!`) | `setExternalPaymentUserId()`. **Unknown (R2-3), OQ-12:** validated and stored for the session; no request is sent until the harness records ow-electron's. Never rejects because of reporting. |
+| `disable_ads_optimization` | none | `void` | none | `disableAdsOptimization()`. Sends nothing to guests and leaves running guests' `settings` unchanged [OBS]; sets `__settings__.adsOptimization` to `{ anonymous: true, disable: true }` (B.1.1) [OBS]. Guests mounted afterwards get `settings.disableOptimization: true` [INF; **Unknown (R3-7)**]. Per session. |
+| `disable_ads_fpd` | none | `void` | none | `disableAdsFPD()`. Sends nothing to guests; sets `__settings__.adsOptimization` as above [OBS]. Clears stored hashes; later hashes are not sent [DEC; **Unknown (R3-3)**]. Per session. |
+| `is_cmp_required` | none | `boolean` | none (never fails) | `isCMPRequired()`, D.6.2: awaits this launch's `cmp-eu-only` request and the startup consent page's load; no timeout [OBS]; always `true` for every response ow-electron was given [OBS]. |
+| `open_cmp_window` | `{ options?: CmpWindowOptions }` | `void` | `invalid-argument` (`cmpURL` is not an `https:` URL), `io` | `openCMPWindow(options)`, deprecated upstream; identical to `open_ad_privacy_settings_window` [DOC] [OBS]. |
+| `open_ad_privacy_settings_window` | `{ options?: CmpWindowOptions }` | `void` | `invalid-argument`, `io` | `openAdPrivacySettingsWindow(options)`: the consent settings window (D.6.4). Resolves once the window has been created, not when it closes [OBS]. If one is open it is focused and the call resolves at once [OBS]. The first call of a launch also opens the default-consent window (D.6.4) [OBS]. |
+| `set_user_email_hashes` | `{ hashes?: EmailHashes \| null }` | `void` | none | `setUserEmailHashes()`. Sends an `eHashes` host message with the hashes to every existing ad guest (D.5) [OBS]; no request, no file [OBS]; not replayed to guests that load later [OBS]. `null`, absent, or all fields empty sends nothing [DEC]. Ignored (with a warning) after `disable_ads_fpd` [DEC]. `ow-tauri/main` also calls it, fire-and-forget, with the result of every `generateUserEmailHashes()` (B.1.1) [OBS]. |
+| `set_external_payment_user_id` | `{ options: ExternalPaymentUserIdOptions }` | `void` | `invalid-argument` (no `userId`; `data.message` exactly `providerName and userId are mandatory`), `not-ready` (before `main_ready`, message exactly `ow-electron is not ready yet!`) | `setExternalPaymentUserId()`: sends the Counter `<label>_sub_info` (E.2 #10) and resolves after the HTTP response, or after it fails: reporting never rejects [OBS] [TYPES]. |
 | `analytics_set_user_enabled` | `{ enabled: boolean }` | `void` | `unsupported` unless `analytics.userSwitch` | **ow-tauri option**, off by default and stricter than ow-electron: off sends nothing at all, including the mandatory set. Persisted in `ow-tauri.json`. |
 
-`CmpWindowOptions` is the ow-electron type: `{ tab?: 'purposes'|'features'|'vendors'; modal?: boolean; parentId?: number; center?: boolean; backgroundColor?: string; preLoaderSpinnerColor?: string; width?: number; height?: number; x?: number; y?: number; cmpURL?: string; language?: string }`. On the wire `parent` (a `BrowserWindow`) is replaced by its integer `parentId`. **Interim, Unknown (R2-6):** 800 x 800, centred, `modal` default `false` (the typings say `false`, Overwolf's consent page documentation says `true`), `language` from the app locale when it is one of `en, de, pt, es, fr, it, pl` [DOC], else `en`. `modal: true` makes the window owned by the parent and keeps it on top of it; true input modality is Windows-only.
+`CmpWindowOptions` is the ow-electron type: `{ tab?: 'purposes'|'features'|'vendors'; modal?: boolean; parentId?: number; center?: boolean; backgroundColor?: string; preLoaderSpinnerColor?: string; width?: number; height?: number; x?: number; y?: number; cmpURL?: string; language?: string }`. On the wire `parent` (a `BrowserWindow`) is replaced by its integer `parentId`. Defaults [OBS]: 800 x 800, centred, background `#0D0D0D`, `tab` `purposes`, `language` `en`; ow-electron honoured `x`, `y`, `width`, `height`, `backgroundColor`, `tab` and `language`, and opened the window without a parent and not modal by default (the typings say `modal` defaults to `false`; Overwolf's consent page documentation says `true`). ow-tauri also applies `preLoaderSpinnerColor` to the preloader, and `modal: true` with `parentId` makes the window owned by the parent and keeps it on top of it (true input modality is Windows-only) [DEC].
 
-`EmailHashes` is `{ sha1?: string; sha256?: string; md5?: string }` [TYPES]
-(Overwolf's user-identity page writes the keys in upper case; R2-2 confirms
-the casing ow-electron returns).
-`ExternalPaymentUserIdOptions` is `{ providerName: string; userId: string; paymentId?: string }` with `providerName` defaulting to `'tebex'` when empty, as the typings document.
+`EmailHashes` is `{ sha1?: string; sha256?: string; md5?: string }` [TYPES].
+ow-electron returns lower-case keys in the order `sha1`, `md5`, `sha256`
+[OBS] (Overwolf's user-identity page writes them in upper case).
+`ExternalPaymentUserIdOptions` is `{ providerName: string; userId: string; paymentId?: string }`. When `providerName` is absent it defaults to `'tebex'`, appended after the other options [OBS]; an empty string is treated as absent [INF].
 
 Email hash generation is a pure function implemented identically in Rust
 (`identity::email_hashes`) and in `ow-tauri/main` (synchronous, see B.1.1),
 checked against the shared test vectors in
 `crates/tauri-plugin-overwolf/tests/fixtures/email-hashes.json`. Normalisation
-follows the UID2 rules the typings link to: trim, lower-case, and for
-`gmail.com` addresses remove `.` and any `+suffix` from the local part. The
-output is lower-case hex [DOC]: Overwolf's user-identity page gives, for
-`test.email@overwolf.com`:
+trims and lower-cases the input [OBS] (`'  Test.Email@Overwolf.COM  '` hashes
+like `test.email@overwolf.com`); an input that is not an email address is
+hashed all the same [OBS]. The UID2 rule the typings link to also removes `.`
+and any `+suffix` from `gmail.com` local parts [DOC]; ow-tauri applies it
+[DEC; **Unknown (R3-6)** whether ow-electron does]. The output is lower-case
+hex [OBS] [DOC]: for `test.email@overwolf.com` ow-electron and Overwolf's
+user-identity page give:
 
 | Hash | Value |
 |---|---|
@@ -500,8 +506,8 @@ the deferred design are listed in Appendix P.7.
 |---|---|---|---|---|
 | `packages_snapshot` | none | `PackagesSnapshot` | none | refresh of the cached state |
 | `packages_relaunch` | none | `void` | none | `packages.relaunch()`: no effect while no package is loaded [DEC] |
-| `packages_set_channel` | `{ name: string; channel?: string \| null }` | never resolves successfully | `not-found` with `data.message` `setChannel - package '<name>' is not registered in this app` [INF by analogy with `getAvailableChannels`; R2-15] | `packages.setChannel(name, channel, ready?)` |
-| `packages_get_available_channels` | `{ names: string[] }` | never resolves successfully | `not-found` with `data.message` `getAvailableChannels - package '<first name>' is not registered in this app` [OBS], also for a listed name | `getAvailableChannels(...names)`. With no names: **Unknown (R2-15)**; interim resolves `{}` [DEC] |
+| `packages_set_channel` | `{ name: string; channel?: string \| null }` | never resolves successfully | `not-found` with `data.message` `setChannel - package '<name>' is not registered in this app` [OBS] | `packages.setChannel(name, channel, ready?)` |
+| `packages_get_available_channels` | `{ names: string[] }` | never resolves successfully | `not-found` with `data.message` `getAvailableChannels - package '<first name>' is not registered in this app` [OBS], also for a listed name | `getAvailableChannels(...names)`. With no names: **Unknown (R3-9)**; interim resolves `{}` [DEC] |
 | `packages_get_channel` | `{ names: string[] }` | `{}` | none | `getChannel(...names)` returns `{}` for any arguments [OBS] |
 
 ```ts
@@ -530,7 +536,7 @@ exactly ow-electron's error text.
 | `adview_mount` | `AdviewMount` | `{ guestLabel: string }` | `invalid-argument`, `io` | Creates the guest for one `<owadview>` (B.3, D). Never waits for consent; the guest's first navigation is sequenced by D.6.5. Counts InsertStats Kind 400025 (E.2). |
 | `adview_update` | `{ elementId: string; rect?: AdviewRect; visible?: boolean; attributes?: Partial<AdviewAttributes> }` | `void` | `not-found` | Moves, resizes, shows or hides the guest; attribute changes per B.3.4. |
 | `adview_unmount` | `{ elementId: string }` | `void` | none (idempotent) | Closes the guest. |
-| `adview_command` | `{ elementId: string; command: 'setAudioMuted' \| 'reload'; args: unknown[] }` | `void` | `not-found` | Element methods (B.3.3). |
+| `adview_command` | `{ elementId: string; command: 'setAudioMuted' \| 'reload' \| 'setPageUrl' \| 'sendCommand'; args: unknown[] }` | `void` | `not-found` | Element methods (B.3.3). |
 
 ```ts
 interface AdviewMount {
@@ -546,6 +552,7 @@ interface AdviewAttributes {
   customTracking: unknown;      // parsed JSON object, or null
   performance: boolean;
   unit: string | null;
+  pageurl: string;              // "" when absent (D.2 pageUrl)
 }
 interface AdviewRect { x: number; y: number; width: number; height: number; devicePixelRatio: number }
 ```
@@ -566,7 +573,7 @@ webview's own position in the window.
 
 | Command | Arguments | Returns | Behaviour |
 |---|---|---|---|
-| `cmp_event` | `{ name: 'ready' \| 'saveConsent' \| 'saveUnifiedConsent' \| 'enableAdOptimization' \| 'close'; data?: { consent?: string; enabled?: boolean } }` | `void` | Consent page to host, from the startup consent window (`ow-cmp-startup`) or the settings window (`ow-cmp`), D.6. Consent strings must be printable ASCII (0x21 to 0x7E) and at most 16 KiB. Calls from a page outside `https://content.overwolf.com/monsdk/electron/` are refused (D.6.4). |
+| `cmp_event` | `{ name: 'ready' \| 'saveConsent' \| 'saveUnifiedConsent' \| 'enableAdOptimization' \| 'close'; data?: { consent?: string; enabled?: boolean } }` | `void` | Consent page to host, from the startup consent window (`ow-cmp-startup`), the default-consent window (`ow-cmp-default`) or the settings window (`ow-cmp`), D.6. Consent strings must be printable ASCII (0x21 to 0x7E) and at most 16 KiB. Calls from a page outside `https://content.overwolf.com/monsdk/electron/` are refused (D.6.4). |
 
 #### A.2.8 Updater (`overwolf:main`)
 
@@ -818,14 +825,14 @@ Every member of the ow-electron 42.11.4 typings, with the same signature.
 | `openCMPWindow` | `(options?: CMPWindowOptions): Promise<void>` | supported | `open_cmp_window` (deprecated upstream) |
 | `openAdPrivacySettingsWindow` | `(options?: CMPWindowOptions): Promise<void>` | supported | `open_ad_privacy_settings_window` |
 | `packages` | `overwolf.packages.OverwolfPackageManager` | supported | B.1.3 |
-| `generateUserEmailHashes` | `(email: string): EmailHashes` (**sync**) | supported | computed in JS (pure TypeScript md5, sha1, sha256); empty or whitespace email returns `{}` |
+| `generateUserEmailHashes` | `(email: string): EmailHashes` (**sync**) | supported | computed in JS (pure TypeScript md5, sha1, sha256), keys in the order `sha1`, `md5`, `sha256` [OBS]; then a fire-and-forget `set_user_email_hashes` with the result, because ow-electron sends guests an `eHashes` message after this call too [OBS]. Empty or whitespace email returns `{}` and sends nothing [DEC] |
 | `setUserEmailHashes` | `(emailHashes?: EmailHashes): void` | supported | `set_user_email_hashes` |
-| `setExternalPaymentUserId` | `(options: ExternalPaymentUserIdOptions): Promise<void>` | partial | validation and pre-ready rejection exact; no report sent until R2-3 (OQ-12) |
+| `setExternalPaymentUserId` | `(options: ExternalPaymentUserIdOptions): Promise<void>` | supported | `set_external_payment_user_id`; a missing `userId` gives a rejected promise (never a synchronous throw) with `Error('providerName and userId are mandatory')` [OBS] |
 | `phasePercent` | `readonly number` | supported | cache `identity.phasePercent` (E.4) |
 | `utmParams` | `readonly any` | supported | cache `utmParams`; `undefined` (not `null`) when `ow-electron.json` has none [OBS] (F.2) |
 | `muid` | `readonly string` | supported | cache `identity.muid` (E.4) |
 | `uid` | `readonly string` | supported | cache `identity.uid` (G.2) |
-| `__settings__` | `readonly object` (not in the typings) | supported | a deep-frozen constant, copied from ow-electron [OBS]: `src` = `https://www.overwolf.com/monsdk/electron/latest/adview.html`, `forceSandboxMode` = `false`, `adsSetting` = `{ gvlUrlV1: 'https://content.overwolf.com/cmp', gvlUrl: 'https://content.overwolf.com/cmp/v3', cmpFeatureUrl: 'https://features.overwolf.com/experiments/cmp-eu-only', cmpUrl: 'https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/ow-cmp-v2.html', cmpSettingUrl: 'https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/cmp.html' }`, `logger` = `{ enabled: false }` |
+| `__settings__` | `readonly object` (not in the typings) | supported | a deep-frozen constant, copied from ow-electron [OBS]: `src` = `https://www.overwolf.com/monsdk/electron/latest/adview.html`, `forceSandboxMode` = `false`, `adsSetting` = `{ gvlUrlV1: 'https://content.overwolf.com/cmp', gvlUrl: 'https://content.overwolf.com/cmp/v3', cmpFeatureUrl: 'https://features.overwolf.com/experiments/cmp-eu-only', cmpUrl: 'https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/ow-cmp-v2.html', cmpSettingUrl: 'https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/cmp.html' }`, `logger` = `{ enabled: false }`, `adsOptimization` = `{ anonymous: true }`, which becomes `{ anonymous: true, disable: true }` after `disableAdsOptimization()` or `disableAdsFPD()` [OBS]. Frozen except for that one change |
 
 `process.env.OVERWOLF_APP_UID` equals the uid when the main module loads in
 ow-electron [OBS]. ow-tauri sets it on the `process.env` shim before any app
@@ -866,14 +873,14 @@ ow-electron 42.11.4 does on a host where packages are not available (macOS,
 | Member | Signature | Behaviour |
 |---|---|---|
 | `on('loading' \| 'ready' \| 'failed-to-initialize' \| 'crashed' \| 'package-update-pending' \| 'updated')` | upstream signatures; `failed-to-initialize` is `(event, packageName)` [TYPES] | accepted; **never emitted** [OBS] |
-| `relaunch` | `(): void` | no effect [DEC] |
+| `relaunch` | `(): void` | no effect; returns `undefined` [OBS] |
 | `hasPendingUpdates` | `(): PendingUpdatesResult` (**sync**) | `{ hasPendingUpdate: false, details: [] }` [OBS] |
-| `setChannel` | `(name, channel?, ready?): Promise<SetChannelResult>` | rejects `Error("setChannel - package '<name>' is not registered in this app")` [INF; R2-15] |
-| `getAvailableChannels` | `(...names): Promise<AvailableChannelsResult>` | rejects `Error("getAvailableChannels - package '<name>' is not registered in this app")` with the first name, also for a listed name [OBS]. Returned as a rejected promise, not a synchronous throw [DEC; R2-15]. No names: resolves `{}` [DEC; R2-15] |
+| `setChannel` | `(name, channel?, ready?): Promise<SetChannelResult>` | rejects asynchronously with `Error("setChannel - package '<name>' is not registered in this app")` [OBS] |
+| `getAvailableChannels` | `(...names): Promise<AvailableChannelsResult>` | rejects asynchronously (a rejected promise, never a synchronous throw) with `Error("getAvailableChannels - package '<name>' is not registered in this app")` and the first name, also for a listed name [OBS]. No names: resolves `{}` [DEC; **Unknown (R3-9)**] |
 | `getChannel` | `(...names): Promise<CurrentChannelsResult>` | resolves `{}` [OBS] |
 | `logsFolderPath` | `readonly string` | the literal ow-electron string (F.4) [OBS] |
 | `phasePercent` | `readonly number` | E.4 |
-| `gep`, `overlay`, `recorder`, `utility`, `crn` | package objects | `undefined` [INF; R2-15] |
+| `gep`, `overlay`, `recorder`, `utility`, `crn` | package objects | `undefined` [OBS] |
 
 The rejections are plain `Error`s with exactly these messages, not
 `OwTauriError`s, so code that matches ow-electron's text keeps working.
@@ -1116,18 +1123,18 @@ through `createElement`.
 
 HTML lower-cases attribute names, so `setAttribute('customTracking', ...)`
 stores `customtracking`. The runtime reads and observes the lower-case names
-only: `cid`, `slotsize`, `adstyle`, `customtracking`, `performance` and
-`unit`.
+only: `cid`, `slotsize`, `adstyle`, `customtracking`, `performance`, `unit`
+and `pageurl`.
 
 | Attribute (as written / as stored) | Meaning | Change after mount |
 |---|---|---|
 | `cid` | container id reported with the ad; trimmed to 20 characters [DOC] | remount |
 | `slotsize` | requested inventory `"WxH"`; Overwolf documents `400x300`, `400x600`, `300x250`, `160x600`, `728x90`, `970x90`, `400x60` with fallbacks [DOC], and all seven load and fill in ow-electron [OBS]; the host enforces no size and passes other values through | remount |
 | `adstyle` | `"high-impact-ad;"` and other style tokens; passed through | remount |
-| `customTracking` / `customtracking` (also the `customTracking` property) | JSON string; invalid JSON clears it silently; an update replaces it; the last value survives guest reloads and crash recovery [DOC] | delivered live (`{ type: 'customTracking' }`, D.5), no remount |
+| `customTracking` / `customtracking` (also the `customTracking` property) | JSON string; invalid JSON clears it silently; an update replaces it; the last value survives guest reloads and crash recovery [DOC] | delivered live (`{ type: 'customTracking' }`, D.5) and again after every later guest reload [OBS]; no remount. The guest's `__overwolf__.customTracking` keeps the attach-time value [OBS] |
 | `performance` (boolean) | performance ad (B.3.4); at most one per window, a second is ignored with a warning [DEC from DOC] | remount |
 | `unit` | ad unit override (the sample shows it commented out on its performance ad) | remount |
-| `pageurl` | not read: the guest's `pageUrl` is always `""` in ow-electron [OBS] | none |
+| `pageurl` | the guest's `__overwolf__.pageUrl` (D.2), read at mount [OBS] | applies at the next guest load [DEC; **Unknown (R3-2)**] |
 | `id` | ordinary DOM id; not used by the runtime | none |
 
 Any other attribute is ignored.
@@ -1138,14 +1145,21 @@ Any other attribute is ignored.
 |---|---|
 | `customTracking: string` | getter returns the `customtracking` attribute; setter sets it (same as `setAttribute`) [DOC] |
 | `setAudioMuted(muted: boolean): void` | `adview_command setAudioMuted`; guests start muted [DOC] |
-| `reload(): void` | reloads the guest (counts against `ads.maxRecoveries`) |
+| `reload(): void` | reloads the guest |
+| `pageUrl: string` | getter returns the `pageurl` attribute (`""` when absent); setter sets it [OBS: an own property after attach] |
+| `setPageUrl(url: string): void` | sets the `pageurl` attribute; the value reaches the guest at its next load [OBS: present; behaviour **Unknown (R3-2)**, interim DEC] |
+| `sendCommand(...args): void` | `adview_command sendCommand`; logged once at debug level, no other effect [OBS: present; behaviour **Unknown (R3-2)**, interim DEC] |
 
-`setPageUrl()` and `sendCommand()` are not defined: they are absent from
-Overwolf's documentation, the typings and the element in ow-electron
-[OBS]. ow-tauri defines its members on each element instance and adds nothing
-to any prototype; ow-electron's element prototype is the plain
-`HTMLElement.prototype` [OBS]. **R2-4** rechecks the element's own
-properties after attach.
+After attach, ow-electron upgrades the element: its prototype becomes an
+`OwAdViewElement` class carrying Electron's `<webview>` methods
+(`getWebContentsId`, `getURL`, `executeJavaScript`, `send`, ...) plus
+`setPageUrl` and `sendCommand`, and the instance gets own properties (`src`,
+`cid`, `slotsize`, `pageUrl`, `performance`, `unit`, `adstyle`,
+`customTracking`, `contentWindow`, ...) [OBS]. Before attach it is a plain
+`HTMLElement` [OBS]. ow-tauri defines the members above on each element
+instance and changes no prototype. Electron's generic `<webview>` methods are
+not provided: Overwolf does not document them for `<owadview>`, and several
+would give app code control over remote ad content [DEC].
 
 #### B.3.4 Lifecycle and geometry
 
@@ -1175,10 +1189,22 @@ when all hold: the embedder window is shown and not minimized;
 (polled every 500 ms, because ancestor style changes do not fire observers);
 `document.visibilityState === 'visible'`. A hidden guest is hidden, not
 destroyed. For a `performance` element the box conditions do not apply. The
-guest's own `document.visibilityState` stays `visible`, and `hasFocus()` is
-`false` while the embedder is unfocused [OBS]. **Unknown (R2-12):** the exact
-thresholds for scrolled-out and `display: none` elements; calibrated then
-(OQ-27).
+guest's own `document.visibilityState` stayed `visible` in a never-shown
+embedder [OBS], so the page also judges visibility by other means; ow-tauri
+reports a never-shown embedder as hidden [DEC], which fills no ad either way.
+`hasFocus()` is `false` while the embedder is unfocused [OBS].
+
+ow-electron signals the guest `hidden` when the element is `display: none`,
+when it is scrolled out of the viewport, and when the embedder window is
+hidden (plus a `window-hidden` message, D.5); a resize signals nothing, and
+the window's position on the screen plays no part (an off-screen window
+still fills test ads) [OBS]. About 2 s after `hidden` the ad page stops and
+calls `__overwolf__.reload()`; the host reloads the guest 3 to 5 s after
+`hidden`, and the reloaded page waits until it is `visible` again [OBS].
+ow-tauri passes its visibility result to the guest the same way (D.5) and
+lets the page drive the reload. The intersection threshold for a partly
+visible element was not measured; the 0.5 ratio above is [DEC]. Minimize and
+restore were not observed: **Unknown (R3-1)** (OQ-27).
 
 Native child webviews always paint above the page. Any HTML that must cover an
 ad (menus, modals) needs the app to hide the element; the runtime does that
@@ -1239,7 +1265,15 @@ Host lifecycle events (`source: 'host'`) dispatched the same way [OBS]:
 | `dom-ready` | the guest document's `DOMContentLoaded` | none |
 | `did-finish-load` | the guest main frame finished loading | none |
 | `did-fail-load` | a load failed: main frame on every platform; sub-frames where the platform reports them (WebView2 `FrameNavigationCompleted`). ow-electron fires it for sub-frames too (`isMainFrame: false`, `errorCode: -3`) [OBS] | `errorCode`, `errorDescription`, `validatedURL`, `isMainFrame`, `frameProcessId`, `frameRoutingId`; the two frame ids are `0` where the platform has none [DEC] |
+| `render-process-gone` | the guest crashed (D.7); ow-electron sends no `crashed` event [OBS] | `details` (`{ reason, exitCode }`) |
+| `did-start-navigation`, `load-commit` | the guest started or committed a navigation, where the platform reports it | Electron's documented `<webview>` properties where available [DEC] |
+| `console-message` | a console call in the guest's main frame, reported by the shim | Electron's documented `<webview>` properties [DEC] |
 | `ad-clicked` | a popup or gesture navigation opened the system browser (D.7) | `url` |
+
+ow-electron forwards all of Electron's standard `<webview>` events to the
+element, including `did-frame-*` and `media-*` events and focus changes
+[OBS]. ow-tauri emits the rows above; the others have no platform
+equivalent and are not emitted (a known gap) [DEC].
 
 The host `ad-clicked` is dispatched only if no guest-originated click
 spelling was dispatched for that element in the previous 1000 ms, so one
@@ -1543,19 +1577,21 @@ an empty value is `""` [OBS].
 | 24 | `settings` | object | `{ disableOptimization: boolean, anonymous: false }`: `disableOptimization` is `true` when `disableAdsOptimization()` was called or the manifest's `build.overwolf.disableAdOptimization` is `true`; `anonymous` stays `false` even after `disableAnonymousAnalytics()` [OBS] |
 | 25 | `muidV2` | string | `<muidV2>` (E.4) |
 | 26 | `phasePercent` | number | E.4 |
-| 27 | `pageUrl` | string | `""`, always [OBS] |
+| 27 | `pageUrl` | string | element `pageurl` at mount, or `""` [OBS] |
 | 28 | `performanceAd` | boolean | element has `performance` |
 | 29 | `adStyle` | string | element `adstyle`, or `""` |
 | 30 | `unit` | string | element `unit`, or `""`; in test mode a non-empty value becomes `"testAd"` (below) |
-| 31 | `customTracking` | object or null | parsed element `customTracking`; `null` when unset [INF] |
+| 31 | `customTracking` | object or null | parsed element `customTracking` at mount, kept across reloads (the live value arrives as a message, D.5) [OBS]; `null` when unset [INF] |
 
 Keys that earlier drafts had and ow-electron does not expose: `runTimeInfo`
-and `emailHashes` (until R2-2 shows otherwise, OQ-11).
+and `emailHashes`. Email hashes reach the page only as `eHashes` messages
+(D.5) [OBS].
 
-**Test-mode `unit` guard [DEC].** The rewrite of a non-empty `unit` to
-`"testAd"` in test mode was not observed in ow-electron (**R2-13**). ow-tauri
-keeps it as a safety guard, so a test build can never request a live
-performance ad.
+**Test-mode `unit` guard [DEC], a known deviation.** ow-electron passes `unit`
+through unchanged in test mode [OBS]. ow-tauri rewrites a non-empty `unit` to
+`"testAd"` in test mode as a safety guard, so a test build can never request
+a live performance ad. It is listed as a deviation in
+[PARITY.md](PARITY.md#deviations).
 
 **`systemInfo`** (`getSystemInformation()` returns a copy of the same object).
 Shape observed on macOS [OBS]:
@@ -1582,9 +1618,9 @@ policy covers this data ("device type, operating system, graphics card")
 |---|---|
 | `setMute(muted)` | `adview_event '__host:setMute' { muted }`; Rust mutes or unmutes the guest |
 | `triggerEvent(name, ...args)` | `adview_event name` with `data` = the single argument, or the argument array when there are several; `message` and `messageerror` are dropped |
-| `applySetting(setting)` | `adview_event '__host:applySetting'`; recorded only (ow-tauri implements no setting-driven behaviour, and never scans user data) |
+| `applySetting(setting)` | `adview_event '__host:applySetting'`; recorded only (ow-tauri implements no setting-driven behaviour, and never scans user data). The ad page calls it with `{ enableHashes: true }` on every load [OBS] |
 | `crash()` | `adview_event '__host:crash'`; Rust treats it as a crash for recovery purposes |
-| `reload()` | `adview_event '__host:reload'`, then `location.reload()` |
+| `reload()` | `adview_event '__host:reload'`; Rust reloads the guest, as ow-electron's host does about 70 ms after the request [OBS]. The ad page calls it itself after a `hidden` signal (B.3.4) |
 | `getSystemInformation()` | a copy of `systemInfo` [OBS] |
 | `getCustomTracking()` | a copy of the current `customTracking` [OBS] |
 | `hasWindowFocus()` | the embedder window's current focus, as a boolean [OBS]; Rust keeps the shim's copy current with `__owTauriHost.setEmbedderFocus(<bool>)` (D.5), which never reaches `onmessage` handlers |
@@ -1626,35 +1662,54 @@ Every other name is forwarded to the embedder as an `adview-event` host message
 Rust calls `webview.eval("window.__owTauriHost && window.__owTauriHost.deliver(<json>)")`;
 `deliver` validates `{ type: string, data? }` and passes it to the
 `onmessage` handlers. Shim-internal state (the embedder focus behind
-`hasWindowFocus()`) is updated with
-`window.__owTauriHost.setEmbedderFocus(<bool>)` instead, so the page's
+`hasWindowFocus()`, the guest's visibility) is updated with
+`window.__owTauriHost.setEmbedderFocus(<bool>)` and
+`window.__owTauriHost.setVisibility(<state>)` instead, so the page's
 handlers never see a message ow-electron does not send.
 
-In ow-electron the harness saw only the ad page's own `postMessage` traffic
-(`owCustomTracking`, `owPageUrl` with a URL the page computes itself,
-`oam-*`, `display-ad-*`), not what the host passes to `onmessage`
-(**Unknown (R2-1)**, OQ-13). Until R2-1, ow-tauri sends:
+ow-electron passes the page exactly these messages [OBS] (OQ-13), and
+ow-tauri sends the same:
 
 | `type` | `data` | Sent when |
 |---|---|---|
-| `customTracking` | object or `null` | the element's `customTracking` changed; Overwolf documents that updates reach the running ad page [DOC] |
-| `ad-clicked` | URL string | a popup or gesture navigation was opened in the system browser (D.7) |
-| `window-minimized`, `window-hidden` | none | **ow-tauri option** `ads.legacyHostMessages` only [POC] |
-| `consent` | consent string | **ow-tauri option** `ads.legacyHostMessages` only [POC]: ow-electron gives the page consent through cookies, not messages (D.6.3) |
+| `consent` | string | a consent page saves (D.6.6): **twice**, first the TCF string (`saveConsent`), then the stored, URL-encoded unified string `cmp%3D...` (`saveUnifiedConsent`). Sent to every existing guest, including one that has not finished loading; **not** resent after a guest reloads [OBS] |
+| `customTracking` | object or `null` | the element's `customTracking` changed, and again after every later reload of that guest [OBS]; Overwolf documents that updates reach the running ad page [DOC] |
+| `eHashes` | `{ sha1, md5, sha256 }` | `setUserEmailHashes()` or `generateUserEmailHashes()` was called (A.2.2); sent to every existing guest; not resent after a reload [OBS] |
+| `window-hidden` | none | the embedder window was hidden; nothing is sent when it is shown again [OBS] |
+| `ad-clicked` | URL string | a popup or gesture navigation was opened in the system browser (D.7); ow-tauri only [DEC, Low; OQ-17] |
 
-ow-tauri sends no other host messages.
+`disableAdsFPD()`, `disableAdsOptimization()` and resizes send nothing
+[OBS]. Minimize and restore were not observed (**Unknown (R3-1)**); ow-tauri
+sends nothing for them [DEC]. ow-tauri sends no other host messages. The
+page's own `postMessage` traffic (`owCustomTracking`, `owPageUrl`, `oam-*`,
+`display-ad-*`) is not host traffic.
+
+**Guest state signals** [OBS]. On every guest load ow-electron also mutes the
+guest, signals its visibility (`visible` or `hidden`, B.3.4) and its focus
+(`false`), and later signals focus `true` / `false` when the embedder window
+gains or loses focus. ow-tauri reproduces them inside the shim, never through
+`onmessage`: visibility through `__owTauriHost.setVisibility(<'visible'|'hidden'>)`,
+which overrides `document.visibilityState` and `document.hidden` and fires
+`visibilitychange` (in ow-electron the guest's `document.visibilityState`
+reads `hidden` while its window is hidden [OBS]); focus through
+`setEmbedderFocus` (D.3), which also drives `document.hasFocus()` (it reads
+`true` while the embedder window has focus [OBS]).
 
 ### D.6 Consent
 
-ow-electron's consent flow has two windows: a hidden startup consent window on
-every launch, and the settings window that `openAdPrivacySettingsWindow()`
-opens [OBS] [DOC]. Consent reaches ads only through cookies the consent page
-writes in the ads data store [OBS].
+ow-electron's consent flow has a hidden startup consent window on every
+launch, and the settings window that `openAdPrivacySettingsWindow()` opens,
+whose first call of a launch also opens a hidden default-consent window
+[OBS] [DOC]. Consent reaches ads through cookies the consent page writes in
+the ads data store, and through `consent` messages to running guests (D.5)
+[OBS].
 
 #### D.6.1 Startup consent window
 
-On **every launch**, at `RunEvent::Ready`, in parallel with the launch
-analytics (E.2), the host creates the webview window `ow-cmp-startup` [OBS]:
+On **every launch** the host creates the webview window `ow-cmp-startup`
+as soon as the `cmp-eu-only` request (D.6.2), started at `RunEvent::Ready`,
+has completed, whatever its outcome (a response of any status, an invalid
+body, a dropped connection) [OBS]:
 
 - 1 x 32 logical pixels, centred, title `<PN>`, never shown, not focusable,
   no decorations, skipped in the taskbar; ads data store and `<UA>` (D.8.1).
@@ -1668,9 +1723,11 @@ analytics (E.2), the host creates the webview window `ow-cmp-startup` [OBS]:
   about 0.5 to 1.5 s after it loads; ow-electron closed it 1.5 to 5 s after
   creation [OBS]. If it is still open after `consent.readyTimeoutMs`, or its
   main-frame load fails, the host closes it [DEC].
-- The window is opened whether or not `isCMPRequired()` has resolved, and
-  before it resolves [OBS]. Whether ow-electron skips it when consent is not
-  required: **Unknown (R2-7)**; ow-tauri always opens it.
+- `isCMPRequired()` resolves when this page reaches `did-finish-load`, or
+  right after its load fails [OBS]. Whether ow-electron skips the window when
+  consent is not required cannot be observed: every response ow-electron was
+  given resolved `true` (D.6.2). **Interim (OQ-06):** ow-tauri always opens
+  it.
 - The window sends no analytics of its own (it is never shown, E.2).
 
 What the page does [OBS]:
@@ -1694,15 +1751,23 @@ every case, so ow-tauri runs it too.
   `GET https://features.overwolf.com/experiments/cmp-eu-only` with the host
   request headers of E.1 plus `cache-control: no-cache` [OBS]. The observed
   response is `{"params":[]}`.
-- `isCMPRequired()` awaits that request; every call in the launch awaits the
-  same promise [DEC]. ow-electron resolved `true` 0.85 to 3.3 s after launch
-  [OBS].
-- Any failure or timeout (5 s) resolves `true`: the typings say it never
-  throws and defaults to `true` [TYPES].
-- **Unknown (R2-7):** how non-empty `params` change the result, and caching
-  across calls and restarts. Interim: empty `params` resolves `true`;
-  non-empty `params` also resolves `true` and the body is logged once at
-  debug level [DEC].
+- One request per launch [OBS]. Every `isCMPRequired()` call awaits it and
+  the startup consent page's load (D.6.1); calls after that resolve at once.
+  The result is not persisted: the next launch requests again [OBS].
+  ow-electron resolved `true` 0.85 to 3.3 s after launch [OBS].
+- **No client timeout** [OBS]: when the server hung for 45 s, the call
+  resolved after 45.8 s. This request is exempt from the 30 s timeout of E.1.
+  The typings say it never throws and defaults to `true` [TYPES].
+- The result was `true` for every response ow-electron was given [OBS]:
+  `{"params":[]}`, `params` of `[false]`, `[true]`, `["false"]`, name/value
+  and key/value objects, `enabled: false`, HTTP 500 and 404, invalid JSON and
+  a dropped connection. ow-tauri resolves `true` and logs a non-empty
+  `params` body once at debug level. The rule that would give `false` is
+  **Open: Overwolf** (OQ-06).
+- **`{}` body** (no `params` key) [OBS]: the result is not cached, so every
+  `isCMPRequired()` call sends a new request **and** opens a new startup
+  consent window (five calls gave five requests and five windows). ow-tauri
+  does the same.
 
 #### D.6.3 Consent cookies
 
@@ -1725,15 +1790,44 @@ every case, so ow-tauri runs it too.
 
 #### D.6.4 Settings window (`openAdPrivacySettingsWindow`, `openCMPWindow`)
 
-- Label `ow-cmp`, ads data store, `<UA>`. One at a time.
-- URL: `consent.cmpUrl`, else `CmpWindowOptions.cmpURL`, else
+`openAdPrivacySettingsWindow()` and `openCMPWindow()` behave identically
+[OBS].
+
+- **Window** [OBS]: label `ow-cmp`, title `"CMP"`, 800 x 800 and centred
+  unless the options say otherwise (A.2.2), not resizable, not maximizable,
+  minimizable, no parent and not modal by default, background `#0D0D0D` (or
+  `backgroundColor`). Ads data store, `<UA>`. ow-electron shows it itself
+  170 to 500 ms after creating it; ow-tauri shows it once created.
+- **Content** [OBS]: first a preloader (a spinner and a close button), then
+  the consent page filling the window. ow-tauri shows an equivalent local
+  preloader (spinner in `preLoaderSpinnerColor`) until the page has loaded
+  [DEC].
+- **URL**: `consent.cmpUrl`, else `CmpWindowOptions.cmpURL`, else
   `https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/cmp.html`
-  (`__settings__.adsSetting.cmpSettingUrl`) [OBS].
-- **Interim, Unknown (R2-6):** the query
-  `uid, appName, tabName, lang, firstRun, cmpRequired, muid, muidv2, oweVersion, appVersion`
-  in that order [POC], with `tabName` from `options.tab` (default `purposes`),
-  `lang` as in A.2.2, and `oweVersion` = `<owVersion>`; the size and modal
-  defaults of A.2.2; the promise resolving on close (OQ-26).
+  (`__settings__.adsSetting.cmpSettingUrl`) [OBS], with the query
+  `uid=<uid>&appName=<PN>&tabName=<tab>&lang=<language>&firstRun=<b>&cmpRequired=<b>&muid=<muid>&muidv2=<muidV2>&oweVersion=<owVersion>&appVersion=<ver>`
+  in that order [OBS]. `tabName` is `options.tab` (default `purposes`),
+  `lang` is `options.language` (default `en`). `appName` is inserted without
+  URL encoding, so a space reaches the wire as `%20` [OBS]. `firstRun` and
+  `cmpRequired` were `true` in every observed run (fresh profiles, consent
+  always required); **Unknown (R3-5)** on a later launch; interim `firstRun`
+  is `true` on the first launch of the app and `false` after,
+  `cmpRequired` is the `isCMPRequired()` result [INF].
+- **Promise** [OBS]: resolves once the window has been created (54 to 308 ms
+  after the call), not when it closes (OQ-26). A second call while the window
+  is open focuses it and resolves at once; no second window is created.
+- **Close** [OBS]: closing writes nothing and sends no host analytics (no
+  `window_closed`, E.2). The page fetches
+  `https://features.overwolf.com/get-supported-consent` itself.
+- **Default-consent window** [OBS]: the first call of a launch also opens a
+  hidden 1 x 32 window, `ow-cmp-default`, on
+  `https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/ow-cmp-v2.html?unifiedcmp=&firstRun=true`
+  (always an empty `unifiedcmp`). That page generates a **new default consent
+  string** and saves it, overwriting `cmp` in `ow-electron.json` and both
+  consent cookies, and sending `consent` messages to running guests (D.5).
+  ow-tauri copies this [DEC: replicate]; Overwolf is asked whether it is
+  intended (OQ-38). The window follows the startup window's rules (D.6.1:
+  never shown, closes itself, `consent.readyTimeoutMs`).
 - `cmpURL` / `consent.cmpUrl` accept any `https:` URL, as the typings allow
   [TYPES]. The consent globals (D.6.6) and the `cmp_event` command are granted
   only to pages under `https://content.overwolf.com/monsdk/electron/`
@@ -1748,8 +1842,9 @@ document requests went out after the consent cookies existed [OBS]. ow-tauri
 makes that ordering deterministic [DEC]:
 
 1. Each guest's first navigation waits until the startup consent window has
-   closed, or until 3 s have passed since it was created, whichever comes
-   first.
+   closed, or until 3 s have passed since the guest was mounted, whichever
+   comes first. (The window itself waits for the `cmp-eu-only` response,
+   D.6.1, so the 3 s bound is measured from the mount.)
 2. If the startup consent window fails to load, guests navigate at once.
 
 `adview_mount` itself never waits and never fails because of consent.
@@ -1764,14 +1859,14 @@ frozen functions with `length` 0; the page gets no `window.overwolf` [OBS]:
 | `window.cmp.saveConsent(value)` | `cmp_event saveConsent { consent }` (a TCData object is reduced to its `tcString`); Rust stores `cmp.cmpString` and `cmp.timeStamp` = now in seconds (F.2) |
 | `window.cmp.saveUnifiedConsent(value)` | `cmp_event saveUnifiedConsent { consent }`; Rust stores `cmp.unifiedConsentString`, URL-encoded (F.2) |
 | `window.privacy.enableAdOptimization(enabled)` | `cmp_event enableAdOptimization { enabled }`; stored as `adOptimization` in `ow-tauri.json`; returns a resolved promise |
-| `window.privacy.getIsAdOptimizationEnabled()` | resolves the stored value (default `true`) |
+| `window.privacy.getIsAdOptimizationEnabled()` | resolves the stored value, default `false` (ow-electron answered `false` [OBS]); whether `enableAdOptimization(true)` changes ow-electron's answer: **Unknown (R3-8)** |
 | `window.close()` | `cmp_event close`; Rust closes the window |
 
 The argument shapes of `saveConsent` and `saveUnifiedConsent` come from the
 reference implementation [POC]; the Tauri lab logs the first real call and
 this table is corrected if they differ. Rust validates each string, writes
-the state file atomically, and does not recreate or message running guests
-(unless `ads.legacyHostMessages`, D.5).
+the state file atomically, sends the matching `consent` message to every
+existing guest (D.5) [OBS], and does not recreate guests.
 
 ### D.7 Sizes, test mode, clicks and recovery
 
@@ -1800,14 +1895,16 @@ the state file atomically, and does not recreate or message running guests
   `http` and `https` URLs without credentials are opened. Everything else is
   dropped and logged.
 - **Mute:** guests start muted [DOC]; `setAudioMuted` changes it.
-- **Crash recovery** (**Interim, Unknown (R2-5)**, OQ-28): a crashed guest is
-  reloaded, at most `ads.maxRecoveries` times per element (counted per element
-  across remounts in the same document); after that the guest is closed and
-  the element receives no further events. Guest crashes never reach the app's
-  own crash handling [DOC].
-- **Load errors** (**Interim, Unknown (R2-5)**): a failed main-frame load is
-  retried after `ads.loadErrorRetryMs` (platforms that report load failures:
-  Windows, Linux; macOS partial).
+- **Crash recovery** [OBS] (OQ-28): a crashed guest is reloaded at once, in
+  the same guest, with no cap (six crashes in a row all recovered). The
+  element receives `render-process-gone` (B.3.5); the crash is reported
+  (E.2 #8). `ads.maxRecoveries` (default `null`, no cap) is an ow-tauri
+  option: with a number, the guest is closed after that many recoveries per
+  element. Guest crashes never reach the app's own crash handling [DOC].
+- **Load errors** [OBS]: a failed **main-frame** load is reloaded every
+  `ads.loadErrorRetryMs` (5000 ms), with no cap, no backoff and no analytics;
+  a failed sub-frame load (`-3`, aborted) reloads nothing. Platforms that
+  report main-frame load failures: Windows, Linux; macOS partial.
 
 ### D.8 Request shaping and guest configuration
 
@@ -1961,8 +2058,9 @@ priority: u=4, i
   zstd.
 - HTTP/2 negotiated by ALPN, as observed; header order inside HTTP/2 frames
   is best effort.
-- One attempt, 30 s timeout, no retry, no queue, no persistence; failures are
-  logged at debug level [POC, OBS: no retries seen].
+- One attempt, 30 s timeout (none for `cmp-eu-only`, D.6.2), no retry, no
+  queue, no persistence; failures are logged at debug level [POC, OBS: no
+  retries seen].
 
 **Counter** [OBS]:
 `GET https://analyticsnew.overwolf.com/analytics/Counter?Name=<event>&MUID=<muid>&MUIDV2=<muidV2>&owver=<owVersion>&Extra=<json>`
@@ -1988,28 +2086,30 @@ priority: u=4, i
   kept. Example: `"1_0_0.<uid>.darwin.Parity Harness.<uid>"`.
 - No event fields are added for Kinds 400022, 400023 and 400025; the
   heartbeat's `hasVisibleWindow` is not included [OBS].
-- Kind 400024 (guest crash) puts the `reason` value first [POC];
-  **Unknown (R2-5)**.
+- Kind 400024 (guest crash) puts the `reason` first:
+  `"Extra":"<reason>.<app_ver>.<uid>.<os>.<PN>.<cuid>"`, for example
+  `"killed.1_0_0.<uid>.darwin.<PN>.<uid>"` [OBS].
 
 ### E.2 Events and order
 
 | # | Trigger | Counter `Name` (event fields, in order) | InsertStats Kind | With `disableAnonymousAnalytics()` | Source |
 |---|---|---|---|---|---|
 | 1 | launch, `firstLaunch` absent from `ow-electron.json`; then `firstLaunch: true` is written | `<label>_app_first_launch` | 400022 | Counter **kept**, Kind dropped | [OBS] |
-| 2 | launch, in parallel | `GET https://features.overwolf.com/experiments/cmp-eu-only` (D.6.2) | none | kept | [OBS] |
+| 2 | launch, in parallel with #1 | `GET https://features.overwolf.com/experiments/cmp-eu-only` (D.6.2); the startup consent window opens when it completes (D.6.1) | none | kept | [OBS] |
 | 3 | every launch | `<label>_app_start` | none | dropped | [OBS] |
 | 4 | every launch | `<label>_app_heartbeat` (`hasVisibleWindow`: `false`) | 400023 | kept (both) | [OBS] |
 | 5 | the first app window becomes visible | `<label>_app_heartbeat` (`hasVisibleWindow`: `true`) | 400023 | kept (both) | [OBS] |
 | 6 | each ad guest attaches (one per `<owadview>`, test and live) | none | 400025 | dropped | [OBS] |
-| 7 | a window that was shown closes, or the app quits while it is open | `<label>_window_closed` (`name`, `title`, `length`) | none | dropped | [OBS] |
-| 8 | an ad guest crashes | `<label>_owadview_crashed` (`sessionTS`, `reason`) | 400024 | dropped | [POC]; **Unknown (R2-5)** |
-| 9 | periodic heartbeat: an hourly check that sends when 12 h have passed since the last heartbeat of the session | as #4, `hasVisibleWindow` = current | 400023 | kept | [POC]; **Unknown (R2-9)** (none was sent in a 6-minute session [OBS]) |
+| 7 | a visible period of a window ends: `hide()`, close, or quit while it is visible | `<label>_window_closed` (`name`, `title`, `length`) | none | dropped | [OBS] |
+| 8 | an ad guest crashes, unless it crashed shortly after its previous recovery (below) | `<label>_owadview_crashed` (`sessionTS`, `reason`) | 400024 | dropped [INF] | [OBS] |
+| 9 | periodic heartbeat: an hourly check that sends when 12 h have passed since the last heartbeat of the session | as #4, `hasVisibleWindow` = current | 400023 | kept | [POC]; **Unknown (R2-9)** (none was sent in a 6-minute session [OBS]; a 13-hour observation is running) |
+| 10 | `setExternalPaymentUserId(options)` | `<label>_sub_info` (below) | none | kept [DEC]; **Unknown (R3-3)** | [OBS] |
 
 **Order and timing.** In ow-electron #1, #2, #3, the #4 Counter, 400022 and
 400023 go out in that order within about 100 ms of Electron's `ready`; #5
 follows when the first window is shown, 1 to 3 s later [OBS]. In ow-tauri,
-#2 starts at `RunEvent::Ready` together with the startup consent window
-(D.6.1), and the analytics sequence (#1, #3, #4, 400022, 400023) starts at
+#2 starts at `RunEvent::Ready` (the startup consent window follows its
+response, D.6.1), and the analytics sequence (#1, #3, #4, 400022, 400023) starts at
 `main_ready` (A.2.1), which is the point where the app's top-level code has
 run, as Electron's `ready` is for an ow-electron app. This keeps
 `disableAnonymousAnalytics()` called at module load effective, as in
@@ -2021,33 +2121,57 @@ with a warning.
 
 **#7 fields** [OBS]:
 
-- `name`: the window's analytics name: the `BrowserWindow` `name` option,
-  normalised [DOC]; else the last path segment of the loaded URL without
-  `.html`; else `index`. A window loading `index.html` without `name` reports
-  `"index"`. Normalisation: Overwolf documents that whitespace and special
-  characters are removed and that names are at most 20 characters [DOC];
-  **Unknown (R2-8)** for hyphens and for names over 20 characters. Interim:
-  remove whitespace and every character outside `[A-Za-z0-9_-]`, no
-  truncation [DEC].
-- `title`: the `title` **constructor option** (default `<PN>`), not the
-  current page title.
-- `length`: whole seconds the window was visible (90 and 360 observed).
-- Windows that were never shown send nothing (including `ow-main` and the
-  startup consent window). Ad guests are not windows. The consent settings
-  window (`ow-cmp`) reports with `name` `cmp` [POC]; **Unknown (R2-6)**.
-- Hiding a window without closing it sends nothing until it closes [DEC from
-  OBS]; **Unknown (R2-8)** whether ow-electron sends on `hide()` and for a
-  window visible for less than 1 s.
+- `name`: the window's analytics name, fixed when the window is first
+  shown and never changed by later navigations. The `BrowserWindow` `name`
+  option is **ignored** [OBS]. The name is the last segment of the path of the
+  URL loaded at that moment, decoded, without query or fragment; a trailing
+  `.html` or `.htm` (any case) is removed and other extensions are kept
+  (`page.php`, `a.b`); whitespace and characters such as `<` and `>` are
+  removed; non-ASCII letters, `-`, `_` and `.` are kept; there is no
+  truncation (40 characters were kept) [OBS]. An empty path gives the host
+  name (`https://example.com/` reports `example.com`), `about:blank` reports
+  `blank`, `data:text/html,<title>d</title>` reports `title`, and `index.html`
+  reports `index` [OBS]. (Overwolf's window-names page describes a 20-character
+  limit [DOC]; ow-electron 42.11.4 does not apply it.)
+- `title`: the `title` **constructor option**, else `<PN>`; an explicit empty
+  title stays `""` [OBS]. Not the current page title.
+- `length`: whole seconds the window was visible, rounded down (1.5 s gives
+  `1`; 90 and 360 observed) [OBS].
+- Trigger [OBS]: each visible period ends with one event. `hide()` sends it;
+  a later `close()` does not send it again; showing the window again and
+  closing it sends another with the new length; quitting while the window is
+  visible sends it. A visible period shorter than 1 s sends nothing.
+- Windows that were never shown send nothing (including `ow-main`, the
+  startup consent window and the default-consent window). Ad guests are not
+  windows. The consent settings window (`ow-cmp`) sends nothing either,
+  although it is shown [OBS].
+- #5 is sent once per run, for the first window shown [OBS].
 
-Not sent: anything for `setExternalPaymentUserId` until R2-3 records it
-(OQ-12), and events tied to the Windows ad-optimisation helper, which
-ow-tauri does not ship (OQ-14). No other host requests exist.
+**#8 fields** [OBS]: `sessionTS` is the whole seconds since the guest's last
+load or recovery; `reason` is the platform's termination reason (`"killed"`
+observed; ow-tauri maps WebView2 `ProcessFailedKind` / WebKit termination to
+Electron's `render-process-gone` reasons [DEC]). Crashes 20 to 30 s apart
+were each reported; crashes 2 s after the previous recovery were recovered
+but **not reported** [OBS]. The threshold lies between 3 and 20 s:
+**Unknown (R3-4)**; interim: no report when `sessionTS < 10` [DEC].
+
+**#10 fields** [OBS]: the Counter only, no InsertStats. `Extra` holds the
+usual six fields (E.1), then the options object's own keys in the order the
+app passed them, then `providerName: "tebex"` when the options had no
+`providerName`. Examples: `{..., providerName, userId}` for
+`{ providerName: 'tebex', userId }`; `{..., userId, paymentId, providerName: "tebex"}`
+for `{ userId, paymentId }`. The call resolves after the response (250 to
+374 ms observed).
+
+Not sent: events tied to the Windows ad-optimisation helper, which ow-tauri
+does not ship (OQ-14). Email hash calls send no request [OBS]. No other host
+requests exist.
 
 ### E.3 Opt-outs and switches
 
 | Switch | Effect |
 |---|---|
-| `disableAnonymousAnalytics()` before `main_ready` | only the mandatory set for the session: #1 Counter, #2, #4 and #5 (Counter and 400023), #9 [OBS]. Dropped: #3, 400022, #6, #7, #8 |
+| `disableAnonymousAnalytics()` before `main_ready` | only the mandatory set for the session: #1 Counter, #2, #4 and #5 (Counter and 400023), #9 [OBS], and #10 [DEC; **Unknown (R3-3)**]. Dropped: #3, 400022, #6, #7, #8 |
 | `disableAnonymousAnalytics()` after `main_ready` | the mandatory set from then on; a warning is logged |
 | `analytics_set_user_enabled(false)` (**ow-tauri option**, `analytics.userSwitch`) | nothing at all, persisted; stricter than ow-electron |
 | test builds | `Builder::analytics_transport` replaces the HTTP client; the default transport refuses non-loopback hosts under `cfg(test)` |
@@ -2257,10 +2381,11 @@ uid    = for each byte b of d: chr(97 + (b & 15)) + chr(97 + (b >> 4))    // 40 
   `email` becomes `"unknown"` [OBS]: that value reproduces both observed
   fallback uids exactly. `author: { name: "" }` was not tested and is treated
   as `"unknown"` [INF].
-- `<cuid>` (`app_cuid` in analytics) is the rule 3 value. In every observed
-  run it equalled the uid because rules 1 and 2 did not apply;
-  **Unknown (R2-14)** whether ow-electron reports the computed or the signed
-  uid when `overwolf.uid` is set. Interim: the computed value [POC].
+- `<cuid>` (`app_cuid` in analytics) is always the rule 3 value. With
+  `overwolf.uid` set, ow-electron reports the override as `app_id` and the
+  computed uid as `app_cuid`, and InsertStats `Extra` is
+  `<ver>.<override>.<os>.<PN>.<computed uid>` [OBS]. The rule 1 config
+  override behaves the same way [DEC].
 - `process.env.OVERWOLF_APP_UID` is the uid from the moment the main module
   loads [OBS] (B.1.1).
 
@@ -2382,11 +2507,12 @@ Observed with `overwolf.packages: ["gep", "overlay"]` on macOS [OBS]:
 | Member | ow-electron | ow-tauri |
 |---|---|---|
 | events (`loading`, `ready`, `failed-to-initialize`, `crashed`, `package-update-pending`, `updated`) | none emitted | none emitted |
-| `hasPendingUpdates()` | `{ hasPendingUpdate: false, details: [] }` | same |
+| `hasPendingUpdates()` | `{ hasPendingUpdate: false, details: [] }`, returned synchronously (not a promise) | same |
 | `getChannel(...)` | resolves `{}` | same |
-| `getAvailableChannels(name)` | rejects `Error("getAvailableChannels - package 'gep' is not registered in this app")`, even for a listed name | same message with the first name passed; a rejected promise [DEC]; **Unknown (R2-15)** whether ow-electron throws synchronously |
-| `setChannel(name)` | **Unknown (R2-15)** | rejects `Error("setChannel - package '<name>' is not registered in this app")` [INF by analogy] |
-| `app.overwolf.packages.<name>` | **Unknown (R2-15)** | `undefined` [INF] |
+| `getAvailableChannels(name)` | rejects asynchronously with `Error("getAvailableChannels - package 'gep' is not registered in this app")`, even for a listed name | same message with the first name passed |
+| `setChannel(name)` | rejects asynchronously with `Error("setChannel - package 'gep' is not registered in this app")` | same, with the name passed |
+| `relaunch()` | returns `undefined` | same |
+| `app.overwolf.packages.<name>` | `undefined` | same |
 | `logsFolderPath`, `phasePercent` | F.4, E.4 | same |
 
 `failed-to-initialize` keeps its public signature `(event, packageName)`
