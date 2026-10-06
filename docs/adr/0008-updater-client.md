@@ -54,3 +54,10 @@ The plugin includes a small update client that:
 - 2026-10-06, contract review: the publisher check is mandatory when the app
   is signed (it was optional), a detached signature is supported and required
   on Linux, and the trust-model statement was corrected.
+- 2026-10-06, parity revision: Overwolf's feed serves Windows setup files
+  only (`latest-mac.yml` and `latest-linux.yml` return 404) and its entries
+  carry `blockMapSize` and `IsAdminRightsRequired`; macOS and Linux builds use
+  a self-hosted feed with the same YAML shape. The Tauri NSIS installer gets
+  hooks that do the install and uninstall work of Overwolf's installer
+  (CONTRACT I.1, I.6). Whether the console accepts a Tauri setup upload stays
+  open (OQ-18).

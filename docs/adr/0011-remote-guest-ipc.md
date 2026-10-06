@@ -18,12 +18,12 @@ guest webview is allowed to call, with any arguments, as often as they like.
 ## Decision
 
 - Each guest class gets exactly one command: `adview_event` for ad guests,
-  `cmp_event` for the consent window. Nothing else, no events, no core
+  `cmp_event` for the consent windows. Nothing else, no events, no core
   permissions.
 - The capability that grants it is scoped to the page's own path,
   `https://www.overwolf.com/monsdk/electron/*` and
   `https://content.overwolf.com/monsdk/electron/*`, and to the guest webview
-  labels (`owad-*`, `ow-cmp`).
+  labels (`owad-*`, `ow-cmp-startup`, `ow-cmp`).
 - Every value a guest sends is untrusted input: names are restricted to
   1 to 64 characters of `[A-Za-z0-9_:.-]`, data is capped at 16 KiB, and the
   caller's label (not a payload field) decides which element an event belongs
@@ -54,3 +54,9 @@ guest webview is allowed to call, with any arguments, as often as they like.
 - **Trust the shim's closure.** Page scripts can call the same command
   directly, so a closure protects only the shim's own messages. Rejected as a
   security boundary.
+
+## Amendments
+
+- 2026-10-06, parity revision: the hidden startup consent window
+  `ow-cmp-startup` gets the same `cmp_event` capability as `ow-cmp`
+  ([ADR 0015](0015-startup-consent-window.md)).

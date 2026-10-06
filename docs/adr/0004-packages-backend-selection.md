@@ -1,6 +1,6 @@
-# ADR 0004: Select the packages backend: native, simulated or none
+# ADR 0004: Packages: report them as unavailable, defer the package runtime
 
-- Status: Accepted
+- Status: Accepted (amended 2026-10-06, scope cut)
 - Date: 2026-10-06
 
 ## Context
@@ -8,44 +8,46 @@
 `app.overwolf.packages` gives apps GEP, overlay, recorder, utility and CRN.
 Overwolf's documentation states that these packages are delivered and run by
 ow-electron's package manager, are Windows-only today, and do not load on
-macOS or Linux, where ow-electron supports ads only. A Tauri host cannot load
-packages built for ow-electron's internals, and ow-tauri must not pretend it
-can.
+macOS or Linux, where ow-electron supports ads only
+(https://dev.overwolf.com/ow-electron/guides/dev-tools/non-windows-dev). A
+Tauri host cannot load packages built for ow-electron's internals, and
+ow-tauri must not pretend it can.
 
 Apps still need the API surface: the sample registers listeners on startup,
 renders the package-channels page, and disables UI per package based on what
 loaded.
 
+The project owner's round-2 decision (2026-10-06) narrows the scope to the
+ads system first (ads, consent, analytics, identity, updates and
+distribution), and asks for exact ow-electron parity everywhere.
+
 ## Decision
 
-The package manager is implemented in full on the host (events, channels,
-pending updates, logs folder, per-package objects). Package behaviour comes
-from a backend chosen by `packagesBackend` (`auto`, `native`, `simulated`,
-`none`; config, environment or command line):
-
-- `native`: a runtime that implements the `PackageRuntime` contract, either
-  in-process (Rust trait or C ABI) or as a JSON-RPC sidecar. This is the
-  interface we propose Overwolf implements.
-- `simulated`: development backends that behave like the packages from the
-  app's point of view and say so (`version: "0.0.0-simulated"`): GEP driven by
-  Overwolf's public game-events status data and recorded scenarios, overlay as
-  real always-on-top windows with desktop global shortcuts, a recorder state
-  machine that writes no media, utility and CRN driven by scenarios.
-- `none`: every listed package fails to initialise.
-- `auto`: native if registered; else simulated in debug builds; else every
-  listed package emits `loading` then `failed-to-initialize` with
-  `{ reason: 'unsupported-host', version }`, the same shape ow-electron apps
-  already handle when a package fails.
+- **No package runtime and no simulated backends now.** On every OS,
+  `app.overwolf.packages` behaves exactly as ow-electron 42.11.4 behaves on a
+  host where packages are unavailable, as observed with the parity harness
+  (CONTRACT H.1): no events at all; `hasPendingUpdates()` returns
+  `{ hasPendingUpdate: false, details: [] }`; `getChannel()` resolves `{}`;
+  `getAvailableChannels(name)` rejects with
+  `getAvailableChannels - package '<name>' is not registered in this app`;
+  package objects are `undefined`.
+- `packagesBackend` keeps two values: `none` (the default, the behaviour
+  above) and `native`, reserved for a future runtime and behaving as `none`
+  until one exists.
+- The package runtime interface (Rust trait, JSON-RPC sidecar, C ABI,
+  remote values, package objects) is kept in CONTRACT as a clearly marked
+  **deferred design** (Appendix P). It is not binding and not tested.
 
 ## Consequences
 
-- Apps run unchanged on every OS; release builds without a native runtime
-  degrade exactly like a failed package in ow-electron.
-- Developers can build and test gaming features on macOS and in CI.
-- Simulated behaviour is never shipped by accident: `auto` excludes it from
-  release builds.
-- Overwolf gets a precise, versioned interface (CONTRACT H) rather than a
-  request to support Tauri internals.
+- Apps run unchanged on every OS and degrade exactly as they do under
+  ow-electron on macOS: the code paths an ow-electron app already has for
+  "no packages" are the ones that run.
+- No fake gaming data can reach users, in any build.
+- Developers cannot exercise gaming features on ow-tauri until a runtime
+  exists; the sample's package pages show their "not available" state.
+- The deferred design remains available for Overwolf to review (OQ-21,
+  OQ-33) without costing implementation and maintenance now.
 
 ## Alternatives considered
 
@@ -53,5 +55,16 @@ from a backend chosen by `packagesBackend` (`auto`, `native`, `simulated`,
   Rejected.
 - **Load ow-electron's package files in a Node sidecar.** Depends on
   undocumented internals and integrity checks we cannot satisfy. Rejected.
-- **Simulated backends in release builds by default.** Would show fake gaming
-  data to users. Rejected.
+- **Simulated backends for development** (the original decision). Useful for
+  demos, but not parity, and a large surface to maintain for behaviour no
+  user receives. Removed by the scope cut.
+- **`failed-to-initialize` with `{ reason: 'unsupported-host' }`** (the
+  original decision). ow-electron emits no event at all on such hosts, so
+  this would diverge from what app code is written against. Rejected.
+
+## Amendments
+
+- 2026-10-06, owner round-2 scope cut: simulated backends removed;
+  `packagesBackend` reduced to `none` and `native`; unavailable packages
+  report the observed ow-electron results instead of `failed-to-initialize`;
+  the runtime interface becomes a deferred design (CONTRACT Appendix P).

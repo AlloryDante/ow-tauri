@@ -39,7 +39,8 @@ renders test creatives and reports events.
   width: 100%; height: 100% }`) makes the element fill its container, as the
   sample expects; `performance` elements cover the embedder viewport.
 - Guest events come back as `adview-event` host messages and are dispatched
-  on the element as non-bubbling `CustomEvent`s, in both spellings where the
+  on the element as plain non-bubbling `Event`s with the data as own
+  properties, as ow-electron does (CONTRACT B.3.5), in both spellings where the
   ecosystem uses two (`ad-clicked` / `ad_clicked`, `house_ad_action` /
   `house-ad-action`).
 - The plugin enables Tauri's `unstable` feature itself (`add_child` needs it
@@ -77,3 +78,7 @@ renders test creatives and reports events.
 
 - 2026-10-06, contract review: default element style; the plugin (not each
   app) enables `unstable`; the `unstable` and macOS private-selector risks.
+- 2026-10-06, parity revision: events are plain `Event` objects with own
+  properties instead of `CustomEvent`s; the element gets ow-electron's open
+  shadow root; guests run in the ads environment with ow-electron's request
+  shaping ([ADR 0013](0013-request-shaping-per-os.md)).
