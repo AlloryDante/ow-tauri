@@ -50,3 +50,14 @@ export function unsupported(win: BrowserWindow): void {
   void dialog.showMessageBoxSync({ message: 'x' });
   void ipcRenderer.sendSync('x');
 }
+
+// `app.overwolf` is the global `overwolf.OverwolfApi` (CONTRACT B.4), so the
+// packages-types augmentations apply, as in the sample's controllers.
+export function packages(): void {
+  const api: overwolf.OverwolfApi = app.overwolf;
+  const gep: OverwolfGameEventPackage = app.overwolf.packages.gep;
+  const recorder = app.overwolf.packages.recorder;
+  const viaDefault: overwolf.OverwolfApi = electron.app.overwolf;
+  const typed: Electron.App = app;
+  void [api, gep, recorder, viaDefault, typed.overwolf.uid, app.overwolf.uid, app.getName()];
+}
