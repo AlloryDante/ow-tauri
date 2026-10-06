@@ -10,6 +10,8 @@
  *
  * @packageDocumentation
  */
+/* eslint-disable @typescript-eslint/no-deprecated -- the facade re-exports the
+   unsupported modules it marks deprecated, so ported imports keep compiling */
 import type { IpcMain } from '../bootstrap/ipc-main.js';
 import type { IpcRenderer } from '../bootstrap/ipc-renderer.js';
 import { app } from './app.js';
@@ -20,10 +22,26 @@ import { kernel } from './runtime.js';
 import { screen } from './screen.js';
 import { dialog, globalShortcut, shell } from './shell-dialog.js';
 
-/** Electron's `ipcMain` (main webview only). */
+/**
+ * Electron's `ipcMain` (main webview only).
+ *
+ * @example
+ * ```ts
+ * ipcMain.handle('games:list', async () => loadGames());
+ * ipcMain.on('log', (event, line: string) => console.log(event.sender.id, line));
+ * ```
+ */
 export const ipcMain: IpcMain = kernel.server.ipcMain;
 
-/** Electron's `ipcRenderer` (UI windows only). */
+/**
+ * Electron's `ipcRenderer` (UI windows only).
+ *
+ * @example
+ * ```ts
+ * const games = await ipcRenderer.invoke('games:list');
+ * ipcRenderer.on('game-launched', (_event, game) => render(game));
+ * ```
+ */
 export const ipcRenderer: IpcRenderer = kernel.ipcRenderer;
 
 export { app, App } from './app.js';
@@ -68,6 +86,7 @@ export {
   contentTracing,
 } from './misc.js';
 export type { CrashReporter } from './misc.js';
+export type * from './unsupported-types.js';
 export type { ProcessShim } from '../bootstrap/process-shim.js';
 export { IpcMain } from '../bootstrap/ipc-main.js';
 export type {

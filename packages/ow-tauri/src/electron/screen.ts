@@ -4,7 +4,7 @@
  *
  * @packageDocumentation
  */
-import type { Kernel } from '../bootstrap/kernel.js';
+import type { FacadeKernel } from '../bootstrap/facade-kernel.js';
 import { EventEmitter, emitFromHost } from '../shared/emitter.js';
 import type { Display, Point, Rectangle } from '../shared/protocol.js';
 import { createEvent, kernel } from './runtime.js';
@@ -89,25 +89,62 @@ const FALLBACK: Display = {
  * list, which the plugin refreshes by polling).
  */
 export class Screen extends EventEmitter {
-  readonly #kernel: Kernel;
+  readonly #kernel: FacadeKernel;
   #cursor: Point = { x: 0, y: 0 };
   #cursorAt = 0;
+  #generation = 0;
 
   /**
    * @param k - the kernel
    * @internal
    */
-  constructor(k: Kernel) {
+  constructor(k: FacadeKernel) {
     super();
     this.#kernel = k;
     k.state.onChange((path, value, previous) => {
       if (path === 'displays') this.#diff(previous, value);
+      else if (path === 'cursor') this.#seed(value);
     });
+    this.#seed(k.state.get('cursor'));
     k.onReset(() => {
       this.removeAllListeners();
       this.#cursor = { x: 0, y: 0 };
       this.#cursorAt = 0;
+      this.#prime();
     });
+    this.#prime();
+  }
+
+  /**
+   * Seeds the cursor from the snapshot (`cursor`, when the host provides it)
+   * and fetches a fresh position once the main webview is ready, so the first
+   * `getCursorScreenPoint()` does not report the origin.
+   */
+  #prime(): void {
+    const generation = ++this.#generation;
+    void this.#kernel.whenHostReady().then(() => {
+      if (generation === this.#generation && this.#kernel.context === 'main') this.#refresh();
+    });
+  }
+
+  #seed(value: unknown): void {
+    const point = value as Partial<Point> | null | undefined;
+    if (typeof point?.x === 'number' && typeof point.y === 'number')
+      this.#cursor = { x: point.x, y: point.y };
+  }
+
+  #refresh(): void {
+    this.#cursorAt = Date.now();
+    this.#kernel
+      .command('screen_snapshot')
+      .then((snapshot) => {
+        const cursor = (snapshot as { cursor?: Point } | null)?.cursor;
+        if (cursor && typeof cursor.x === 'number' && typeof cursor.y === 'number')
+          this.#cursor = { x: cursor.x, y: cursor.y };
+      })
+      .catch((error: unknown) => {
+        this.#kernel.log('debug', `screen_snapshot failed: ${(error as Error).message}`);
+      });
   }
 
   /**
@@ -171,27 +208,22 @@ export class Screen extends EventEmitter {
   }
 
   /**
-   * Partial: the cursor position, cached and refreshed at most every 100 ms
-   * (the first call after a pause returns the previous value and starts a refresh).
+   * Partial: the cursor position from a cache that is filled when the app
+   * becomes ready and refreshed at most every 100 ms. Electron reads the
+   * position synchronously; here a call returns the cached value and, when
+   * it is older than 100 ms, starts a refresh for the next call.
    *
    * @returns the cursor position in DIP
+   *
+   * @example
+   * ```ts
+   * const point = screen.getCursorScreenPoint();
+   * const display = screen.getDisplayNearestPoint(point);
+   * ```
    */
   getCursorScreenPoint(): Point {
     this.#kernel.require('main', 'screen.getCursorScreenPoint');
-    const now = Date.now();
-    if (now - this.#cursorAt >= CURSOR_TTL_MS) {
-      this.#cursorAt = now;
-      this.#kernel
-        .command('screen_snapshot')
-        .then((snapshot) => {
-          const cursor = (snapshot as { cursor?: Point } | null)?.cursor;
-          if (cursor && typeof cursor.x === 'number' && typeof cursor.y === 'number')
-            this.#cursor = { x: cursor.x, y: cursor.y };
-        })
-        .catch((error: unknown) => {
-          this.#kernel.log('debug', `screen_snapshot failed: ${(error as Error).message}`);
-        });
-    }
+    if (Date.now() - this.#cursorAt >= CURSOR_TTL_MS) this.#refresh();
     return { ...this.#cursor };
   }
 
@@ -290,5 +322,14 @@ export class Screen extends EventEmitter {
   }
 }
 
-/** Electron's `screen` (main webview only). */
+/**
+ * Electron's `screen` (main webview only).
+ *
+ * @example
+ * ```ts
+ * const { workArea } = screen.getPrimaryDisplay();
+ * win.setBounds({ x: workArea.x + workArea.width - 400, y: workArea.y, width: 400, height: 300 });
+ * screen.on('display-removed', () => win.center());
+ * ```
+ */
 export const screen: Screen = kernel.singleton('electron.screen', () => new Screen(kernel));

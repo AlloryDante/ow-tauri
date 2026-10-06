@@ -4,11 +4,11 @@
  * @packageDocumentation
  */
 import { attachRuntime } from '../bootstrap/install.js';
-import type { Kernel } from '../bootstrap/kernel.js';
+import type { FacadeKernel } from '../bootstrap/facade-kernel.js';
 import type { Event } from './types.js';
 
 /** The document's runtime kernel (attached at import; members check their context when used). */
-export const kernel: Kernel = attachRuntime();
+export const kernel: FacadeKernel = attachRuntime();
 
 /**
  * Creates the synthetic Electron `Event` (CONTRACT B.1.2).

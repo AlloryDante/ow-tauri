@@ -6,13 +6,14 @@
  *
  * @packageDocumentation
  */
-import type { Kernel } from '../bootstrap/kernel.js';
+import type { FacadeKernel } from '../bootstrap/facade-kernel.js';
 import { EventEmitter, emitFromHost } from '../shared/emitter.js';
 import { OwTauriUnsupportedError } from '../shared/errors.js';
 import type { ElectronPathName, LifecycleMessage } from '../shared/protocol.js';
 import { defineUnsupported } from '../shared/unsupported.js';
 import { windowHooks } from './browser-window.js';
 import { createEvent, kernel } from './runtime.js';
+import type { UnsupportedMethod } from './unsupported-types.js';
 
 /** Names `app.getPath()` accepts (CONTRACT B.2.1). */
 const PATH_NAMES: ReadonlySet<string> = new Set<ElectronPathName>([
@@ -45,7 +46,8 @@ export interface CommandLine {
    */
   hasSwitch(name: string): boolean;
   /**
-   * The value of `--<name>=<value>` (or `--<name> <value>`), else `''`.
+   * The value of `--<name>=<value>`, else `''` (as in Chromium, a separate
+   * argument after `--<name>` is not its value).
    *
    * @param name - the switch name without dashes
    * @returns the value
@@ -87,7 +89,79 @@ export interface RelaunchOptions {
  * `browser-window-created`, `browser-window-focus`, `browser-window-blur`.
  */
 export class App extends EventEmitter {
-  readonly #kernel: Kernel;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.1).
+   */
+  declare readonly getGPUInfo: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.1).
+   */
+  declare readonly getAppMetrics: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.1).
+   */
+  declare readonly setLoginItemSettings: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.1).
+   */
+  declare readonly getLoginItemSettings: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.1).
+   */
+  declare readonly setBadgeCount: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.1).
+   */
+  declare readonly setJumpList: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.1).
+   */
+  declare readonly setUserTasks: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.1).
+   */
+  declare readonly showAboutPanel: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.1).
+   */
+  declare readonly setAsDefaultProtocolClient: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.1).
+   */
+  declare readonly importCertificate: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.1).
+   */
+  declare readonly moveToApplicationsFolder: UnsupportedMethod;
+  /**
+   * Unsupported: reads as `undefined` and logs a warning once.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.1).
+   */
+  declare readonly dock: undefined;
+  readonly #kernel: FacadeKernel;
   readonly #appended: string[] = [];
   readonly #paths = new Map<string, string>();
   #name: string | undefined;
@@ -97,7 +171,7 @@ export class App extends EventEmitter {
    * @param k - the kernel
    * @internal
    */
-  constructor(k: Kernel) {
+  constructor(k: FacadeKernel) {
     super();
     this.#kernel = k;
     k.on('lifecycle', (message) => {
@@ -420,23 +494,20 @@ export class App extends EventEmitter {
   }
 
   #switch(name: string): string | undefined {
-    const argv = this.#kernel.state.get('switches.argv');
-    const args = [
-      ...(Array.isArray(argv)
-        ? (argv as unknown[]).filter((a): a is string => typeof a === 'string')
-        : []),
-      ...this.#appended,
-    ];
+    const raw = this.#kernel.state.get('switches.argv');
+    const argv = Array.isArray(raw)
+      ? (raw as unknown[]).filter((a): a is string => typeof a === 'string')
+      : [];
+    // Chromium stops reading switches at a bare `--`; the last occurrence wins.
+    const end = argv.indexOf('--');
+    const args = [...(end === -1 ? argv : argv.slice(0, end)), ...this.#appended];
     const flag = `--${name}`;
-    for (let i = args.length - 1; i >= 0; i--) {
-      const arg = args[i] ?? '';
-      if (arg.startsWith(`${flag}=`)) return arg.slice(flag.length + 1);
-      if (arg === flag) {
-        const next = args[i + 1];
-        return next !== undefined && !next.startsWith('-') ? next : '';
-      }
+    let value: string | undefined;
+    for (const arg of args) {
+      if (arg === flag) value = '';
+      else if (arg.startsWith(`${flag}=`)) value = arg.slice(flag.length + 1);
     }
-    return undefined;
+    return value;
   }
 
   #string(path: string): string | undefined {
@@ -477,5 +548,17 @@ defineUnsupported(
   },
 );
 
-/** Electron's `app` (main webview only). */
+/**
+ * Electron's `app` (main webview only).
+ *
+ * @example
+ * ```ts
+ * import { app, BrowserWindow } from 'electron'; // aliased to ow-tauri/electron
+ *
+ * app.on('window-all-closed', () => app.quit());
+ * await app.whenReady();
+ * const settings = `${app.getPath('userData')}/settings.json`;
+ * new BrowserWindow({ width: 1200, height: 800 }).loadFile('index.html');
+ * ```
+ */
 export const app: App = kernel.singleton('electron.app', () => new App(kernel));

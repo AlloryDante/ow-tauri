@@ -36,6 +36,8 @@ export default defineConfig(
       '@typescript-eslint/only-throw-error': 'off',
       '@typescript-eslint/prefer-promise-reject-errors': 'off',
       '@typescript-eslint/unbound-method': 'off',
+      // Tests exercise the unsupported (deprecated) members on purpose.
+      '@typescript-eslint/no-deprecated': 'off',
     },
   },
   {

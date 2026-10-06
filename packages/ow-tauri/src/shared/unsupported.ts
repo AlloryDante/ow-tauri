@@ -8,6 +8,9 @@
  */
 import { OwTauriUnsupportedError } from './errors.js';
 
+/** A member ow-tauri does not support: calling it throws {@link OwTauriUnsupportedError}. */
+export type UnsupportedMethod = (...args: unknown[]) => never;
+
 /** Logs a warning once per key. */
 export type WarnOnce = (key: string, message: string) => void;
 
@@ -21,10 +24,7 @@ export const DEFAULT_REASON = 'it has no equivalent in Tauri (see docs/CONTRACT.
  * @param reason - why, and the alternative if there is one
  * @returns the throwing function
  */
-export function unsupportedMethod(
-  api: string,
-  reason: string = DEFAULT_REASON,
-): (...args: unknown[]) => never {
+export function unsupportedMethod(api: string, reason: string = DEFAULT_REASON): UnsupportedMethod {
   return () => {
     throw new OwTauriUnsupportedError(api, reason);
   };

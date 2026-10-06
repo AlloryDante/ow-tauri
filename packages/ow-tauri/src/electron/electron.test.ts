@@ -29,9 +29,10 @@ import electron, {
   shell,
 } from './index.js';
 import { completeDisplay } from './screen.js';
-import { parseColor } from './browser-window.js';
+import { parseColor, windowHooks } from './browser-window.js';
+import { normalizeAccelerator } from './shell-dialog.js';
 import { toAssetPath } from './runtime.js';
-import { deepFreeze } from './context-bridge.js';
+import { copyForBridge, deepFreeze } from './context-bridge.js';
 
 let host: MockHost;
 
@@ -151,14 +152,20 @@ describe('app (B.2.1)', () => {
   it('reads switches and records appended ones', async () => {
     await start({
       snapshot: {
-        switches: { argv: ['app', '--foo=bar', '--flag', '--port', '9'], testAd: false },
+        switches: {
+          argv: ['app', '--foo=bar', '--flag', '--port', '9', '--', '--after=1'],
+          testAd: false,
+        },
       },
     });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     expect(app.commandLine.hasSwitch('foo')).toBe(true);
     expect(app.commandLine.getSwitchValue('foo')).toBe('bar');
     expect(app.commandLine.getSwitchValue('flag')).toBe('');
-    expect(app.commandLine.getSwitchValue('port')).toBe('9');
+    // Chromium: a separate argument is not a switch value; nothing after `--` is a switch.
+    expect(app.commandLine.getSwitchValue('port')).toBe('');
+    expect(app.commandLine.hasSwitch('port')).toBe(true);
+    expect(app.commandLine.hasSwitch('after')).toBe(false);
     expect(app.commandLine.hasSwitch('none')).toBe(false);
     app.commandLine.appendSwitch('disable-gpu');
     app.commandLine.appendSwitch('lang', 'de');
@@ -412,6 +419,25 @@ describe('BrowserWindow (B.2.2)', () => {
     expect(win.webContents.getZoomFactor()).toBe(1.5);
     await settle();
     expect(host.callsOf('window_devtools')[0]).toEqual({ id: 1, open: true });
+    expect(host.callsOf('plugin:webview|set_webview_zoom')).toEqual([
+      { label: 'bw-1', value: 1.5 },
+    ]);
+  });
+
+  it('targets the bwr- webview after a remote load (A.2.3.1)', async () => {
+    await start();
+    const win = new BrowserWindow({ show: false });
+    const local = win.loadURL(`${location.origin}/index.html`);
+    win.webContents.setZoomFactor(1.25);
+    const remote = win.loadURL('https://example.test/page');
+    win.webContents.setZoomFactor(2);
+    await settle();
+    host.push(windowEvent(1, 'did-finish-load'));
+    await Promise.all([local, remote]);
+    expect(host.callsOf('plugin:webview|set_webview_zoom')).toEqual([
+      { label: 'bw-1', value: 1.25 },
+      { label: 'bwr-1', value: 2 },
+    ]);
   });
 
   it('routes webContents.ipc and ipcMain handlers', async () => {
@@ -531,12 +557,23 @@ describe('BrowserWindow (B.2.2)', () => {
     await start({
       commands: { window_create: () => Promise.reject({ code: 'io', message: 'no display' }) },
     });
-    app.on('window-all-closed', () => undefined);
+    const allClosed = vi.fn();
+    app.on('window-all-closed', allClosed);
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const win = new BrowserWindow({ show: false });
+    const loaded = win.loadFile('index.html');
     await expect(win.whenCreated()).rejects.toMatchObject({ code: 'io' });
+    await expect(loaded).rejects.toMatchObject({ code: 'io' });
     expect(win.isDestroyed()).toBe(true);
+    expect(BrowserWindow.getAllWindows()).toEqual([]);
     expect(error).toHaveBeenCalled();
+    // The window never existed: no window-all-closed, and never an implicit quit.
+    app.removeAllListeners('window-all-closed');
+    const lone = new BrowserWindow({ show: false });
+    await expect(lone.whenCreated()).rejects.toMatchObject({ code: 'io' });
+    await settle();
+    expect(allClosed).not.toHaveBeenCalled();
+    expect(host.callsOf('app_quit')).toEqual([]);
 
     await start();
     const live = new BrowserWindow({ show: false });
@@ -559,6 +596,78 @@ describe('BrowserWindow (B.2.2)', () => {
     expect(() => {
       live.webContents.send('x');
     }).toThrow('Object has been destroyed');
+  });
+
+  it('keeps parent and modal for a child created in the same tick as its parent', async () => {
+    let release: () => void = () => undefined;
+    let next = 1;
+    await start({
+      commands: {
+        window_create: () => {
+          const id = next++;
+          if (id > 1) return { id, label: `bw-${String(id)}` };
+          return new Promise((resolve) => {
+            release = () => {
+              resolve({ id, label: `bw-${String(id)}` });
+            };
+          });
+        },
+      },
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const main = new BrowserWindow({ show: false });
+    const child = new BrowserWindow({ parent: main, modal: true, show: false });
+    await settle();
+    expect(host.callsOf('window_create')).toHaveLength(1);
+    release();
+    await child.whenCreated();
+    expect(host.callsOf('window_create')[1]).toMatchObject({
+      options: { parentId: 1, modal: true },
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('shares one registry between two copies of the package (ADR 0012)', async () => {
+    await start();
+    vi.resetModules();
+    const copy = await import('./index.js');
+    expect(copy.BrowserWindow).not.toBe(BrowserWindow);
+    expect(copy.app).toBe(app);
+    const other = new copy.BrowserWindow({ show: false });
+    await other.whenCreated();
+    const focus = vi.fn();
+    other.on('focus', focus);
+    expect(BrowserWindow.fromId(other.id)).toBe(other);
+    expect(other instanceof BrowserWindow).toBe(true);
+    host.push(windowEvent(1, 'focus'));
+    host.push(windowEvent(1, 'close', { requestId: 3 }));
+    await settle();
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(host.callsOf('window_close_reply')).toEqual([{ id: 1, requestId: 3, prevent: false }]);
+    const loaded = other.loadFile('index.html');
+    await settle();
+    host.push(windowEvent(1, 'did-finish-load'));
+    await expect(loaded).resolves.toBeUndefined();
+  });
+
+  it('quits by default and answers closes of unknown windows without the app module', async () => {
+    await start();
+    const hooks = windowHooks();
+    const saved = hooks.allClosed;
+    delete hooks.allClosed;
+    try {
+      const win = new BrowserWindow({ show: false });
+      await win.whenCreated();
+      host.push(windowEvent(42, 'close', { requestId: 8 }));
+      host.push(windowEvent(1, 'closed'));
+      await settle();
+      expect(host.callsOf('window_close_reply')).toEqual([
+        { id: 42, requestId: 8, prevent: false },
+      ]);
+      expect(host.callsOf('app_quit')).toEqual([{}]);
+    } finally {
+      if (saved) hooks.allClosed = saved;
+    }
   });
 
   it('parses colours and asset paths', () => {
@@ -637,12 +746,32 @@ describe('screen (B.2.5)', () => {
     expect(removed).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ id: 2 }));
   });
 
-  it('refreshes the cursor at most every 100 ms', async () => {
-    await start({ commands: { screen_snapshot: () => ({ cursor: { x: 12, y: 34 } }) } });
-    expect(screen.getCursorScreenPoint()).toEqual({ x: 0, y: 0 });
-    await settle();
+  it('primes the cursor when ready and refreshes it at most every 100 ms', async () => {
+    let cursor = { x: 12, y: 34 };
+    await start({ commands: { screen_snapshot: () => ({ cursor }) } });
+    // Fetched once when the app became ready (start() cleared that call).
     expect(screen.getCursorScreenPoint()).toEqual({ x: 12, y: 34 });
+    cursor = { x: 5, y: 6 };
+    await settle();
+    expect(host.callsOf('screen_snapshot')).toHaveLength(0);
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 1000);
+    expect(screen.getCursorScreenPoint()).toEqual({ x: 12, y: 34 });
+    await settle();
+    expect(screen.getCursorScreenPoint()).toEqual({ x: 5, y: 6 });
     expect(host.callsOf('screen_snapshot')).toHaveLength(1);
+  });
+
+  it('seeds the cursor from the snapshot when the host provides one', async () => {
+    await start({
+      snapshot: { cursor: { x: 7, y: 8 } },
+      commands: {
+        screen_snapshot: () => {
+          throw { code: 'io', message: 'no cursor' };
+        },
+      },
+    });
+    vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+    expect(screen.getCursorScreenPoint()).toEqual({ x: 7, y: 8 });
   });
 
   it('completes partial displays', () => {
@@ -710,6 +839,13 @@ describe('shell, dialog, globalShortcut (B.2.5)', () => {
     }).toThrow(OwTauriUnsupportedError);
   });
 
+  it('parents a dialog to a window constructed in the same tick', async () => {
+    await start({ commands: { dialog_message: () => ({ response: 0 }) } });
+    const win = new BrowserWindow({ show: false });
+    await dialog.showMessageBox(win, { message: 'hi' });
+    expect(host.callsOf('dialog_message')).toEqual([{ message: 'hi', windowId: 1 }]);
+  });
+
   it('registers shortcuts and dispatches presses', async () => {
     await start({
       commands: { global_shortcut_register: (args) => args['accelerator'] !== 'Bad+Key' },
@@ -732,6 +868,28 @@ describe('shell, dialog, globalShortcut (B.2.5)', () => {
     await settle();
     expect(host.callsOf('global_shortcut_unregister')).toEqual([{ accelerator: 'Ctrl+K' }, {}]);
     expect(globalShortcut.isRegistered('Ctrl+K')).toBe(false);
+  });
+
+  it('treats accelerator aliases as one shortcut and allows a retry after a failure', async () => {
+    let refuse = true;
+    await start({ commands: { global_shortcut_register: () => !refuse } });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(globalShortcut.register('CmdOrCtrl+Shift+X', vi.fn())).toBe(true);
+    await settle();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('refused'));
+    expect(globalShortcut.isRegistered('CmdOrCtrl+Shift+X')).toBe(false);
+    refuse = false;
+    expect(globalShortcut.register('CmdOrCtrl+Shift+X', vi.fn())).toBe(true);
+    await settle();
+    expect(globalShortcut.isRegistered('shift+commandorcontrol+x')).toBe(true);
+    expect(globalShortcut.register('CommandOrControl+Shift+X', vi.fn())).toBe(false);
+    globalShortcut.unregister('Shift+CommandOrControl+X');
+    await settle();
+    expect(host.callsOf('global_shortcut_unregister')).toEqual([
+      { accelerator: 'CmdOrCtrl+Shift+X' },
+    ]);
+    expect(normalizeAccelerator('Option+Meta+Ctrl++')).toBe('control+alt+super+plus');
+    expect(normalizeAccelerator('Cmd+A')).toBe(normalizeAccelerator('command+a'));
   });
 });
 
@@ -819,6 +977,27 @@ describe('contextBridge (B.2.4)', () => {
     expect(() => {
       contextBridge.exposeInMainWorld('bridgeOther', {});
     }).toThrow(OwTauriError);
+  });
+
+  it('exposes a copy, so the preload keeps its own objects mutable', async () => {
+    await start({ label: 'bw-1' });
+    const config = { level: 1, list: [1] };
+    contextBridge.exposeInMainWorld('bridgeCopy', { config });
+    config.level = 2;
+    config.list.push(2);
+    const exposed = (globalThis as unknown as Record<string, { config: typeof config }>)[
+      'bridgeCopy'
+    ]!;
+    expect(exposed.config).toEqual({ level: 1, list: [1] });
+    expect(Object.isFrozen(exposed.config)).toBe(true);
+    const shared = { n: 1 };
+    const bare: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    bare['a'] = shared;
+    bare['b'] = shared;
+    const copied = copyForBridge(bare);
+    expect(copied['a']).toBe(copied['b']);
+    expect(copied['a']).not.toBe(shared);
+    expect(Object.getPrototypeOf(copied)).toBeNull();
   });
 
   it('deep-freezes cycles once', () => {

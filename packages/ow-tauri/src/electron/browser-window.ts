@@ -15,7 +15,7 @@
  *
  * @packageDocumentation
  */
-import type { Kernel } from '../bootstrap/kernel.js';
+import type { FacadeKernel } from '../bootstrap/facade-kernel.js';
 import type { IpcMain } from '../bootstrap/ipc-main.js';
 import { checkChannel, encodeMessageArgs } from '../bootstrap/ipc-renderer.js';
 import { EventEmitter, emitFromHost } from '../shared/emitter.js';
@@ -24,6 +24,7 @@ import { decode } from '../shared/otj.js';
 import type { Display, Rectangle, WindowMessage } from '../shared/protocol.js';
 import { defineUnsupported } from '../shared/unsupported.js';
 import { createEvent, kernel, toAssetPath } from './runtime.js';
+import type { UnsupportedMethod } from './unsupported-types.js';
 import type {
   BrowserWindowConstructorOptions,
   HandlerDetails,
@@ -121,7 +122,10 @@ interface WindowState {
 
 interface Created {
   hostId: number;
+  /** The native window's label (`bw-<id>`). */
   label: string;
+  /** The content webview's label: `bw-<id>`, or `bwr-<id>` once the window is remote (A.2.3.1). */
+  webviewLabel: string;
 }
 
 interface LoadWaiter {
@@ -143,7 +147,7 @@ class WindowRegistry {
     allClosed?: () => void;
   } = {};
 
-  constructor(private readonly k: Kernel) {
+  constructor(private readonly k: FacadeKernel) {
     k.on('window', (message) => {
       this.onMessage(message as WindowMessage);
     });
@@ -176,9 +180,33 @@ class WindowRegistry {
     const win = this.windows.get(id);
     if (!win) {
       this.k.log('debug', `window event '${message.event}' for unknown window ${String(id)}`);
+      if (message.event === 'close' && typeof message.requestId === 'number') {
+        // Nobody can prevent it: let the close proceed (A.6).
+        this.k
+          .command('window_close_reply', {
+            id: message.id,
+            requestId: message.requestId,
+            prevent: false,
+          })
+          .catch((error: unknown) => {
+            this.k.log('warn', `window_close_reply failed: ${(error as Error).message}`);
+          });
+      }
       return;
     }
     win[ON_EVENT](message);
+  }
+
+  /** The last window closed: `window-all-closed`, or quit when the `app` module is absent. */
+  allClosed(): void {
+    if (this.hooks.allClosed) {
+      this.hooks.allClosed();
+      return;
+    }
+    // Electron's default with no `window-all-closed` listener is to quit.
+    this.k.command('app_quit').catch((error: unknown) => {
+      this.k.log('warn', `app_quit failed: ${(error as Error).message}`);
+    });
   }
 
   createSettled(): void {
@@ -223,10 +251,14 @@ function detachedContents(windowId: number): unknown {
   });
 }
 
-const ADOPT = Symbol('adopt');
-const ON_EVENT = Symbol('onEvent');
-const OP = Symbol('op');
-const ON_CONTENTS_EVENT = Symbol('onContentsEvent');
+// The registry is shared by every copy of the package in a webview, so the
+// members it calls on windows created by another copy are keyed with
+// registered symbols. The `v1` suffix is part of the facade API
+// (RUNTIME_API_VERSION): change the methods' behaviour, change the suffix.
+const ADOPT = Symbol.for('ow-tauri.BrowserWindow.v1.adopt');
+const ON_EVENT = Symbol.for('ow-tauri.BrowserWindow.v1.onEvent');
+const OP = Symbol.for('ow-tauri.BrowserWindow.v1.op');
+const ON_CONTENTS_EVENT = Symbol.for('ow-tauri.WebContents.v1.onEvent');
 let adopting: { id: number } | null = null;
 
 /**
@@ -360,6 +392,66 @@ export class BrowserWindow extends EventEmitter {
     }
   }
 
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly setOpacity: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly setVibrancy: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly setShape: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly capturePage: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly setThumbarButtons: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly setOverlayIcon: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly previewFile: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly setBrowserView: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly addBrowserView: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly setTouchBar: UnsupportedMethod;
   /** The window id. */
   readonly id: number;
   /** The window's web contents. */
@@ -391,7 +483,8 @@ export class BrowserWindow extends EventEmitter {
     reg.windows.set(this.id, this);
     if (adopted) {
       const hostId = kernel.windowIds.toHost(adopted.id) ?? adopted.id;
-      this.#host = { hostId, label: `bw-${String(hostId)}` };
+      const label = `bw-${String(hostId)}`;
+      this.#host = { hostId, label, webviewLabel: label };
       this.#created = Promise.resolve(this.#host);
     } else {
       this.#created = this.#create(options);
@@ -430,7 +523,7 @@ export class BrowserWindow extends EventEmitter {
     this.#assertAlive('loadURL');
     if (/^file:/i.test(url)) return this.loadFile(url);
     this.#state.url = url;
-    return this.#load({ kind: 'url', url });
+    return this.#load({ kind: 'url', url }, isRemoteUrl(url));
   }
 
   /**
@@ -1102,13 +1195,32 @@ export class BrowserWindow extends EventEmitter {
     this.webContents[ON_CONTENTS_EVENT]('destroyed', {}, []);
     kernel.server.dropScope(this.id);
     kernel.windowIds.forget(this.id);
-    if (reg.windows.size === 0) reg.hooks.allClosed?.();
+    if (reg.windows.size === 0) reg.allClosed();
+  }
+
+  /** `window_create` failed: the window never existed, so no app event fires. */
+  #failed(error: unknown): void {
+    if (this.#destroyed) return;
+    this.#destroyed = true;
+    const reg = registry();
+    reg.windows.delete(this.id);
+    if (reg.focusedId === this.id) reg.focusedId = null;
+    for (const waiter of this.#loadWaiters.splice(0)) waiter.reject(error);
+    this.webContents[ON_CONTENTS_EVENT]('destroyed', {}, []);
+    kernel.server.dropScope(this.id);
+    kernel.windowIds.forget(this.id);
   }
 
   async #create(options: BrowserWindowConstructorOptions): Promise<Created> {
     const reg = registry();
     reg.pendingCreates++;
     try {
+      // `new BrowserWindow({ parent })` right after the parent's constructor:
+      // the parent's plugin id arrives with its own window_create response.
+      const parent = options.parent as { whenCreated?: () => Promise<void> } | null | undefined;
+      if (typeof parent?.whenCreated === 'function') {
+        await parent.whenCreated().catch(() => undefined);
+      }
       const response = (await kernel.command('window_create', {
         options: wireOptions(options),
         preload:
@@ -1121,31 +1233,34 @@ export class BrowserWindow extends EventEmitter {
       if (typeof hostId !== 'number')
         throw new OwTauriError('backend', 'window_create returned no window id');
       kernel.windowIds.bind(this.id, hostId);
-      this.#host = {
-        hostId,
-        label: typeof response?.label === 'string' ? response.label : `bw-${String(hostId)}`,
-      };
+      const label = typeof response?.label === 'string' ? response.label : `bw-${String(hostId)}`;
+      this.#host = { hostId, label, webviewLabel: label };
       return this.#host;
     } catch (error) {
-      kernel.log('error', `new BrowserWindow: ${(error as Error).message}`);
-      this.#closed();
+      kernel.log(
+        'error',
+        `new BrowserWindow: the native window could not be created: ${(error as Error).message}`,
+      );
+      this.#failed(error);
       throw error;
     } finally {
       reg.createSettled();
     }
   }
 
-  #load(target: Record<string, unknown>): Promise<void> {
+  #load(target: Record<string, unknown>, remote = false): Promise<void> {
     this.#state.loading = true;
     const loaded = new Promise<void>((resolve, reject) => {
       this.#loadWaiters.push({ resolve, reject });
     });
-    this.#op(({ hostId }) => kernel.command('window_load', { id: hostId, target })).catch(
-      (error: unknown) => {
-        this.#state.loading = false;
-        for (const waiter of this.#loadWaiters.splice(0)) waiter.reject(error);
-      },
-    );
+    this.#op(async (host) => {
+      await kernel.command('window_load', { id: host.hostId, target });
+      // A remote page lives in a fresh `bwr-<id>` webview from now on.
+      if (remote) host.webviewLabel = `bwr-${String(host.hostId)}`;
+    }).catch((error: unknown) => {
+      this.#state.loading = false;
+      for (const waiter of this.#loadWaiters.splice(0)) waiter.reject(error);
+    });
     return loaded;
   }
 
@@ -1219,6 +1334,72 @@ export class WebContents extends EventEmitter {
     );
   }
 
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly print: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly printToPDF: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly capturePage: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly setAudioMuted: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly startDrag: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly insertCSS: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly savePage: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly sendInputEvent: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly postMessage: UnsupportedMethod;
+  /**
+   * Unsupported: reads as `undefined` and logs a warning once.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly session: undefined;
+  /**
+   * Unsupported: reads as `undefined` and logs a warning once.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.2).
+   */
+  declare readonly debugger: undefined;
   /** Same as the window id. */
   readonly id: number;
   readonly #window: BrowserWindow;
@@ -1386,7 +1567,9 @@ export class WebContents extends EventEmitter {
   setZoomFactor(factor: number): void {
     this.#state.zoomFactor = factor;
     void this.#window
-      [OP](({ label }) => kernel.raw('plugin:webview|set_webview_zoom', { label, value: factor }))
+      [OP](({ webviewLabel }) =>
+        kernel.raw('plugin:webview|set_webview_zoom', { label: webviewLabel, value: factor }),
+      )
       .catch((error: unknown) => {
         kernel.log('warn', `setZoomFactor failed: ${(error as Error).message}`);
       });
@@ -1532,6 +1715,25 @@ defineUnsupported(
     kernel.warnOnce(key, message);
   },
 );
+
+/**
+ * Whether `window_load` turns the window remote for this URL: an `http(s)` URL
+ * outside the app origin (the main webview's own origin), A.2.3.1.
+ *
+ * @param url - the URL passed to `loadURL`
+ * @returns `true` for a remote page
+ */
+function isRemoteUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  const origin = typeof location === 'object' ? location.origin : undefined;
+  return parsed.origin !== origin;
+}
 
 function appPath(): string | undefined {
   const value = kernel.state.get('paths.appPath');

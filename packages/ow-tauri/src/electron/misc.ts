@@ -7,7 +7,9 @@
  */
 import { createProcessShim, type ProcessShim } from '../bootstrap/process-shim.js';
 import { EventEmitter, emitFromHost } from '../shared/emitter.js';
-import { unsupportedModule } from '../shared/unsupported.js';
+import { unsupportedModule, type UnsupportedMethod } from '../shared/unsupported.js';
+import type * as U from './unsupported-types.js';
+import type { UnsupportedModule } from './unsupported-types.js';
 import { kernel } from './runtime.js';
 
 /** Electron's `crashReporter` (CONTRACT B.2.5). */
@@ -18,26 +20,68 @@ export interface CrashReporter {
    * @param options - ignored
    */
   start(options?: unknown): void;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.5).
+   */
+  readonly getLastCrashReport: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.5).
+   */
+  readonly getUploadedReports: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.5).
+   */
+  readonly getUploadToServer: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.5).
+   */
+  readonly setUploadToServer: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.5).
+   */
+  readonly addExtraParameter: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.5).
+   */
+  readonly removeExtraParameter: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.5).
+   */
+  readonly getParameters: UnsupportedMethod;
 }
 
+// The other members come from the proxy below.
+const reporter = {
+  start(): void {
+    kernel.warnOnce(
+      'crashReporter.start',
+      'crashReporter.start is a no-op in ow-tauri; install a crash handler in Rust (see docs/PORT-MAP.md)',
+    );
+  },
+} as CrashReporter;
+
 /** Electron's `crashReporter`: `start` warns, every other member throws. */
-export const crashReporter: CrashReporter = new Proxy(
-  {
-    start(): void {
-      kernel.warnOnce(
-        'crashReporter.start',
-        'crashReporter.start is a no-op in ow-tauri; install a crash handler in Rust (see docs/PORT-MAP.md)',
-      );
-    },
+export const crashReporter: CrashReporter = new Proxy(reporter, {
+  get(target, key, receiver) {
+    if (key === 'start' || typeof key === 'symbol' || key === 'then' || key === 'toJSON')
+      return Reflect.get(target, key, receiver) as unknown;
+    return (unsupportedModule('crashReporter') as Record<string, unknown>)[key];
   },
-  {
-    get(target, key, receiver) {
-      if (key === 'start' || typeof key === 'symbol' || key === 'then' || key === 'toJSON')
-        return Reflect.get(target, key, receiver) as unknown;
-      return (unsupportedModule('crashReporter') as Record<string, unknown>)[key];
-    },
-  },
-);
+});
 
 const DARK_QUERY = '(prefers-color-scheme: dark)';
 
@@ -104,78 +148,218 @@ export const process: ProcessShim = kernel.singleton('process', () => createProc
 
 const reason = (alternative: string): string => `it has no equivalent in ow-tauri; ${alternative}`;
 
-/** Unsupported: no application menus. Every member throws `OwTauriUnsupportedError`. */
-export const Menu: object = unsupportedModule(
+/**
+ * Electron's `Menu`: no application menus; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri: build menus in the UI or with a Tauri menu in Rust.
+ */
+export const Menu = unsupportedModule(
   'Menu',
   reason('build menus in the UI or with a Tauri menu in Rust'),
-);
-/** Unsupported. */
-export const MenuItem: object = unsupportedModule(
+) as UnsupportedModule<U.MenuMembers>;
+/**
+ * Electron's `MenuItem`: no application menus; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri: build menus in the UI or with a Tauri menu in Rust.
+ */
+export const MenuItem = unsupportedModule(
   'MenuItem',
   reason('build menus in the UI or with a Tauri menu in Rust'),
-);
-/** Unsupported: use Tauri's tray icon from Rust. */
-export const Tray: object = unsupportedModule('Tray', reason("use Tauri's tray icon from Rust"));
-/** Unsupported: use the Tauri notification plugin. */
-export const Notification: object = unsupportedModule(
+) as UnsupportedModule<U.MenuItemMembers>;
+/**
+ * Electron's `Tray`: no tray API in JavaScript; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri: use Tauri's tray icon from Rust.
+ */
+export const Tray = unsupportedModule(
+  'Tray',
+  reason("use Tauri's tray icon from Rust"),
+) as UnsupportedModule<U.TrayMembers>;
+/**
+ * Electron's `Notification`: no notification API in the facade; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri: use the Tauri notification plugin.
+ */
+export const Notification = unsupportedModule(
   'Notification',
   reason('use the Tauri notification plugin'),
-);
-/** Unsupported. */
-export const session: object = unsupportedModule('session');
-/** Unsupported. */
-export const protocol: object = unsupportedModule(
+) as UnsupportedModule<U.NotificationMembers>;
+/**
+ * Electron's `session`: no session API; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri.
+ */
+export const session = unsupportedModule('session') as UnsupportedModule<U.SessionMembers>;
+/**
+ * Electron's `protocol`: no protocol API in JavaScript; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri: register URI scheme protocols in Rust.
+ */
+export const protocol = unsupportedModule(
   'protocol',
   reason('register URI scheme protocols in Rust'),
-);
-/** Unsupported: use `fetch`. */
-export const net: object = unsupportedModule('net', reason('use fetch'));
-/** Unsupported. */
-export const netLog: object = unsupportedModule('netLog');
-/** Unsupported. */
-export const powerMonitor: object = unsupportedModule('powerMonitor');
-/** Unsupported. */
-export const powerSaveBlocker: object = unsupportedModule('powerSaveBlocker');
-/** Unsupported: Electron's updater; use `autoUpdater` from `ow-tauri/main`. */
-export const autoUpdater: object = unsupportedModule(
+) as UnsupportedModule<U.ProtocolMembers>;
+/**
+ * Electron's `net`: no net module; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri: use fetch.
+ */
+export const net = unsupportedModule('net', reason('use fetch')) as UnsupportedModule<U.NetMembers>;
+/**
+ * Electron's `netLog`: no net log; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri.
+ */
+export const netLog = unsupportedModule('netLog') as UnsupportedModule<U.NetLogMembers>;
+/**
+ * Electron's `powerMonitor`: no power monitor; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri.
+ */
+export const powerMonitor = unsupportedModule(
+  'powerMonitor',
+) as UnsupportedModule<U.PowerMonitorMembers>;
+/**
+ * Electron's `powerSaveBlocker`: no power save blocker; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri.
+ */
+export const powerSaveBlocker = unsupportedModule(
+  'powerSaveBlocker',
+) as UnsupportedModule<U.PowerSaveBlockerMembers>;
+/**
+ * Electron's `autoUpdater`: Electron's updater is not provided; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri: use autoUpdater from 'ow-tauri/main'.
+ */
+export const autoUpdater = unsupportedModule(
   'autoUpdater',
   reason("use autoUpdater from 'ow-tauri/main'"),
-);
-/** Unsupported: use `navigator.clipboard` or the Tauri clipboard plugin. */
-export const clipboard: object = unsupportedModule(
+) as UnsupportedModule<U.AutoUpdaterMembers>;
+/**
+ * Electron's `clipboard`: no clipboard module; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri: use navigator.clipboard or the Tauri clipboard plugin.
+ */
+export const clipboard = unsupportedModule(
   'clipboard',
   reason('use navigator.clipboard or the Tauri clipboard plugin'),
-);
-/** Unsupported. */
-export const nativeImage: object = unsupportedModule('nativeImage');
-/** Unsupported. */
-export const systemPreferences: object = unsupportedModule('systemPreferences');
-/** Unsupported. */
-export const desktopCapturer: object = unsupportedModule('desktopCapturer');
-/** Unsupported. */
-export const webFrame: object = unsupportedModule('webFrame');
-/** Unsupported. */
-export const webFrameMain: object = unsupportedModule('webFrameMain');
-/** Unsupported. */
-export const utilityProcess: object = unsupportedModule(
+) as UnsupportedModule<U.ClipboardMembers>;
+/**
+ * Electron's `nativeImage`: no native images; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri.
+ */
+export const nativeImage = unsupportedModule(
+  'nativeImage',
+) as UnsupportedModule<U.NativeImageMembers>;
+/**
+ * Electron's `systemPreferences`: no system preferences; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri.
+ */
+export const systemPreferences = unsupportedModule(
+  'systemPreferences',
+) as UnsupportedModule<U.SystemPreferencesMembers>;
+/**
+ * Electron's `desktopCapturer`: no desktop capturer; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri.
+ */
+export const desktopCapturer = unsupportedModule(
+  'desktopCapturer',
+) as UnsupportedModule<U.DesktopCapturerMembers>;
+/**
+ * Electron's `webFrame`: no webFrame; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri.
+ */
+export const webFrame = unsupportedModule('webFrame') as UnsupportedModule<U.WebFrameMembers>;
+/**
+ * Electron's `webFrameMain`: no webFrameMain; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri.
+ */
+export const webFrameMain = unsupportedModule(
+  'webFrameMain',
+) as UnsupportedModule<U.WebFrameMainMembers>;
+/**
+ * Electron's `utilityProcess`: no utility processes; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri: move the work to Rust or a web worker.
+ */
+export const utilityProcess = unsupportedModule(
   'utilityProcess',
   reason('move the work to Rust or a web worker'),
-);
-/** Unsupported. */
-export const MessageChannelMain: object = unsupportedModule('MessageChannelMain');
-/** Unsupported. */
-export const BrowserView: object = unsupportedModule('BrowserView');
-/** Unsupported. */
-export const WebContentsView: object = unsupportedModule('WebContentsView');
-/** Unsupported. */
-export const BaseWindow: object = unsupportedModule('BaseWindow', reason('use BrowserWindow'));
-/** Unsupported. */
-export const TouchBar: object = unsupportedModule('TouchBar');
-/** Unsupported. */
-export const inAppPurchase: object = unsupportedModule('inAppPurchase');
-/** Unsupported. */
-export const pushNotifications: object = unsupportedModule('pushNotifications');
-/** Unsupported. */
-export const safeStorage: object = unsupportedModule('safeStorage');
-/** Unsupported. */
-export const contentTracing: object = unsupportedModule('contentTracing');
+) as UnsupportedModule<U.UtilityProcessMembers>;
+/**
+ * Electron's `MessageChannelMain`: no MessagePorts; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri.
+ */
+export const MessageChannelMain = unsupportedModule(
+  'MessageChannelMain',
+) as UnsupportedModule<U.MessageChannelMainMembers>;
+/**
+ * Electron's `BrowserView`: no BrowserView; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri.
+ */
+export const BrowserView = unsupportedModule(
+  'BrowserView',
+) as UnsupportedModule<U.BrowserViewMembers>;
+/**
+ * Electron's `WebContentsView`: no WebContentsView; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri.
+ */
+export const WebContentsView = unsupportedModule(
+  'WebContentsView',
+) as UnsupportedModule<U.WebContentsViewMembers>;
+/**
+ * Electron's `BaseWindow`: no BaseWindow; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri: use BrowserWindow.
+ */
+export const BaseWindow = unsupportedModule(
+  'BaseWindow',
+  reason('use BrowserWindow'),
+) as UnsupportedModule<U.BaseWindowMembers>;
+/**
+ * Electron's `TouchBar`: no Touch Bar; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri.
+ */
+export const TouchBar = unsupportedModule('TouchBar') as UnsupportedModule<U.TouchBarMembers>;
+/**
+ * Electron's `inAppPurchase`: no in-app purchases; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri.
+ */
+export const inAppPurchase = unsupportedModule(
+  'inAppPurchase',
+) as UnsupportedModule<U.InAppPurchaseMembers>;
+/**
+ * Electron's `pushNotifications`: no push notifications; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri.
+ */
+export const pushNotifications = unsupportedModule(
+  'pushNotifications',
+) as UnsupportedModule<U.PushNotificationsMembers>;
+/**
+ * Electron's `safeStorage`: no safe storage; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri.
+ */
+export const safeStorage = unsupportedModule(
+  'safeStorage',
+) as UnsupportedModule<U.SafeStorageMembers>;
+/**
+ * Electron's `contentTracing`: no content tracing; every member throws `OwTauriUnsupportedError`.
+ *
+ * @deprecated Unsupported in ow-tauri.
+ */
+export const contentTracing = unsupportedModule(
+  'contentTracing',
+) as UnsupportedModule<U.ContentTracingMembers>;

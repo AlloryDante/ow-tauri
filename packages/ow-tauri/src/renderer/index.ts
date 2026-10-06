@@ -8,7 +8,17 @@
 import type { IpcRenderer } from '../bootstrap/ipc-renderer.js';
 import { kernel } from '../electron/runtime.js';
 
-/** Electron's `ipcRenderer` (UI windows only). */
+/**
+ * Electron's `ipcRenderer` (UI windows only), the same object as
+ * `ow-tauri/electron`'s.
+ *
+ * @example
+ * ```ts
+ * import { ipcRenderer } from 'ow-tauri/renderer';
+ *
+ * ipcRenderer.send('log', 'renderer started');
+ * ```
+ */
 export const ipcRenderer: IpcRenderer = kernel.ipcRenderer;
 
 export { contextBridge } from '../electron/context-bridge.js';

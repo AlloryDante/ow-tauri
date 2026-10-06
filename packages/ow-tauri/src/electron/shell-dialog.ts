@@ -5,10 +5,10 @@
  *
  * @packageDocumentation
  */
-import type { Kernel } from '../bootstrap/kernel.js';
+import type { FacadeKernel } from '../bootstrap/facade-kernel.js';
 import { OwTauriError } from '../shared/errors.js';
 import type { GlobalShortcutMessage } from '../shared/protocol.js';
-import { defineUnsupported } from '../shared/unsupported.js';
+import { defineUnsupported, type UnsupportedMethod } from '../shared/unsupported.js';
 import { kernel } from './runtime.js';
 import type {
   BrowserWindowLike,
@@ -44,13 +44,46 @@ export interface Shell {
    * @param path - the path
    */
   showItemInFolder(path: string): void;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.5).
+   */
+  readonly trashItem: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.5).
+   */
+  readonly beep: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.5).
+   */
+  readonly writeShortcutLink: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.5).
+   */
+  readonly readShortcutLink: UnsupportedMethod;
 }
 
 function main(api: string): void {
   kernel.require('main', api);
 }
 
-/** Electron's `shell` (main webview only). */
+/**
+ * Electron's `shell` (main webview only).
+ *
+ * @example
+ * ```ts
+ * await shell.openExternal('https://www.overwolf.com/');
+ * const error = await shell.openPath(app.getPath('logs')); // '' on success
+ * ```
+ */
+// The unsupported members are added by defineUnsupported below.
 export const shell: Shell = {
   async openExternal(url) {
     main('shell.openExternal');
@@ -71,7 +104,7 @@ export const shell: Shell = {
       kernel.log('warn', `shell.showItemInFolder failed: ${(error as Error).message}`);
     });
   },
-};
+} as Shell;
 defineUnsupported(shell, 'shell.', ['trashItem', 'beep', 'writeShortcutLink', 'readShortcutLink']);
 
 /** Electron's `dialog` (CONTRACT B.2.5). */
@@ -117,14 +150,47 @@ export interface Dialog {
    * @param content - the message
    */
   showErrorBox(title: string, content: string): void;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.5).
+   */
+  readonly showOpenDialogSync: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.5).
+   */
+  readonly showSaveDialogSync: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.5).
+   */
+  readonly showMessageBoxSync: UnsupportedMethod;
+  /**
+   * Unsupported: throws `OwTauriUnsupportedError`.
+   *
+   * @deprecated Unsupported in ow-tauri (CONTRACT B.2.5).
+   */
+  readonly showCertificateTrustDialog: UnsupportedMethod;
 }
 
-function split<T extends object>(
+/**
+ * Splits Electron's `(window, options)` / `(options)` overloads. The parent
+ * window's plugin id is read after its `window_create` settled, so a dialog
+ * for a window constructed in the same tick is still parented.
+ */
+async function split<T extends object>(
   windowOrOptions: BrowserWindowLike | T,
   options: T | undefined,
-): [Record<string, unknown>, number | undefined] {
+): Promise<[Record<string, unknown>, number | undefined]> {
   if (options !== undefined) {
-    const id = (windowOrOptions as BrowserWindowLike | null)?.id;
+    const win = windowOrOptions as (BrowserWindowLike & { whenCreated?: unknown }) | null;
+    if (typeof win?.whenCreated === 'function') {
+      await (win.whenCreated as () => Promise<void>).call(win).catch(() => undefined);
+    }
+    const id = win?.id;
     return [
       { ...(options as Record<string, unknown>) },
       typeof id === 'number' ? kernel.windowIds.toHost(id) : undefined,
@@ -140,11 +206,22 @@ function withWindow(
   return windowId === undefined ? args : { ...args, windowId };
 }
 
-/** Electron's `dialog` (main webview only). */
+/**
+ * Electron's `dialog` (main webview only).
+ *
+ * @example
+ * ```ts
+ * const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+ *   properties: ['openFile'],
+ *   filters: [{ name: 'Replays', extensions: ['mp4'] }],
+ * });
+ * ```
+ */
+// The unsupported members are added by defineUnsupported below.
 export const dialog: Dialog = {
   async showOpenDialog(windowOrOptions, options) {
     main('dialog.showOpenDialog');
-    const [args, windowId] = split(windowOrOptions, options);
+    const [args, windowId] = await split(windowOrOptions, options);
     const result = (await kernel.command(
       'dialog_open',
       withWindow(args, windowId),
@@ -156,7 +233,7 @@ export const dialog: Dialog = {
   },
   async showSaveDialog(windowOrOptions, options) {
     main('dialog.showSaveDialog');
-    const [args, windowId] = split(windowOrOptions, options);
+    const [args, windowId] = await split(windowOrOptions, options);
     const result = (await kernel.command(
       'dialog_save',
       withWindow(args, windowId),
@@ -168,7 +245,7 @@ export const dialog: Dialog = {
   },
   async showMessageBox(windowOrOptions, options) {
     main('dialog.showMessageBox');
-    const [args, windowId] = split(windowOrOptions, options);
+    const [args, windowId] = await split(windowOrOptions, options);
     if (Array.isArray(args['buttons']) && args['buttons'].length > 3) {
       throw new OwTauriError(
         'invalid-argument',
@@ -195,7 +272,7 @@ export const dialog: Dialog = {
         kernel.log('warn', `dialog.showErrorBox failed: ${(error as Error).message}`);
       });
   },
-};
+} as Dialog;
 defineUnsupported(dialog, 'dialog.', [
   'showOpenDialogSync',
   'showSaveDialogSync',
@@ -205,8 +282,54 @@ defineUnsupported(dialog, 'dialog.', [
 
 interface Shortcut {
   id: number;
+  /** The accelerator as the app wrote it (sent to the plugin). */
+  accelerator: string;
   callback: () => void;
-  registered: boolean;
+}
+
+/** Modifier spellings Electron accepts, by canonical name. */
+const MODIFIER_ALIASES: Readonly<Record<string, string>> = {
+  commandorcontrol: 'commandorcontrol',
+  cmdorctrl: 'commandorcontrol',
+  command: 'command',
+  cmd: 'command',
+  control: 'control',
+  ctrl: 'control',
+  alt: 'alt',
+  option: 'alt',
+  altgr: 'altgr',
+  shift: 'shift',
+  super: 'super',
+  meta: 'super',
+};
+
+/** Canonical modifier order. */
+const MODIFIER_ORDER = ['commandorcontrol', 'command', 'control', 'alt', 'altgr', 'shift', 'super'];
+
+/**
+ * The canonical form of an Electron accelerator: lower case, modifier
+ * aliases resolved (`CmdOrCtrl` = `CommandOrControl`, `Option` = `Alt`,
+ * `Meta` = `Super`), modifiers in a fixed order. Two accelerators Electron
+ * treats as the same shortcut have the same canonical form.
+ *
+ * @param accelerator - e.g. `CmdOrCtrl+Shift+X`
+ * @returns e.g. `commandorcontrol+shift+x`
+ */
+export function normalizeAccelerator(accelerator: string): string {
+  // `Ctrl++` names the plus key, like `Ctrl+Plus`.
+  const parts = accelerator
+    .replace(/\+\+/g, '+plus')
+    .split('+')
+    .map((part) => part.trim().toLowerCase());
+  const modifiers = new Set<string>();
+  const keys: string[] = [];
+  for (const part of parts) {
+    const modifier = MODIFIER_ALIASES[part];
+    if (modifier !== undefined) modifiers.add(modifier);
+    else keys.push(part);
+  }
+  const ordered = MODIFIER_ORDER.filter((m) => modifiers.has(m));
+  return [...ordered, ...keys].join('+');
 }
 
 /**
@@ -214,7 +337,7 @@ interface Shortcut {
  * `global-shortcut` host messages.
  */
 export class GlobalShortcut {
-  readonly #kernel: Kernel;
+  readonly #kernel: FacadeKernel;
   readonly #shortcuts = new Map<string, Shortcut>();
   #nextId = 1;
 
@@ -222,7 +345,7 @@ export class GlobalShortcut {
    * @param k - the kernel
    * @internal
    */
-  constructor(k: Kernel) {
+  constructor(k: FacadeKernel) {
     this.#kernel = k;
     k.on('global-shortcut', (message) => {
       const { id, state } = message as GlobalShortcutMessage;
@@ -254,16 +377,18 @@ export class GlobalShortcut {
    */
   register(accelerator: string, callback: () => void): boolean {
     this.#kernel.require('main', 'globalShortcut.register');
-    if (this.#shortcuts.has(accelerator)) return false;
-    const shortcut: Shortcut = { id: this.#nextId++, callback, registered: true };
-    this.#shortcuts.set(accelerator, shortcut);
+    const key = normalizeAccelerator(accelerator);
+    if (this.#shortcuts.has(key)) return false;
+    const shortcut: Shortcut = { id: this.#nextId++, accelerator, callback };
+    this.#shortcuts.set(key, shortcut);
     this.#kernel
       .command('global_shortcut_register', { accelerator, id: shortcut.id })
       .then((ok) => {
         if (ok === false) throw new Error('the OS refused the shortcut');
       })
       .catch((error: unknown) => {
-        shortcut.registered = false;
+        // Forget it, so isRegistered() is false and a later register() can retry.
+        if (this.#shortcuts.get(key) === shortcut) this.#shortcuts.delete(key);
         this.#kernel.log(
           'warn',
           `globalShortcut.register('${accelerator}') failed: ${(error as Error).message}`,
@@ -290,7 +415,7 @@ export class GlobalShortcut {
    */
   isRegistered(accelerator: string): boolean {
     this.#kernel.require('main', 'globalShortcut.isRegistered');
-    return this.#shortcuts.get(accelerator)?.registered === true;
+    return this.#shortcuts.has(normalizeAccelerator(accelerator));
   }
 
   /**
@@ -300,8 +425,11 @@ export class GlobalShortcut {
    */
   unregister(accelerator: string): void {
     this.#kernel.require('main', 'globalShortcut.unregister');
-    if (!this.#shortcuts.delete(accelerator)) return;
-    this.#fire({ accelerator });
+    const key = normalizeAccelerator(accelerator);
+    const shortcut = this.#shortcuts.get(key);
+    if (!shortcut) return;
+    this.#shortcuts.delete(key);
+    this.#fire({ accelerator: shortcut.accelerator });
   }
 
   /** Unregisters every accelerator of this app. */
@@ -318,7 +446,15 @@ export class GlobalShortcut {
   }
 }
 
-/** Electron's `globalShortcut` (main webview only). */
+/**
+ * Electron's `globalShortcut` (main webview only).
+ *
+ * @example
+ * ```ts
+ * globalShortcut.register('CmdOrCtrl+Shift+H', () => win.isVisible() ? win.hide() : win.show());
+ * app.on('will-quit', () => globalShortcut.unregisterAll());
+ * ```
+ */
 export const globalShortcut: GlobalShortcut = kernel.singleton(
   'electron.globalShortcut',
   () => new GlobalShortcut(kernel),
