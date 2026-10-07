@@ -70,6 +70,12 @@ export interface Slot {
   /** Sets the status chip. */
   setStatus(status: SlotStatus): void;
   /**
+   * Hides the card with `display: none` (chip "hidden") or shows it again
+   * (the chip goes back to the status it had, or to the newest one an event
+   * set while hidden).
+   */
+  setHidden(hidden: boolean): void;
+  /**
    * Listens to one event of the element (after the timeline row is added).
    *
    * @returns an unsubscribe function
@@ -108,7 +114,7 @@ export function createSlot(ctx: AdContext, options: SlotOptions): Slot {
     'div',
     { class: 'slot-head' },
     h('span', { class: 'mono slot-size', text: sizeText }),
-    h('span', { class: 'mono muted', text: options.cid }),
+    h('span', { class: 'mono muted slot-cid', text: options.cid, attrs: { title: options.cid } }),
     options.adstyle ? h('span', { class: 'mono tag', text: options.adstyle }) : null,
     chip,
   );
@@ -139,10 +145,16 @@ export function createSlot(ctx: AdContext, options: SlotOptions): Slot {
   const created = ctx.now();
 
   let status: SlotStatus = 'mounting';
+  let shownStatus: SlotStatus = 'mounting';
+  let hiddenNow = false;
   let filled = false;
   let inView = false;
   let noFillTimer: ReturnType<typeof setTimeout> | undefined;
   const setStatus = (next: SlotStatus): void => {
+    if (next !== 'hidden') shownStatus = next;
+    // While hidden the chip keeps saying so; events still update the status
+    // the chip returns to.
+    if (hiddenNow && next !== 'hidden') return;
     status = next;
     chip.textContent = next;
     chip.className = `chip tone-${STATUS_TONE[next]}`;
@@ -208,6 +220,17 @@ export function createSlot(ctx: AdContext, options: SlotOptions): Slot {
       return status;
     },
     setStatus,
+    setHidden(hidden) {
+      if (hidden === hiddenNow) return;
+      card.style.display = hidden ? 'none' : '';
+      if (hidden) {
+        setStatus('hidden');
+        hiddenNow = true;
+      } else {
+        hiddenNow = false;
+        setStatus(shownStatus);
+      }
+    },
     on(name, listener) {
       let set = listeners.get(name);
       if (!set) {

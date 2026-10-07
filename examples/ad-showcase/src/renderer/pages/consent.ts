@@ -50,6 +50,14 @@ export const mountConsent: MountPage = (root, ctx) => {
     ['test ads', h('span', { class: 'mono', text: String(info.mode === 'test') })],
   ];
 
+  ctx.inspect(() => ({
+    cmpRequired: cmpResult.textContent,
+    hashKeys:
+      hashes.textContent === '–' ? [] : Object.keys(JSON.parse(hashes.textContent) as object),
+    // Whether the uid shows masked (the value itself never leaves the window).
+    uidMasked: (rows[0]?.[1].textContent ?? '').includes('…'),
+    uidOverride: info.uid !== info.cuid,
+  }));
   root.append(
     pageHeader(
       'Consent and identity',

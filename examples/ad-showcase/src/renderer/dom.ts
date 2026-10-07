@@ -77,19 +77,24 @@ export function button(
 }
 
 /**
- * A page heading with a one-line description.
+ * A page heading with a one-line description, and optional controls on the
+ * same row (pages whose ads must fit the window height put their toolbar
+ * there).
  *
  * @param title - the page title
  * @param description - what the page shows
+ * @param aside - controls shown to the right of the heading
  * @returns the header element
  */
-export function pageHeader(title: string, description: string): HTMLElement {
-  return h(
-    'header',
-    { class: 'page-head' },
+export function pageHeader(title: string, description: string, aside?: Node): HTMLElement {
+  const text = h(
+    'div',
+    { class: 'page-head-text' },
     h('h1', { text: title }),
     h('p', { text: description }),
   );
+  if (!aside) return h('header', { class: 'page-head' }, text);
+  return h('header', { class: 'page-head page-head-row' }, text, aside);
 }
 
 /**

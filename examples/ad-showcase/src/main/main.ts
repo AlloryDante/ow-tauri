@@ -14,6 +14,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { host } from '#host';
 import { authorName, exportFileName, formulaUid, relaunchArgs } from '../shared/identity.js';
+import { PAGE_SWITCH, formatRoute, parseRoute, withPageSwitch } from '../shared/route.js';
 import {
   Channel,
   type AdMode,
@@ -141,9 +142,11 @@ function registerIpc(): void {
     },
   );
   ipcMain.handle(Channel.parity, () => readParity());
-  ipcMain.handle(Channel.restart, (_event, next: unknown) => {
+  ipcMain.handle(Channel.restart, (_event, next: unknown, route: unknown) => {
     if (next !== 'test' && next !== 'live') throw new TypeError('mode must be test or live');
-    app.relaunch({ args: relaunchArgs(process.argv, next) });
+    // Come back on the same page, without mounting page 1 first.
+    const page = typeof route === 'string' ? route : null;
+    app.relaunch({ args: withPageSwitch(relaunchArgs(process.argv, next), page) });
     app.exit(0);
   });
   ipcMain.handle(Channel.windowAction, (_event, action: unknown) => {
@@ -181,7 +184,12 @@ async function createWindow(): Promise<void> {
   win.on('closed', () => {
     mainWindow = null;
   });
-  await win.loadFile(joinPath(root, 'renderer', 'index.html'));
+  // `--showcase-page=<route>` opens that page first (see shared/route.ts).
+  const start = parseRoute(app.commandLine.getSwitchValue(PAGE_SWITCH));
+  await win.loadFile(
+    joinPath(root, 'renderer', 'index.html'),
+    start ? { hash: formatRoute(start) } : {},
+  );
   win.show();
 }
 

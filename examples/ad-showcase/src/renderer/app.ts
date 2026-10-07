@@ -7,6 +7,7 @@
  */
 import { maskId } from '../shared/identity.js';
 import type { AdMode, HostInfo, ShowcaseApi } from '../shared/ipc.js';
+import { formatRoute, parseRoute } from '../shared/route.js';
 import { button, h } from './dom.js';
 import { mountConsent } from './pages/consent.js';
 import { mountControls } from './pages/controls.js';
@@ -53,6 +54,28 @@ declare global {
     /** Read-only inspection for the lab driver. */
     __showcase?: ShowcaseInspection;
   }
+}
+
+/**
+ * A slot card for the inspection snapshot: its `cid`, status, `display`,
+ * box rectangle and the share of the box inside the viewport.
+ */
+function slotState(card: HTMLElement): Record<string, unknown> {
+  const box = card.querySelector<HTMLElement>('.slot-box');
+  const r = box?.getBoundingClientRect();
+  let inView = 0;
+  if (r && r.width > 0 && r.height > 0) {
+    const w = Math.max(0, Math.min(r.right, innerWidth) - Math.max(r.left, 0));
+    const hgt = Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0));
+    inView = Math.round(((w * hgt) / (r.width * r.height)) * 100) / 100;
+  }
+  return {
+    cid: box?.dataset['cid'] ?? '',
+    status: card.dataset['status'] ?? '',
+    display: getComputedStyle(card).display,
+    rect: r ? [r.left, r.top, r.width, r.height].map(Math.round) : null,
+    inView,
+  };
 }
 
 function storedTheme(): 'light' | 'dark' | null {
@@ -151,8 +174,8 @@ export function startApp(root: HTMLElement, api: ShowcaseApi, info: HostInfo): v
   const banner = h('div', { class: 'banner', attrs: { role: 'alert' } });
   banner.hidden = true;
   const restart = (mode: AdMode): void => {
-    control('restart', 'app', { mode });
-    void api.restart(mode);
+    control('restart', 'app', { mode, route: currentRoute() });
+    void api.restart(mode, currentRoute());
   };
   const restartButton = button(`Restart in ${other.toUpperCase()}`, 'top-restart', () => {
     if (other === 'test') {
@@ -250,7 +273,12 @@ export function startApp(root: HTMLElement, api: ShowcaseApi, info: HostInfo): v
 
   // ------------------------------------------------------------------ pages
   let current: PageDef | null = null;
+  let currentArg: string | null = null;
   let cleanup: (() => void) | null = null;
+  let inspectPage: (() => Record<string, unknown>) | null = null;
+  const currentRoute = (): string =>
+    current ? formatRoute({ page: current.id, arg: currentArg }) : '';
+
   const pageListeners = new Set<(event: { name: string }) => void>();
   api.onWindowEvent((event) => {
     store.add({
@@ -264,13 +292,15 @@ export function startApp(root: HTMLElement, api: ShowcaseApi, info: HostInfo): v
     for (const listener of pageListeners) listener(event);
   });
 
-  function open(page: PageDef): void {
+  function open(page: PageDef, arg: string | null = null): void {
     if (current?.id === page.id) return;
     cleanup?.();
     cleanup = null;
+    inspectPage = null;
     main.replaceChildren();
     pageListeners.clear();
     current = page;
+    currentArg = arg;
     for (const [id, b] of navButtons) {
       if (id === page.id) b.setAttribute('aria-current', 'page');
       else b.removeAttribute('aria-current');
@@ -294,6 +324,17 @@ export function startApp(root: HTMLElement, api: ShowcaseApi, info: HostInfo): v
         pageListeners.add(listener);
         return () => pageListeners.delete(listener);
       },
+      arg,
+      setArg: (next) => {
+        if (current?.id !== page.id) return;
+        // Kept in memory only: an in-page URL change (history.replaceState)
+        // counts as a navigation for ow-electron's ad elements, which then
+        // stop loading [OBS, showcase lab]. Restart passes the route instead.
+        currentArg = next;
+      },
+      inspect: (fn) => {
+        inspectPage = fn;
+      },
     };
     cleanup = page.mount(pageRoot, ctx);
   }
@@ -314,20 +355,25 @@ export function startApp(root: HTMLElement, api: ShowcaseApi, info: HostInfo): v
     page: () => current?.id ?? '',
     snapshot: () => ({
       page: current?.id ?? '',
+      route: currentRoute(),
       host: info.host,
       mode: info.mode,
+      theme: effectiveTheme(),
       railCollapsed: view.collapsed,
+      viewport: [innerWidth, innerHeight],
       owadviews: document.querySelectorAll('owadview').length,
-      slots: [...document.querySelectorAll<HTMLElement>('.slot[data-status]')].map((s) => ({
-        cid: s.querySelector<HTMLElement>('.slot-box')?.dataset['cid'] ?? '',
-        status: s.dataset['status'] ?? '',
-      })),
+      slots: [...document.querySelectorAll<HTMLElement>('.slot[data-status]')].map(slotState),
+      state: inspectPage?.() ?? null,
       counts: Object.fromEntries(store.counts()),
       entries: store.entries.length,
     }),
     entries: (from = 0) => store.entries.slice(from),
   });
 
-  const first = PAGES[0];
-  if (first) open(first);
+  // The hash (`#page/arg`, set by `--showcase-page` at start) picks the first
+  // page; page 1 otherwise.
+  const start = parseRoute(location.hash);
+  const startPage = PAGES.find((p) => p.id === start?.page);
+  const first = startPage ?? PAGES[0];
+  if (first) open(first, startPage ? (start?.arg ?? null) : null);
 }

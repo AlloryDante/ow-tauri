@@ -21,7 +21,7 @@ export const Channel = {
   exportTimeline: 'showcase:export-timeline',
   /** invoke: `() => ParityLookup` */
   parity: 'showcase:parity',
-  /** invoke: `(mode: AdMode) => void`; relaunches the app */
+  /** invoke: `(mode: AdMode, route?: string) => void`; relaunches the app on `route` */
   restart: 'showcase:restart',
   /** invoke: `(action: WindowAction) => void` */
   windowAction: 'showcase:window-action',
@@ -142,8 +142,11 @@ export interface ShowcaseApi {
   exportTimeline(request: ExportRequest): Promise<ExportResult>;
   /** Reads `<userData>/parity-report.json`. */
   parity(): Promise<ParityLookup>;
-  /** Relaunches the app in the given ad mode. */
-  restart(mode: AdMode): Promise<void>;
+  /**
+   * Relaunches the app in the given ad mode, on `route` (`page` or
+   * `page/arg`, see `route.ts`) when given.
+   */
+  restart(mode: AdMode, route?: string): Promise<void>;
   /** Runs a window action. */
   windowAction(action: WindowAction): Promise<void>;
   /** Subscribes to window state changes; returns an unsubscribe function. */

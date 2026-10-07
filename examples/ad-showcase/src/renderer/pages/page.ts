@@ -22,6 +22,15 @@ export interface PageContext extends AdContext {
    * @returns an unsubscribe function
    */
   onWindowEvent(listener: (event: WindowEvent) => void): () => void;
+  /** The page's argument from the route (`#page/arg`), or `null`. */
+  readonly arg: string | null;
+  /** Records the page's argument in the route (restart comes back to it). */
+  setArg(arg: string | null): void;
+  /**
+   * Registers the page's state for `window.__showcase.snapshot().state`
+   * (read-only, JSON-safe; the lab driver reads it).
+   */
+  inspect(fn: () => Record<string, unknown>): void;
 }
 
 /** Mounts a page into `root`; returns its cleanup (remove elements, stop timers). */

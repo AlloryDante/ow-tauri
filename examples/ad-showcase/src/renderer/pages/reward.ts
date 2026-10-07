@@ -137,6 +137,14 @@ export const mountReward: MountPage = (root, ctx) => {
   }, UNAVAILABLE_AFTER_S * 1000);
 
   render();
+  ctx.inspect(() => ({
+    step: flow.step,
+    grants: flow.grants,
+    coins,
+    canWatch: flow.canWatch,
+    slotDisplay: getComputedStyle(slot.card).display,
+    small: small.status,
+  }));
   root.append(
     pageHeader(
       'Reward',

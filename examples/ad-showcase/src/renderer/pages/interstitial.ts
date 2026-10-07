@@ -101,6 +101,20 @@ export const mountInterstitial: MountPage = (root, ctx) => {
   };
   refresh();
   const timer = setInterval(refresh, 200);
+  ctx.inspect(() => {
+    refresh();
+    const r = target.getBoundingClientRect();
+    return {
+      clicks,
+      owadviews: domCount.textContent,
+      performance: domPerf.textContent,
+      styleAttr: domInline.textContent,
+      pointerEvents: domComputed.textContent,
+      overlayPointerEvents: domDiv.textContent,
+      // The click target's centre, for the lab's hit test.
+      target: [Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2)],
+    };
+  });
 
   root.append(
     pageHeader(

@@ -102,6 +102,9 @@ export const mountLayouts: MountPage = (root, ctx) => {
     data: { action: 'layout-select' },
   });
   for (const l of LAYOUTS) select.append(h('option', { text: l.name, attrs: { value: l.id } }));
+  // The route argument (`#layouts/tower`) picks the first layout.
+  if (LAYOUTS.some((l) => l.id === ctx.arg)) select.value = ctx.arg ?? '';
+  let shown = select.value;
 
   const render = (id: string): void => {
     for (const slot of slots) slot.dispose();
@@ -109,6 +112,8 @@ export const mountLayouts: MountPage = (root, ctx) => {
     stage.replaceChildren();
     const layout = LAYOUTS.find((l) => l.id === id) ?? LAYOUTS[0];
     if (!layout) return;
+    shown = layout.id;
+    ctx.setArg(layout.id);
     visit += 1;
     ctx.control('layout', 'app', { layout: layout.id });
     const zone = h('div', { class: layout.popup ? 'layout-zone popup' : 'layout-zone' });
@@ -128,19 +133,20 @@ export const mountLayouts: MountPage = (root, ctx) => {
     render(select.value);
   });
 
+  ctx.inspect(() => ({ layout: shown }));
   root.append(
     pageHeader(
       'Layouts',
       'The eight recommended layouts at true size. Switching removes the old containers and creates new ones.',
-    ),
-    h(
-      'div',
-      { class: 'toolbar' },
-      h('label', { class: 'label', text: 'Layout', attrs: { for: 'layout-select' } }),
-      select,
-      button('Recreate', 'layout-recreate', () => {
-        render(select.value);
-      }),
+      h(
+        'div',
+        { class: 'toolbar' },
+        h('label', { class: 'label', text: 'Layout', attrs: { for: 'layout-select' } }),
+        select,
+        button('Recreate', 'layout-recreate', () => {
+          render(select.value);
+        }),
+      ),
     ),
     stage,
   );

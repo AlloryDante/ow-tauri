@@ -60,9 +60,8 @@ export const mountControls: MountPage = (root, ctx) => {
   let hidden = false;
   const displayToggle = button('display: none', 'controls-display', () => {
     hidden = !hidden;
-    slot.card.style.display = hidden ? 'none' : '';
+    slot.setHidden(hidden);
     displayToggle.textContent = hidden ? 'display: block' : 'display: none';
-    if (hidden) slot.setStatus('hidden');
     ctx.control('display', slot.cid, { display: hidden ? 'none' : 'block' });
   });
 
@@ -90,6 +89,12 @@ export const mountControls: MountPage = (root, ctx) => {
     void ctx.api.windowAction('minimize-3s');
   });
 
+  ctx.inspect(() => ({
+    muted,
+    hidden,
+    scrollTop: scroller.scrollTop,
+    tracking: el.getAttribute('customTracking'),
+  }));
   root.append(
     pageHeader(
       'Controls',

@@ -34,6 +34,16 @@ export const mountHighImpact: MountPage = (root, ctx) => {
     zone.dataset['state'] = state;
   };
   setState('waiting');
+  ctx.inspect(() => {
+    const zr = zone.getBoundingClientRect();
+    const br = big.box.getBoundingClientRect();
+    return {
+      state: zone.dataset['state'] ?? '',
+      zone: [zr.width, zr.height].map(Math.round),
+      bigBox: [br.width, br.height].map(Math.round),
+      smallDisplay: getComputedStyle(small.card).display,
+    };
+  });
 
   const head = big.card.querySelector<HTMLElement>('.slot-head');
   // Takeover: the slot fills the zone (the sample's handler); the sibling is

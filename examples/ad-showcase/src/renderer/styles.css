@@ -281,6 +281,22 @@ p {
   max-width: 72ch;
 }
 
+.page-head-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+}
+
+.page-head-row .page-head-text {
+  min-width: 0;
+}
+
+.page-head-row .toolbar {
+  flex: none;
+}
+
 /* --------------------------------------------------------------- controls */
 
 .btn {
@@ -470,6 +486,27 @@ textarea.input {
   white-space: nowrap;
 }
 
+/* A narrow slot (160x600) cuts its cid short, then its status chip,
+   instead of running into the next card. */
+.slot-head > * {
+  flex: none;
+}
+
+.slot-head > .slot-cid,
+.slot-head > .chip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.slot-head > .slot-cid {
+  flex: 0 100 auto;
+}
+
+.slot-head > .chip {
+  flex: 0 1 auto;
+}
+
 .slot-size {
   font-weight: 600;
   color: var(--text);
@@ -492,9 +529,12 @@ textarea.input {
   box-shadow: 0 0 0 1px var(--border);
 }
 
+/* <owadview> keeps the host's own default (inline-flex, 100% of the box).
+   ow-electron sizes its inner guest as a flex child: a display:block here
+   leaves the guest at the 150 px default height and the ad page then waits
+   with "not valid slot size (W,150)" and never fills. */
 .slot-box > owadview {
   position: relative;
-  display: block;
   width: 100%;
   height: 100%;
 }
@@ -524,18 +564,28 @@ textarea.input {
 
 /* ------------------------------------------------------------------ pages */
 
+/* Towers and rectangles: 984 x 624, banners: 970 x 336; each fits the
+   content area of a 1280x837 window (macOS clamps 860 to the screen). */
 .sizes-grid {
   display: grid;
-  grid-template-columns: 400px 400px 160px;
-  grid-template-areas:
-    'w970 w970 w970'
-    'w728 w728 t160'
-    'v600 b60 t160'
-    'v600 m300 t160'
-    'v600 r250 t160';
   gap: 12px;
   align-items: start;
   justify-items: start;
+}
+
+.sizes-grid.group-towers {
+  grid-template-columns: 160px 400px 400px;
+  grid-template-areas:
+    't160 v600 m300'
+    't160 v600 r250';
+}
+
+.sizes-grid.group-banners {
+  grid-template-columns: 970px;
+}
+
+.sizes-grid.group-single {
+  grid-template-columns: max-content;
 }
 
 .fold-section {

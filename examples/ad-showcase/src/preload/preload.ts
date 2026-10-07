@@ -29,7 +29,7 @@ const api: ShowcaseApi = {
   exportTimeline: (request: ExportRequest) =>
     invoke(Channel.exportTimeline, { json: request.json }),
   parity: () => invoke(Channel.parity),
-  restart: (mode: AdMode) => invoke(Channel.restart, mode),
+  restart: (mode: AdMode, route?: string) => invoke(Channel.restart, mode, route),
   windowAction: (action: WindowAction) => invoke(Channel.windowAction, action),
   onWindowEvent(listener: (event: WindowEvent) => void) {
     const wrapped = (_event: unknown, payload: WindowEvent): void => {
