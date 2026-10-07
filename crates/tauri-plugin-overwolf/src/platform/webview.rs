@@ -409,14 +409,21 @@ pub(crate) fn content_inset_top<R: Runtime>(window: &tauri::Window<R>) -> f64 {
 /// shows an inactive window. `Window::show` would call
 /// `makeKeyAndOrderFront:`, which activates the app and takes the keyboard
 /// from the app the user is in. On Windows `ShowWindow(SW_SHOWNOACTIVATE)`,
-/// as Electron's `showInactive()` does there: `Window::show` (`SW_SHOW`)
-/// activates the window and moves focus into its webview, which, from a
-/// command answered inside a `WebView2` callback, never returned (Windows
-/// lab). Elsewhere `Window::show`.
+/// as Electron's `showInactive()` does there, issued from a helper thread:
+/// the command runs on the main thread inside Tauri's invoke handler, which
+/// holds Tauri's plugin lock, and a `ShowWindow` there synchronously sends
+/// the window its show and size messages, whose window event re-enters
+/// Tauri's event loop callback and waits for that same lock forever
+/// (Windows lab: the stack of the hung app). `Window::show` from the main
+/// thread is the same call. From the helper thread the show waits until the
+/// main thread pumps its messages, after the command returned; a sent
+/// message is handled before any posted one, so the window is shown before
+/// the app's next call (its page load) reaches the main thread. Elsewhere
+/// `Window::show`.
 ///
-/// On the main thread the window is ordered front before this returns, so a
-/// visibility read right after sees it shown; elsewhere the show is queued
-/// to the main thread.
+/// On macOS, on the main thread the window is ordered front before this
+/// returns, so a visibility read right after sees it shown; elsewhere the
+/// show is queued to the main thread.
 pub(crate) fn show_inactive<R: Runtime>(window: &tauri::Window<R>) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
     {
@@ -431,10 +438,9 @@ pub(crate) fn show_inactive<R: Runtime>(window: &tauri::Window<R>) -> tauri::Res
     {
         // The mock runtime has no native window: show it the Tauri way.
         match window.hwnd() {
-            Ok(hwnd) => {
-                windows_impl::show_no_activate(hwnd.0 as isize);
-                Ok(())
-            }
+            Ok(hwnd) => windows_impl::show_no_activate_detached(hwnd.0 as isize)
+                .map(drop)
+                .map_err(tauri::Error::from),
             Err(_) => window.show(),
         }
     }
@@ -1335,6 +1341,18 @@ mod windows_impl {
         let _ = unsafe { ShowWindow(HWND(hwnd as *mut std::ffi::c_void), SW_SHOWNOACTIVATE) };
     }
 
+    /// [`show_no_activate`] from a new helper thread, so the calling thread
+    /// never runs the window's show messages itself: they reach the window's
+    /// own thread when it next pumps (see `show_inactive`). The handle ends
+    /// once the window was shown.
+    pub(super) fn show_no_activate_detached(
+        hwnd: isize,
+    ) -> std::io::Result<std::thread::JoinHandle<()>> {
+        std::thread::Builder::new()
+            .name("ow-show-inactive".into())
+            .spawn(move || show_no_activate(hwnd))
+    }
+
     pub(super) fn set_muted(controller: &ICoreWebView2Controller, muted: bool) {
         // SAFETY: COM calls on the webview's own thread.
         unsafe {
@@ -1568,22 +1586,47 @@ mod windows_impl {
 mod tests {
     use super::*;
 
-    /// Regression (Windows lab): `showInactive()` used `Window::show`
-    /// (`SW_SHOW`), which activates the window and focuses its webview; the
-    /// command never returned. The window is now shown without activation.
+    /// Regression (Windows lab): `showInactive()` showed the window on the
+    /// main thread inside Tauri's invoke handler; the window's show message
+    /// re-entered Tauri's event loop callback, which waited for the plugin
+    /// lock the invoke handler held, and the app hung. The show now comes
+    /// from a helper thread: the calling thread runs none of the window's
+    /// messages until it pumps, and the window ends up shown without being
+    /// activated.
     #[cfg(windows)]
     #[test]
-    fn show_inactive_shows_without_activating_on_windows() {
+    fn show_inactive_never_runs_the_window_messages_on_the_calling_thread() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::{Duration, Instant};
+
+        use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
         use windows::Win32::UI::WindowsAndMessaging::{
-            CreateWindowExW, DestroyWindow, GetForegroundWindow, IsWindowVisible, WINDOW_EX_STYLE,
-            WS_OVERLAPPEDWINDOW,
+            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
+            IsWindowVisible, MSG, PM_REMOVE, PeekMessageW, RegisterClassW, WINDOW_EX_STYLE,
+            WM_SHOWWINDOW, WNDCLASSW, WS_OVERLAPPEDWINDOW,
         };
         use windows::core::w;
-        // SAFETY: a plain top-level window of this thread, destroyed below.
+
+        static SHOW_MESSAGE: AtomicBool = AtomicBool::new(false);
+        extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+            if msg == WM_SHOWWINDOW {
+                SHOW_MESSAGE.store(true, Ordering::SeqCst);
+            }
+            // SAFETY: the default handling of this window's own message.
+            unsafe { DefWindowProcW(hwnd, msg, w, l) }
+        }
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(proc),
+            lpszClassName: w!("ow-show-inactive-test"),
+            ..Default::default()
+        };
+        // SAFETY: a plain top-level window of this thread, off screen and
+        // destroyed below.
         let hwnd = unsafe {
+            RegisterClassW(&raw const class);
             CreateWindowExW(
                 WINDOW_EX_STYLE(0),
-                w!("STATIC"),
+                w!("ow-show-inactive-test"),
                 w!("show-inactive test"),
                 WS_OVERLAPPEDWINDOW,
                 -32000,
@@ -1597,9 +1640,25 @@ mod tests {
             )
         }
         .expect("a test window");
-        // SAFETY: as above.
-        assert!(!unsafe { IsWindowVisible(hwnd) }.as_bool());
-        windows_impl::show_no_activate(hwnd.0 as isize);
+        let shown = windows_impl::show_no_activate_detached(hwnd.0 as isize).unwrap();
+        // Without pumping, nothing reaches the window: the calling thread
+        // (Tauri's main thread inside its invoke handler) is never re-entered.
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!SHOW_MESSAGE.load(Ordering::SeqCst));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut msg = MSG::default();
+        while !shown.is_finished() {
+            assert!(Instant::now() < deadline, "the show never completed");
+            // SAFETY: this thread's own message queue.
+            unsafe {
+                while PeekMessageW(&raw mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                    DispatchMessageW(&raw const msg);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        shown.join().unwrap();
+        assert!(SHOW_MESSAGE.load(Ordering::SeqCst));
         // SAFETY: as above.
         unsafe {
             assert!(IsWindowVisible(hwnd).as_bool());
