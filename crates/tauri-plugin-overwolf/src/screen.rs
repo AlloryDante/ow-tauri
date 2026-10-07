@@ -200,6 +200,41 @@ pub fn physical_to_dip(monitors: &[MonitorInfo], x: f64, y: f64) -> Point {
     }
 }
 
+/// A display as the OS names it: its frame in DIP (top-left origin) and its
+/// user-facing name (macOS `NSScreen.localizedName`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct OsScreenName {
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) width: f64,
+    pub(crate) height: f64,
+    pub(crate) name: String,
+}
+
+/// Replaces each monitor's name with the OS name of the screen at the same
+/// DIP frame, where one matches. Tauri names macOS monitors after their
+/// model number (`Monitor #41058`); Electron and the guests' `systemInfo`
+/// report the localized name (`Built-in Retina Display`, D.2).
+#[cfg_attr(
+    not(any(feature = "plugin", test)),
+    expect(dead_code, reason = "used by the plugin's monitor queries")
+)]
+pub(crate) fn apply_os_names(monitors: &mut [MonitorInfo], screens: &[OsScreenName]) {
+    for m in monitors {
+        let s = scale_of(m);
+        let near = |a: f64, b: f64| (a - b).abs() < 1.0;
+        if let Some(screen) = screens.iter().find(|o| {
+            near(f64::from(m.x) / s, o.x)
+                && near(f64::from(m.y) / s, o.y)
+                && near(f64::from(m.width) / s, o.width)
+                && near(f64::from(m.height) / s, o.height)
+        }) && !screen.name.is_empty()
+        {
+            m.name.clone_from(&screen.name);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,5 +307,32 @@ mod tests {
             Point { x: 1500, y: 50 }
         );
         assert_eq!(physical_to_dip(&[], 10.0, 10.0), Point { x: 10, y: 10 });
+    }
+
+    /// Regression (lab diff): `systemInfo.displays[].name` was Tauri's
+    /// `Monitor #<model>`; ow-electron reports the localized screen name.
+    #[test]
+    fn os_names_replace_model_names_by_frame() {
+        let mut monitors = vec![mon("Monitor #41058", 0, 2.0), mon("Monitor #7", 2560, 1.0)];
+        let screens = vec![
+            OsScreenName {
+                x: 0.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 720.0,
+                name: "Built-in Retina Display".into(),
+            },
+            OsScreenName {
+                x: 9999.0,
+                y: 0.0,
+                width: 2560.0,
+                height: 1440.0,
+                name: "Elsewhere".into(),
+            },
+        ];
+        apply_os_names(&mut monitors, &screens);
+        assert_eq!(monitors[0].name, "Built-in Retina Display");
+        // No screen at that frame: the name stays.
+        assert_eq!(monitors[1].name, "Monitor #7");
     }
 }
