@@ -89,7 +89,7 @@ pub struct UpdaterConfig {
     #[serde(default)]
     pub auto_run_app_after_install: Option<bool>,
     /// Read `provider` and `url` from the embedded `dev-app-update.yml`
-    /// (debug builds only).
+    /// (debug builds only); without an embedded copy, `url` applies.
     #[serde(default)]
     pub force_dev_update_config: Option<bool>,
     /// Extra request headers for the feed and the download.
@@ -248,6 +248,10 @@ impl UpdaterConfig {
         let force_dev = self.force_dev_update_config.unwrap_or(false) && debug;
         let (provider, url, dev_channel) = match (force_dev, dev) {
             (true, Some(d)) => (d.provider.clone(), d.url.clone(), d.channel.clone()),
+            // No embedded copy: the feed from `setFeedURL` still applies, as
+            // in electron-updater, where `forceDevUpdateConfig` only lets an
+            // unpackaged app check and `setFeedURL` replaces the file.
+            (true, None) if self.url.is_some() => (self.provider.clone(), self.url.clone(), None),
             (true, None) => {
                 return Err(Error::invalid_argument(
                     "forceDevUpdateConfig is set but no dev-app-update.yml is embedded.",
@@ -736,7 +740,15 @@ mod tests {
         );
         let r = forced.resolve(Some(&dev), false).unwrap();
         assert_eq!(r.url.as_str(), "https://feed.example.com/app/");
-        assert!(forced.resolve(None, true).is_err());
+        // Without an embedded copy the feed from setFeedURL is checked (the
+        // sample sets both); with neither there is nothing to check.
+        let r = forced.resolve(None, true).unwrap();
+        assert_eq!(r.url.as_str(), "https://feed.example.com/app/");
+        let no_feed = UpdaterConfig {
+            url: None,
+            ..forced.clone()
+        };
+        assert!(no_feed.resolve(None, true).is_err());
     }
 
     fn check(current: &str, info: &UpdateInfo, downgrade: bool, bucket: u8) -> Availability {
