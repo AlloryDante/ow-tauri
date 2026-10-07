@@ -26,6 +26,7 @@ import {
   PACKAGE_RUNTIME_FILE,
   PACKAGE_RUNTIME_REQUEST,
   packageRuntimeLog,
+  removedUnfilled,
   sameElement,
   sentOsClick,
   shapingOf,
@@ -788,4 +789,77 @@ test("the guests' wire records give the request shaping to compare", () => {
   );
   assert.equal(shapingOf(own).adLibrary['x-ow-uid'], 'v');
   assert.equal(shapingOf([]).adLibrary, null);
+  assert.equal(s.withoutOriginFirstHop, 1);
+});
+
+test('a redirect hop without Origin is the platform gap, a first request is a bug', () => {
+  // Windows lab (A): a cookie-sync pixel redirected twice across origins;
+  // the hops after the first carried Origin: null.
+  const hop = (url) => [
+    { method: 'Network.requestWillBeSent', requestId: '43', url, resourceType: 'Image' },
+  ];
+  const extra = (origin) => ({
+    method: 'Network.requestWillBeSentExtraInfo',
+    requestId: '43',
+    headers: { Origin: origin },
+  });
+  const wire = wireRequests(
+    [
+      ...hop('https://a.example/p'),
+      extra('https://www.overwolf.com'),
+      ...hop('https://b.example/q'),
+      extra('null'),
+      ...hop('https://c.example/r'),
+      extra('null'),
+    ],
+    [],
+  );
+  assert.deepEqual(
+    wire.map((r) => [r.url, r.hop]),
+    [
+      ['https://a.example/p', 0],
+      ['https://b.example/q', 1],
+      ['https://c.example/r', 2],
+    ],
+  );
+  const s = shapingOf(wire);
+  assert.equal(s.withOrigin, 1);
+  assert.equal(s.withoutOriginFirstHop, 0);
+  assert.equal(
+    classify({ section: 'request-shaping', field: 'redirect-hop' }).class,
+    'intended:os-gap',
+  );
+  assert.equal(classify({ section: 'request-shaping', field: 'missing' }).class, 'BUG');
+});
+
+test('a zone the app removed before its ad loaded on ow-tauri is the consent wait, not a bug', () => {
+  const el = (removedAfter, firstLoadAt) => ({ removedAfter, firstLoadAt });
+  const e = { formats: { elements: { hi60: el(2791, 2716) } } };
+  const removed = { formats: { elements: { hi60: el(6134, null) } } };
+  const kept = { formats: { elements: { hi60: el(null, null) } } };
+  const loaded = { formats: { elements: { hi60: el(6134, 6060) } } };
+  assert.equal(removedUnfilled('hi60', e, removed), true);
+  assert.equal(removedUnfilled('hi60', e, kept), false);
+  assert.equal(removedUnfilled('hi60', e, loaded), false);
+  assert.equal(removedUnfilled('other', e, removed), false);
+  const count = {
+    section: 'element-event',
+    key: 'hi60 display_ad_loaded',
+    field: 'count',
+    electron: 2,
+    tauri: 0,
+  };
+  assert.equal(classify({ ...count, removedUnfilled: true }).class, 'intended:deviation');
+  assert.equal(classify({ ...count, removedUnfilled: false }).class, 'BUG');
+  const events = {
+    section: 'adformat-element',
+    key: 'hi60',
+    field: 'events',
+    missing: ['display_ad_loaded'],
+  };
+  assert.equal(
+    classify({ ...events, adDriven: true, removedUnfilled: true }).class,
+    'intended:deviation',
+  );
+  assert.equal(classify({ ...events, adDriven: false, removedUnfilled: true }).class, 'BUG');
 });

@@ -261,7 +261,11 @@ const SHAPED_ORIGIN = 'https://www.overwolf.com';
 export function guestWire(runDir, host) {
   const file = join(runDir, host === 'tauri' ? 'guest-network.jsonl' : 'cdp-network.jsonl');
   if (!existsSync(file)) return null;
-  const records = readJsonl(file).filter((r) => host === 'tauri' || r.label === 'owadview');
+  // Ad guests only: ow-tauri also traces its consent windows (D.6), which
+  // are not shaped.
+  const records = readJsonl(file).filter((r) =>
+    host === 'tauri' ? String(r.label).startsWith('owad-') : r.label === 'owadview',
+  );
   return wireRequests(
     records,
     host === 'tauri' ? [] : (readJson(join(runDir, 'netlog-requests.json')) ?? []),
@@ -270,7 +274,9 @@ export function guestWire(runDir, host) {
 
 /**
  * Joins `requestWillBeSent` (URL, type) with `requestWillBeSentExtraInfo`
- * (sent headers) by request id; net log entries fill in the ad library.
+ * (sent headers) by request id; net log entries fill in the ad library. A
+ * redirect keeps the request id, so the records of one id are its hops, in
+ * order (`hop` 0 is the request the page made).
  *
  * @param {{method: string, requestId?: string, url?: string, resourceType?: string, headers?: Record<string, unknown>}[]} records
  * @param {{url: string, sentHeaders?: string[]}[]} netlog
@@ -278,23 +284,30 @@ export function guestWire(runDir, host) {
 export function wireRequests(records, netlog) {
   const sent = new Map();
   for (const r of records)
-    if (r.method === 'Network.requestWillBeSent' && typeof r.url === 'string')
-      sent.set(r.requestId, { url: r.url, type: r.resourceType ?? null });
+    if (r.method === 'Network.requestWillBeSent' && typeof r.url === 'string') {
+      const hops = sent.get(r.requestId) ?? [];
+      hops.push({ url: r.url, type: r.resourceType ?? null });
+      sent.set(r.requestId, hops);
+    }
+  const seen = new Map();
   const out = [];
   for (const r of records) {
     if (r.method !== 'Network.requestWillBeSentExtraInfo') continue;
-    const req = sent.get(r.requestId);
-    if (!req) continue;
+    const hops = sent.get(r.requestId);
+    if (!hops) continue;
+    const hop = seen.get(r.requestId) ?? 0;
+    seen.set(r.requestId, hop + 1);
     const headers = Object.fromEntries(
       Object.entries(r.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]),
     );
-    out.push({ ...req, headers });
+    out.push({ ...(hops[hop] ?? hops.at(-1)), hop, headers });
   }
   if (!out.some((r) => AD_LIBRARY.test(r.url)))
     for (const n of netlog.filter((x) => AD_LIBRARY.test(x.url)).slice(0, 1))
       out.push({
         url: n.url,
         type: 'Script',
+        hop: 0,
         headers: Object.fromEntries(headerMap(n.sentHeaders)),
       });
   return out;
@@ -312,13 +325,12 @@ export function shapingOf(wire) {
   const sub = wire.filter((r) => r.type !== 'Document' && !AD_LIBRARY.test(r.url));
   const lib = wire.find((r) => AD_LIBRARY.test(r.url));
   const pick = (h, k) => (h && typeof h[k] === 'string' ? h[k] : null);
+  const without = sub.filter((r) => r.headers.origin !== SHAPED_ORIGIN);
   return {
     subresources: sub.length,
-    withOrigin: sub.filter((r) => r.headers.origin === SHAPED_ORIGIN).length,
-    withoutOrigin: sub
-      .filter((r) => r.headers.origin !== SHAPED_ORIGIN)
-      .map((r) => r.url.replace(/\?.*/, ''))
-      .slice(0, 5),
+    withOrigin: sub.length - without.length,
+    withoutOrigin: without.map((r) => r.url.replace(/\?.*/, '')).slice(0, 5),
+    withoutOriginFirstHop: without.filter((r) => !r.hop).length,
     adLibrary: lib
       ? Object.fromEntries(
           ['x-ow-uid', 'x-ow-phase', 'x-ow-window', 'origin', 'referer'].map((k) => [
@@ -338,7 +350,8 @@ function compareRequestShaping(e, t, out) {
     out.push({
       section: 'request-shaping',
       key: 'subresource Origin',
-      field: 'missing',
+      // Only redirect hops lack it: the platform shapes a request once.
+      field: b.withoutOriginFirstHop === 0 ? 'redirect-hop' : 'missing',
       electron: `${a.withOrigin} of ${a.subresources}`,
       tauri: `${b.withOrigin} of ${b.subresources}`,
       why: `guest subresources left without Origin: ${SHAPED_ORIGIN} (CONTRACT D.8.2), e.g. ${b.withoutOrigin.join(', ')}`,
@@ -734,6 +747,11 @@ const RULES = [
     why: "own properties of Electron's <webview> element; <owadview> is not a <webview> (PARITY deviations, CONTRACT B.3.3)",
   },
   {
+    when: (d) => d.section === 'request-shaping' && d.field === 'redirect-hop',
+    cls: 'intended:os-gap',
+    why: 'WebView2 lets a host change a request once, not each redirect hop; after a cross-origin redirect Chromium sends Origin: null on the following hops, which ow-electron re-shapes (CONTRACT D.8.3)',
+  },
+  {
     when: (d) =>
       d.section === 'host-request' &&
       d.field === 'timing' &&
@@ -878,6 +896,14 @@ const RULES = [
       !(d.missing ?? []).length,
     cls: 'variance',
     why: 'extra ad-driven events depend on the ads served and playback speed; an event ow-electron reports and ow-tauri never does stays a bug',
+  },
+  {
+    when: (d) =>
+      Boolean(d.removedUnfilled) &&
+      ((d.section === 'adformat-element' && d.field === 'events' && d.adDriven) ||
+        (d.section === 'element-event' && d.field === 'count')),
+    cls: 'intended:deviation',
+    why: "the app removed this zone on both hosts, ow-tauri's copy before any ad loaded: the documented high-impact listener drops the 400x60 container when the 400x600 ad loads, and ow-tauri's first ad navigation waits for the startup consent window (at most 3 s, D.6.5), so the other zone can fill first",
   },
   {
     when: (d) => d.section === 'adformat-probe' && d.field === 'click' && d.tauriSentNotDelivered,
@@ -1701,6 +1727,7 @@ export function compareAdformats(e, t, out) {
         missing,
         extra,
         adDriven: [...missing, ...extra].every((n) => AD_DRIVEN.has(n)),
+        removedUnfilled: removedUnfilled(key, e, t),
       });
     const common = (list, other) => list.filter((n) => other.includes(n));
     if (stable(common(a.order, b.order)) !== stable(common(b.order, a.order)))
@@ -1841,6 +1868,22 @@ export function compareAdformats(e, t, out) {
     });
 }
 
+/**
+ * Whether the app removed element `cid` on both hosts and ow-tauri's copy
+ * never had an ad loaded before that. In the high-impact zone the documented
+ * listener drops the 400x60 container once the 400x600 high-impact ad loads,
+ * so which of the two fills first decides whether the small one reports a
+ * load at all; ow-tauri's first ad navigation also waits for the startup
+ * consent window (at most 3 s, D.6.5), which ow-electron does not.
+ */
+export function removedUnfilled(cid, e, t) {
+  const a = e.formats?.elements?.[cid];
+  const b = t.formats?.elements?.[cid];
+  return Boolean(
+    a && b && a.removedAfter !== null && b.removedAfter !== null && b.firstLoadAt === null,
+  );
+}
+
 /** Whether the OS hid the embedder document during the run. */
 function osHidden(capture) {
   return capture.pageVisibility.some((r) => r.visibilityState === 'hidden');
@@ -1871,6 +1914,8 @@ function compareElementEvents(e, t, out) {
         b > a &&
         /\s(dom-ready|did-finish-load)$/.test(key) &&
         b - a <= (t.pageReloads?.[key.split(' ')[0]] ?? 0),
+      removedUnfilled:
+        b === 0 && AD_DRIVEN.has(key.split(' ')[1]) && removedUnfilled(key.split(' ')[0], e, t),
     });
   }
   const ea = e.elementApi[0];
