@@ -443,7 +443,13 @@ pub(crate) fn content_inset_top<R: Runtime>(window: &tauri::Window<R>) -> f64 {
 /// thread is the same call. From the helper thread the show waits until the
 /// main thread pumps its messages, after the command returned; a sent
 /// message is handled before any posted one, so the window is shown before
-/// the app's next call (its page load) reaches the main thread. Elsewhere
+/// the app's next call (its page load) reaches the main thread. The helper
+/// then has Tauri show the already shown window on the main thread, so the
+/// window library also counts it as shown: otherwise its next `hide()` saw
+/// no change and did nothing, and any later style change (always on top,
+/// resizable) hid the window again (Windows lab: `hide()` after
+/// `showInactive()` left the window on screen). That show keeps the window
+/// visible throughout, so it neither flickers nor activates it. Elsewhere
 /// `Window::show`.
 ///
 /// On macOS, on the main thread the window is ordered front before this
@@ -463,9 +469,20 @@ pub(crate) fn show_inactive<R: Runtime>(window: &tauri::Window<R>) -> tauri::Res
     {
         // The mock runtime has no native window: show it the Tauri way.
         match window.hwnd() {
-            Ok(hwnd) => windows_impl::show_no_activate_detached(hwnd.0 as isize)
+            Ok(hwnd) => {
+                let raw = hwnd.0 as isize;
+                let window = window.clone();
+                windows_impl::show_no_activate_detached(raw, move || {
+                    let shown = window.clone();
+                    let _ = window.run_on_main_thread(move || {
+                        windows_impl::count_as_shown(raw, || {
+                            let _ = shown.show();
+                        });
+                    });
+                })
                 .map(drop)
-                .map_err(tauri::Error::from),
+                .map_err(tauri::Error::from)
+            }
             Err(_) => window.show(),
         }
     }
@@ -1326,6 +1343,7 @@ mod linux {
 
 #[cfg(windows)]
 mod windows_impl {
+    use std::cell::Cell;
     use std::sync::Arc;
 
     use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -1346,11 +1364,13 @@ mod windows_impl {
         NavigationCompletedEventHandler, ProcessFailedEventHandler,
         WebResourceRequestedEventHandler, take_pwstr,
     };
-    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
+    use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GW_HWNDPREV, GetWindow, HWND_TOP, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE,
-        SWP_NOSIZE, SetWindowPos, ShowWindow,
+        GW_HWNDPREV, GWL_STYLE, GetWindow, HWND_TOP, IsWindowVisible, STYLESTRUCT,
+        SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos, ShowWindow,
+        WM_STYLECHANGING, WS_VISIBLE,
     };
     use windows::core::{BOOL, HSTRING, Interface, PWSTR};
 
@@ -1391,14 +1411,84 @@ mod windows_impl {
 
     /// [`show_no_activate`] from a new helper thread, so the calling thread
     /// never runs the window's show messages itself: they reach the window's
-    /// own thread when it next pumps (see `show_inactive`). The handle ends
-    /// once the window was shown.
+    /// own thread when it next pumps (see `show_inactive`). `then` runs on
+    /// the helper once the window was shown; the handle ends after it.
     pub(super) fn show_no_activate_detached(
         hwnd: isize,
+        then: impl FnOnce() + Send + 'static,
     ) -> std::io::Result<std::thread::JoinHandle<()>> {
         std::thread::Builder::new()
             .name("ow-show-inactive".into())
-            .spawn(move || show_no_activate(hwnd))
+            .spawn(move || {
+                show_no_activate(hwnd);
+                then();
+            })
+    }
+
+    thread_local! {
+        /// Set while [`count_as_shown`] runs its show on this thread.
+        static KEEP_VISIBLE: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// The `SetWindowSubclass` id of [`keep_visible`].
+    const KEEP_VISIBLE_ID: usize = 0x6f77_7376;
+
+    /// Keeps `WS_VISIBLE` on a shown window while [`count_as_shown`] runs: a
+    /// window style change that would clear it is answered with the bit set
+    /// again (`WM_STYLECHANGING` lets the window rewrite the new style).
+    unsafe extern "system" fn keep_visible(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _id: usize,
+        _data: usize,
+    ) -> LRESULT {
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_possible_wrap,
+            reason = "the style index (a negative i32) rides in the low 32 bits of wParam"
+        )]
+        let index = wparam.0 as i32;
+        if msg == WM_STYLECHANGING && index == GWL_STYLE.0 && KEEP_VISIBLE.get() {
+            // SAFETY: `WM_STYLECHANGING` carries a live, writable
+            // `STYLESTRUCT` in lParam.
+            let style = unsafe { &mut *(lparam.0 as *mut STYLESTRUCT) };
+            style.styleNew = keep_visible_style(style.styleOld, style.styleNew);
+        }
+        // SAFETY: the next handler of this window's own message.
+        unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+    }
+
+    /// The new window style with `WS_VISIBLE` kept when the old one had it.
+    pub(super) fn keep_visible_style(old: u32, new: u32) -> u32 {
+        new | (old & WS_VISIBLE.0)
+    }
+
+    /// Runs `show` (the window library's own show of the window `hwnd`,
+    /// already shown by [`show_no_activate`]) on the window's own thread so
+    /// that the window stays visible throughout. The library first rewrites
+    /// the style of a window it counts as hidden without `WS_VISIBLE` and
+    /// then calls `ShowWindow(SW_SHOW)`, which would show and activate it
+    /// anew; with the bit kept that call finds the window shown and changes
+    /// nothing. Skipped when the window is no longer shown.
+    pub(super) fn count_as_shown(hwnd: isize, show: impl FnOnce()) {
+        let hwnd = HWND(hwnd as *mut std::ffi::c_void);
+        // SAFETY: Win32 calls on a window of this thread; the subclass is
+        // removed again before this returns.
+        unsafe {
+            if !IsWindowVisible(hwnd).as_bool() {
+                return;
+            }
+            let subclassed =
+                SetWindowSubclass(hwnd, Some(keep_visible), KEEP_VISIBLE_ID, 0).as_bool();
+            KEEP_VISIBLE.set(true);
+            show();
+            KEEP_VISIBLE.set(false);
+            if subclassed {
+                let _ = RemoveWindowSubclass(hwnd, Some(keep_visible), KEEP_VISIBLE_ID);
+            }
+        }
     }
 
     pub(super) fn set_muted(controller: &ICoreWebView2Controller, muted: bool) {
@@ -1688,7 +1778,7 @@ mod tests {
             )
         }
         .expect("a test window");
-        let shown = windows_impl::show_no_activate_detached(hwnd.0 as isize).unwrap();
+        let shown = windows_impl::show_no_activate_detached(hwnd.0 as isize, || ()).unwrap();
         // Without pumping, nothing reaches the window: the calling thread
         // (Tauri's main thread inside its invoke handler) is never re-entered.
         std::thread::sleep(Duration::from_millis(100));
@@ -1711,6 +1801,95 @@ mod tests {
         unsafe {
             assert!(IsWindowVisible(hwnd).as_bool());
             assert_ne!(GetForegroundWindow(), hwnd);
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    /// Regression (Windows lab): after `showInactive()` the window library
+    /// still counted the window as hidden, so `hide()` did nothing. Its own
+    /// show of the shown window now runs with `WS_VISIBLE` kept: the style
+    /// rewrite that clears the bit and the `ShowWindow(SW_SHOW)` after it
+    /// (the library's steps) leave the window shown and inactive, and once
+    /// done a style change applies as written again.
+    #[cfg(windows)]
+    #[test]
+    fn counting_a_shown_window_as_shown_keeps_it_visible_and_inactive() {
+        use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+        use windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DefWindowProcW, DestroyWindow, GWL_STYLE, GetWindowLongW,
+            IsWindowVisible, RegisterClassW, SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+            SWP_NOSIZE, SWP_NOZORDER, SetWindowLongW, SetWindowPos, ShowWindow, WINDOW_EX_STYLE,
+            WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+        };
+        use windows::core::w;
+
+        extern "system" fn proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
+            // SAFETY: the default handling of this window's own message.
+            unsafe { DefWindowProcW(hwnd, msg, w, l) }
+        }
+        assert_eq!(
+            windows_impl::keep_visible_style(WS_VISIBLE.0 | 1, 1),
+            WS_VISIBLE.0 | 1
+        );
+        assert_eq!(windows_impl::keep_visible_style(1, 2), 2);
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(proc),
+            lpszClassName: w!("ow-count-shown-test"),
+            ..Default::default()
+        };
+        // SAFETY: a plain top-level window of this thread, off screen and
+        // destroyed below; every call below is on this thread.
+        unsafe {
+            RegisterClassW(&raw const class);
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("ow-count-shown-test"),
+                w!("count-shown test"),
+                WS_OVERLAPPEDWINDOW,
+                -32000,
+                -32000,
+                100,
+                100,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("a test window");
+            let raw = hwnd.0 as isize;
+            let strip = |hwnd: HWND| {
+                let style = GetWindowLongW(hwnd, GWL_STYLE).cast_unsigned() & !WS_VISIBLE.0;
+                SetWindowLongW(hwnd, GWL_STYLE, style.cast_signed());
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED | SWP_NOACTIVATE,
+                );
+            };
+            windows_impl::show_no_activate(raw);
+            assert!(IsWindowVisible(hwnd).as_bool());
+            let mut ran = false;
+            windows_impl::count_as_shown(raw, || {
+                strip(hwnd);
+                assert!(IsWindowVisible(hwnd).as_bool(), "the style rewrite hid it");
+                let _ = ShowWindow(hwnd, SW_SHOW);
+                ran = true;
+            });
+            assert!(ran);
+            assert!(IsWindowVisible(hwnd).as_bool());
+            assert_ne!(GetActiveWindow(), hwnd, "the show activated the window");
+            // The subclass is gone: a style change applies as written.
+            strip(hwnd);
+            assert!(!IsWindowVisible(hwnd).as_bool());
+            // A window no longer shown is left alone.
+            let mut ran_hidden = false;
+            windows_impl::count_as_shown(raw, || ran_hidden = true);
+            assert!(!ran_hidden);
             let _ = DestroyWindow(hwnd);
         }
     }

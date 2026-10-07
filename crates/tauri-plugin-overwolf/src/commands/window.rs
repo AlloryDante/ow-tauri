@@ -163,8 +163,8 @@ pub(crate) async fn window_set_name<R: Runtime>(
 
 /// `window_show_inactive`: `BrowserWindow.showInactive()`. Shows the window
 /// without making it key or activating the app, as ow-electron does (macOS:
-/// `orderFrontRegardless`). Elsewhere it is a plain show (partial: the
-/// platform may activate the window). A sync command, so it runs on the main
+/// `orderFrontRegardless`; Windows: `SW_SHOWNOACTIVATE`). On Linux it is a
+/// plain show (partial: the platform may activate the window). A sync command, so it runs on the main
 /// thread in call order: the window is shown before the app's next call
 /// (its page load) is handled, as Electron's synchronous `showInactive()`.
 #[tauri::command]
