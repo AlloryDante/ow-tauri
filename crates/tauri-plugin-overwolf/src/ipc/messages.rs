@@ -101,6 +101,9 @@ pub enum WindowEventName {
     RenderProcessGone,
     /// A top-level navigation the A.2.3.1 policy cancelled; `data.url`.
     WillNavigate,
+    /// The top document changed its URL without a new load (fragment,
+    /// `history.pushState` / `replaceState`); `data.url`, `data.isMainFrame`.
+    DidNavigateInPage,
     /// A `window.open` / `target=_blank` request, always denied natively;
     /// `data.url`. The main runtime runs `setWindowOpenHandler`.
     NewWindow,

@@ -45,6 +45,8 @@ function fakeServices(context: ChromeServices['context'] = 'ui'): FakeServices {
 let services: FakeServices;
 let navigated: string[];
 let top: boolean;
+let href: string;
+let navListeners: (() => void)[];
 let remove: () => void = () => undefined;
 
 function environment(overrides: Partial<ChromeEnvironment> = {}): ChromeEnvironment {
@@ -56,8 +58,20 @@ function environment(overrides: Partial<ChromeEnvironment> = {}): ChromeEnvironm
     isTop: () => top,
     origin: () => 'http://localhost:3000',
     navigate: (url) => navigated.push(url),
+    href: () => href,
+    onSameDocumentNavigation: (listener) => {
+      navListeners.push(listener);
+      return () => {
+        navListeners = navListeners.filter((l) => l !== listener);
+      };
+    },
     ...overrides,
   };
+}
+
+function navigateInPage(url: string): void {
+  href = url;
+  for (const listener of navListeners) listener();
 }
 
 function install(overrides: Partial<ChromeEnvironment> = {}): void {
@@ -93,6 +107,8 @@ beforeEach(() => {
   services = fakeServices();
   navigated = [];
   top = true;
+  href = 'http://localhost:3000/index.html';
+  navListeners = [];
   document.head.innerHTML = '';
   document.body.innerHTML = '';
 });
@@ -288,6 +304,56 @@ describe('installWindowChrome', () => {
     expect(click(document.getElementById('ext') as Element).defaultPrevented).toBe(false);
     await tick();
     expect(services.calls).toEqual([]);
+  });
+
+  it('reports each in-page navigation of the top document once', async () => {
+    install({ appRegion: false, platform: 'win32' });
+    navigateInPage('http://localhost:3000/index.html#/');
+    navigateInPage('http://localhost:3000/index.html#/');
+    navigateInPage('http://localhost:3000/settings?tab=1');
+    await tick();
+    expect(services.calls).toEqual([
+      { name: 'navigation_in_page', args: { url: 'http://localhost:3000/index.html#/' } },
+      { name: 'navigation_in_page', args: { url: 'http://localhost:3000/settings?tab=1' } },
+    ]);
+    remove();
+    expect(navListeners).toEqual([]);
+  });
+
+  it('reports no in-page navigation from a subframe, and survives a refused report', async () => {
+    top = false;
+    install({ appRegion: false, platform: 'win32' });
+    expect(navListeners).toEqual([]);
+    remove();
+    top = true;
+    services.fail['navigation_in_page'] = new OwTauriError('forbidden', 'no capability');
+    install({ appRegion: false, platform: 'win32' });
+    navigateInPage('http://localhost:3000/index.html#/a');
+    await tick();
+    expect(services.warnings).toEqual([
+      'window-chrome:navigation_in_page: navigation_in_page failed (the window capability may lack it): no capability',
+    ]);
+  });
+
+  it('hears every same-document navigation of the current document', () => {
+    const env = browserChromeEnvironment('darwin');
+    const heard: string[] = [];
+    const stop = env.onSameDocumentNavigation(() => heard.push(env.href()));
+    window.history.pushState({}, '', '/pushed');
+    window.history.replaceState({}, '', '/replaced#x');
+    window.dispatchEvent(new Event('hashchange'));
+    window.dispatchEvent(new Event('popstate'));
+    expect(heard).toEqual([
+      'http://localhost:3000/pushed',
+      'http://localhost:3000/replaced#x',
+      'http://localhost:3000/replaced#x',
+      'http://localhost:3000/replaced#x',
+    ]);
+    stop();
+    window.history.pushState({}, '', '/after');
+    window.dispatchEvent(new Event('hashchange'));
+    expect(heard).toHaveLength(4);
+    expect(Object.hasOwn(window.history, 'pushState')).toBe(false);
   });
 
   it('reads the platform hooks of the current document', () => {

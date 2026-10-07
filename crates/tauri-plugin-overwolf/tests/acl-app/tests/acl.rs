@@ -29,25 +29,27 @@ use tauri::{
 use tauri_plugin_overwolf::{Builder, COMMANDS, OverwolfExt};
 
 /// Commands only `bw-*` webviews may call.
-const RENDERER_ONLY: [&str; 9] = [
+const RENDERER_ONLY: [&str; 10] = [
     "ipc_invoke",
     "ipc_send",
     "ipc_skip",
     "eval_result",
     "navigation_external",
+    "navigation_in_page",
     "adview_mount",
     "adview_update",
     "adview_unmount",
     "adview_command",
 ];
 /// The `overwolf:renderer` set.
-const RENDERER: [&str; 10] = [
+const RENDERER: [&str; 11] = [
     "ipc_subscribe",
     "ipc_invoke",
     "ipc_send",
     "ipc_skip",
     "eval_result",
     "navigation_external",
+    "navigation_in_page",
     "adview_mount",
     "adview_update",
     "adview_unmount",
@@ -1391,6 +1393,96 @@ fn navigation_external_opens_the_browser_and_reports_will_navigate() {
     );
     assert_eq!(outcome(&r), Outcome::Acl, "{r:?}");
     assert_eq!(ow.test_browser_opens().len(), 1);
+}
+
+#[test]
+fn in_page_navigations_move_the_window_url_and_reach_main() {
+    let (app, captured) = app("nav-in-page");
+    main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
+    let ow = app.overwolf();
+    let at = |s: &str| tauri::Url::parse(s).unwrap();
+    let page = format!("{}/index.html", origin());
+    let in_page = |url: &str| invoke(&app, "bw-1", "navigation_in_page", json!({ "url": url }));
+    // Nothing loaded yet: nothing to navigate in.
+    assert_eq!(
+        in_page(&format!("{page}#/")).unwrap_err()["code"],
+        "invalid-argument"
+    );
+    // During the load (a hash router sets `#/` before the load finishes),
+    // did-finish-load reports the in-page URL, as Electron's does.
+    ow.test_page_load("bw-1", &at(&page), false);
+    in_page(&format!("{page}#/")).unwrap();
+    ow.test_page_load("bw-1", &at(&page), true);
+    in_page(&format!("{origin}/settings?tab=2", origin = origin())).unwrap();
+    // The current URL again: nothing new.
+    in_page(&format!("{origin}/settings?tab=2", origin = origin())).unwrap();
+    // Another origin, or not a URL: refused.
+    for url in ["https://example.com/#/", "not a url"] {
+        assert_eq!(
+            in_page(url).unwrap_err()["code"],
+            "invalid-argument",
+            "{url}"
+        );
+    }
+    let all = wait_for(&captured, |m| {
+        messages(m, "ow-main")
+            .iter()
+            .filter(|x| x["event"] == "did-navigate-in-page")
+            .count()
+            == 2
+            && messages(m, "ow-main")
+                .iter()
+                .any(|x| x["event"] == "did-finish-load")
+    });
+    let main = messages(&all, "ow-main");
+    let events: Vec<(String, String)> = main
+        .iter()
+        .filter(|x| {
+            x["id"] == 1
+                && (x["event"] == "did-navigate-in-page" || x["event"] == "did-finish-load")
+        })
+        .map(|x| {
+            (
+                x["event"].as_str().unwrap().to_owned(),
+                x["data"]["url"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        events,
+        [
+            ("did-navigate-in-page".to_owned(), format!("{page}#/")),
+            ("did-finish-load".to_owned(), format!("{page}#/")),
+            (
+                "did-navigate-in-page".to_owned(),
+                format!("{}/settings?tab=2", origin())
+            ),
+        ]
+    );
+    // A new load starts from its own URL again.
+    ow.test_page_load("bw-1", &at(&page), false);
+    ow.test_page_load("bw-1", &at(&page), true);
+    let all = wait_for(&captured, |m| {
+        messages(m, "ow-main")
+            .iter()
+            .filter(|x| x["event"] == "did-finish-load")
+            .count()
+            == 2
+    });
+    let last = messages(&all, "ow-main")
+        .into_iter()
+        .rfind(|x| x["event"] == "did-finish-load")
+        .unwrap();
+    assert_eq!(last["data"]["url"], page.as_str());
+    // Main-process callers are refused by the ACL.
+    let r = invoke(
+        &app,
+        "ow-main",
+        "navigation_in_page",
+        json!({ "url": page }),
+    );
+    assert_eq!(outcome(&r), Outcome::Acl, "{r:?}");
 }
 
 #[test]

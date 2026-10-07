@@ -230,3 +230,19 @@ pub(crate) async fn navigation_external<R: Runtime>(
     let window = require_ui(&webview, host)?;
     host.navigation_external(window, &url)
 }
+
+/// `navigation_in_page` (A.2.5): the renderer bootstrap reports that the top
+/// document changed its URL without a new load (a fragment change,
+/// `history.pushState` / `replaceState`, back or forward between such
+/// entries), so `webContents.getURL()` follows it and the app gets
+/// `did-navigate-in-page`, as in Electron.
+#[tauri::command]
+pub(crate) async fn navigation_in_page<R: Runtime>(
+    webview: Webview<R>,
+    state: State<'_, Overwolf<R>>,
+    url: String,
+) -> Result<()> {
+    let host = host(&state);
+    let window = require_ui(&webview, host)?;
+    host.navigation_in_page(window, webview.label(), &url)
+}

@@ -775,6 +775,18 @@
           "markdownDescription": "Denies the navigation_external command without any pre-configured scope."
         },
         {
+          "description": "Enables the navigation_in_page command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-navigation-in-page",
+          "markdownDescription": "Enables the navigation_in_page command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the navigation_in_page command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-navigation-in-page",
+          "markdownDescription": "Denies the navigation_in_page command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_ad_privacy_settings_window command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-ad-privacy-settings-window",
@@ -1075,10 +1087,10 @@
           "markdownDescription": "Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing, the Overwolf API, packages, windows, screen, shell, dialogs, global shortcuts, scoped files and the update client.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-bootstrap`\n- `allow-main-ready`\n- `allow-ipc-main-ready`\n- `allow-app-quit-reply`\n- `allow-app-relaunch`\n- `allow-app-quit`\n- `allow-app-exit`\n- `allow-app-focus`\n- `allow-log`\n- `allow-ipc-reply`\n- `allow-ipc-emit`\n- `allow-ipc-emit-skip`\n- `allow-disable-anonymous-analytics`\n- `allow-disable-ads-optimization`\n- `allow-disable-ads-fpd`\n- `allow-is-cmp-required`\n- `allow-open-cmp-window`\n- `allow-open-ad-privacy-settings-window`\n- `allow-set-user-email-hashes`\n- `allow-set-external-payment-user-id`\n- `allow-analytics-set-user-enabled`\n- `allow-app-record-browser-args`\n- `allow-packages-snapshot`\n- `allow-packages-relaunch`\n- `allow-packages-set-channel`\n- `allow-packages-get-available-channels`\n- `allow-packages-get-channel`\n- `allow-window-create`\n- `allow-window-load`\n- `allow-window-close-reply`\n- `allow-window-destroy`\n- `allow-window-eval`\n- `allow-window-devtools`\n- `allow-window-set-name`\n- `allow-screen-snapshot`\n- `allow-shell-open-external`\n- `allow-shell-open-path`\n- `allow-shell-show-item-in-folder`\n- `allow-dialog-open`\n- `allow-dialog-save`\n- `allow-dialog-message`\n- `allow-global-shortcut-register`\n- `allow-global-shortcut-unregister`\n- `allow-fs-read-text`\n- `allow-fs-write-text`\n- `allow-fs-exists`\n- `allow-fs-mkdir`\n- `allow-updater-configure`\n- `allow-updater-check`\n- `allow-updater-download`\n- `allow-updater-quit-and-install`"
         },
         {
-          "description": "Commands of UI and overlay webviews (`bw-*`): the IPC router, `executeJavaScript` results, external links and `<owadview>` guests.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-ipc-invoke`\n- `allow-ipc-send`\n- `allow-ipc-skip`\n- `allow-eval-result`\n- `allow-navigation-external`\n- `allow-adview-mount`\n- `allow-adview-update`\n- `allow-adview-unmount`\n- `allow-adview-command`",
+          "description": "Commands of UI and overlay webviews (`bw-*`): the IPC router, `executeJavaScript` results, external links, in-page navigations and `<owadview>` guests.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-ipc-invoke`\n- `allow-ipc-send`\n- `allow-ipc-skip`\n- `allow-eval-result`\n- `allow-navigation-external`\n- `allow-navigation-in-page`\n- `allow-adview-mount`\n- `allow-adview-update`\n- `allow-adview-unmount`\n- `allow-adview-command`",
           "type": "string",
           "const": "renderer",
-          "markdownDescription": "Commands of UI and overlay webviews (`bw-*`): the IPC router, `executeJavaScript` results, external links and `<owadview>` guests.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-ipc-invoke`\n- `allow-ipc-send`\n- `allow-ipc-skip`\n- `allow-eval-result`\n- `allow-navigation-external`\n- `allow-adview-mount`\n- `allow-adview-update`\n- `allow-adview-unmount`\n- `allow-adview-command`"
+          "markdownDescription": "Commands of UI and overlay webviews (`bw-*`): the IPC router, `executeJavaScript` results, external links, in-page navigations and `<owadview>` guests.\n#### This permission set includes:\n\n- `allow-ipc-subscribe`\n- `allow-ipc-invoke`\n- `allow-ipc-send`\n- `allow-ipc-skip`\n- `allow-eval-result`\n- `allow-navigation-external`\n- `allow-navigation-in-page`\n- `allow-adview-mount`\n- `allow-adview-update`\n- `allow-adview-unmount`\n- `allow-adview-command`"
         }
       ]
     }

@@ -10,6 +10,11 @@
  *   submission to an `http(s)` URL outside the app origin is cancelled and
  *   sent to `navigation_external`, which opens the system browser, as the
  *   Windows navigation hook does natively.
+ * - In-page navigations: a top-document URL change without a new load (a
+ *   fragment change, `history.pushState` / `replaceState`, back or forward
+ *   between such entries) is sent to `navigation_in_page`, so
+ *   `webContents.getURL()` follows it and the app gets
+ *   `did-navigate-in-page`, as Chromium reports them in Electron.
  *
  * @packageDocumentation
  */
@@ -89,6 +94,20 @@ export interface ChromeEnvironment {
    * @param url - the URL
    */
   navigate(url: string): void;
+  /**
+   * The document's current URL (`location.href`).
+   *
+   * @returns the URL
+   */
+  href(): string;
+  /**
+   * Calls `listener` after every same-document navigation: `hashchange`,
+   * `popstate`, `history.pushState` and `history.replaceState`.
+   *
+   * @param listener - called after the URL may have changed
+   * @returns a function that stops the calls
+   */
+  onSameDocumentNavigation(listener: () => void): () => void;
 }
 
 /**
@@ -127,6 +146,32 @@ export function browserChromeEnvironment(platform: string): ChromeEnvironment {
     origin: () => win.location.origin,
     navigate: (url) => {
       win.location.assign(url);
+    },
+    href: () => win.location.href,
+    onSameDocumentNavigation: (listener) => {
+      const history = win.history;
+      const names = ['pushState', 'replaceState'] as const;
+      const restore = names.map((name) => {
+        const own = Object.getOwnPropertyDescriptor(history, name);
+        const original = Reflect.get(history, name) as History['pushState'];
+        // An own property in front of `History.prototype`'s: the page's
+        // calls behave the same, then the change is reported.
+        history[name] = function (this: History, ...args: Parameters<History['pushState']>): void {
+          Reflect.apply(original, this, args);
+          listener();
+        };
+        return () => {
+          if (own) Object.defineProperty(history, name, own);
+          else Reflect.deleteProperty(history, name);
+        };
+      });
+      win.addEventListener('hashchange', listener);
+      win.addEventListener('popstate', listener);
+      return () => {
+        for (const undo of restore) undo();
+        win.removeEventListener('hashchange', listener);
+        win.removeEventListener('popstate', listener);
+      };
     },
   };
 }
@@ -289,6 +334,17 @@ export function installWindowChrome(services: ChromeServices, env: ChromeEnviron
       doc.removeEventListener('click', onClick);
       doc.removeEventListener('submit', onSubmit);
     });
+  }
+
+  if (env.isTop()) {
+    let last = env.href();
+    const report = (): void => {
+      const url = env.href();
+      if (url === last) return;
+      last = url;
+      services.command('navigation_in_page', { url }).catch(fail('navigation_in_page'));
+    };
+    cleanups.push(env.onSameDocumentNavigation(report));
   }
 
   return () => {

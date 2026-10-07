@@ -385,6 +385,7 @@ impl<R: Runtime> Host<R> {
             c.router.remove_peer(&ui_label(id), None);
             c.sinks.remove(&ui_label(id));
             c.urls.remove(&ui_label(id));
+            c.in_page_urls.remove(&ui_label(id));
             take_evals(c, id)
         });
         reject_evals(evals, "The window switched to a remote page.");
@@ -646,6 +647,7 @@ impl<R: Runtime> Host<R> {
             c.sinks.remove(&ui_label(id));
             c.urls.remove(&ui_label(id));
             c.urls.remove(&remote_label(id));
+            c.in_page_urls.remove(&ui_label(id));
             c.close_requests.retain(|_, r| r.window != id);
             c.queue_main(HostMessage::window(id, WindowEventName::Closed, None));
             c.restart_stale_windows.remove(&id);
@@ -672,6 +674,7 @@ impl<R: Runtime> Host<R> {
             PageLoadEvent::Started => {
                 let evals = self.with_core(|c| {
                     c.urls.insert(label.to_owned(), href);
+                    c.in_page_urls.remove(label);
                     if !app_webview {
                         return Vec::new();
                     }
@@ -690,6 +693,8 @@ impl<R: Runtime> Host<R> {
             PageLoadEvent::Finished => {
                 self.analytics_page_finished(id, &href);
                 self.with_core(|c| {
+                    // An in-page navigation during the load wins (B.2).
+                    let href = c.in_page_urls.remove(label).unwrap_or(href);
                     c.urls.insert(label.to_owned(), href.clone());
                     let Some(entry) = c.windows.get_mut(id) else {
                         return;
@@ -762,6 +767,48 @@ impl<R: Runtime> Host<R> {
             Some(json!({ "url": target.as_str() })),
         ));
         self.open_in_browser(&target)
+    }
+
+    /// `navigation_in_page` (A.2.5): the top document of window `id`, in
+    /// the webview `label`, changed its URL without a new load. The URL must
+    /// keep the loaded document's origin. It becomes the window's URL
+    /// (`webContents.getURL()`, the next `did-finish-load` while the document
+    /// is still loading) and `ow-main` gets `did-navigate-in-page`, as
+    /// Electron emits it. Reporting the current URL again does nothing.
+    pub(crate) fn navigation_in_page(
+        self: &Arc<Self>,
+        id: u32,
+        label: &str,
+        url: &str,
+    ) -> Result<(), Error> {
+        let target =
+            Url::parse(url).map_err(|_| Error::invalid_argument("The URL is not valid."))?;
+        self.with_core(|c| {
+            let current = c.urls.get(label).and_then(|u| Url::parse(u).ok());
+            let Some(current) = current else {
+                return Err(Error::invalid_argument(
+                    "The window has no loaded document.",
+                ));
+            };
+            if origin_string(&current) != origin_string(&target) {
+                return Err(Error::invalid_argument(
+                    "An in-page navigation keeps the document's origin.",
+                ));
+            }
+            if current == target {
+                return Ok(());
+            }
+            c.urls.insert(label.to_owned(), target.to_string());
+            // Read by the `did-finish-load` of a load still running; the
+            // next load start drops it.
+            c.in_page_urls.insert(label.to_owned(), target.to_string());
+            c.queue_main(HostMessage::window(
+                id,
+                WindowEventName::DidNavigateInPage,
+                Some(json!({ "url": target.as_str(), "isMainFrame": true })),
+            ));
+            Ok(())
+        })
     }
 
     /// The `window.open` handler of window `id`'s webviews: the request is

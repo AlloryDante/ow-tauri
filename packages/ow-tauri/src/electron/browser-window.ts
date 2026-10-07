@@ -1705,6 +1705,19 @@ export class WebContents extends EventEmitter {
           exitCode: num(data['exitCode'], 0),
         });
         return;
+      case 'did-navigate-in-page': {
+        // A fragment or History API change: `getURL()` follows it (B.2).
+        const url = typeof data['url'] === 'string' ? data['url'] : this.#state.url;
+        this.#state.url = url;
+        emitFromHost(
+          this,
+          'did-navigate-in-page',
+          createEvent(),
+          url,
+          data['isMainFrame'] !== false,
+        );
+        return;
+      }
       case 'will-navigate':
         emitFromHost(
           this,

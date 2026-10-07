@@ -1054,6 +1054,32 @@ Denies the navigation_external command without any pre-configured scope.
 <tr>
 <td>
 
+`overwolf:allow-navigation-in-page`
+
+</td>
+<td>
+
+Enables the navigation_in_page command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-navigation-in-page`
+
+</td>
+<td>
+
+Denies the navigation_in_page command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `overwolf:allow-open-ad-privacy-settings-window`
 
 </td>
@@ -1696,7 +1722,7 @@ Commands of the hidden main webview `ow-main`: bootstrap, lifecycle, IPC routing
 </td>
 <td>
 
-Commands of UI and overlay webviews (`bw-*`): the IPC router, `executeJavaScript` results, external links and `<owadview>` guests.
+Commands of UI and overlay webviews (`bw-*`): the IPC router, `executeJavaScript` results, external links, in-page navigations and `<owadview>` guests.
 
 </td>
 </tr>

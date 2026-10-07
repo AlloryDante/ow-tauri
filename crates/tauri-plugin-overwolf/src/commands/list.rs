@@ -68,6 +68,7 @@ pub const COMMANDS: &[&str] = &[
     "ipc_skip",
     "eval_result",
     "navigation_external",
+    "navigation_in_page",
     "adview_mount",
     "adview_update",
     "adview_unmount",

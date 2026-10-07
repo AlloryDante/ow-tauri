@@ -376,6 +376,7 @@ pub(crate) fn setup<R: Runtime>(
         quit_after_restart: false,
         restart_stale_windows: std::collections::BTreeSet::new(),
         urls: HashMap::new(),
+        in_page_urls: HashMap::new(),
         ticks: 0,
         ads: super::ads::AdsCore::default(),
         consent: super::consent::ConsentCore::default(),

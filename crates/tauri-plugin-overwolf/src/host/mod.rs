@@ -155,6 +155,10 @@ pub(crate) struct Core {
     /// The current top-level document URL of each webview, from its page
     /// loads (`IpcSender.url` and the `ow-main` reload check).
     pub(crate) urls: HashMap<String, String>,
+    /// The last in-page URL of each webview since its current load started
+    /// (`navigation_in_page`): a `did-finish-load` reports it instead of the
+    /// URL the load started with, as Electron's does.
+    pub(crate) in_page_urls: HashMap<String, String>,
     pub(crate) ticks: u64,
     /// The ads service (D).
     pub(crate) ads: ads::AdsCore,
@@ -203,6 +207,7 @@ impl Core {
             "windows": windows.len(),
             "sinks": self.sinks.len(),
             "urls": self.urls.len(),
+            "inPageUrls": self.in_page_urls.len(),
             "closeRequests": self.close_requests.len(),
             "evals": self.evals.len(),
             "adGuests": self.ads.guests.len(),

@@ -701,6 +701,29 @@ describe('BrowserWindow (B.2.2)', () => {
     }).toThrow('Object has been destroyed');
   });
 
+  it('follows in-page navigations in getURL() and emits did-navigate-in-page', async () => {
+    await start();
+    const win = new BrowserWindow({ show: false });
+    await win.whenCreated();
+    const inPage = vi.fn();
+    win.webContents.on('did-navigate-in-page', inPage);
+    host.push(windowEvent(1, 'did-finish-load', { data: { url: 'tauri://localhost/index.html' } }));
+    await settle();
+    expect(win.webContents.getURL()).toBe('tauri://localhost/index.html');
+    host.push(
+      windowEvent(1, 'did-navigate-in-page', {
+        data: { url: 'tauri://localhost/index.html#/ads', isMainFrame: true },
+      }),
+    );
+    await settle();
+    expect(win.webContents.getURL()).toBe('tauri://localhost/index.html#/ads');
+    expect(inPage).toHaveBeenCalledWith(
+      expect.anything(),
+      'tauri://localhost/index.html#/ads',
+      true,
+    );
+  });
+
   it('keeps parent and modal for a child created in the same tick as its parent', async () => {
     let release: () => void = () => undefined;
     let next = 1;

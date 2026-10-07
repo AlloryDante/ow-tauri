@@ -150,6 +150,7 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         ipc::ipc_skip,
         window::eval_result,
         window::navigation_external,
+        window::navigation_in_page,
         ads::adview_mount,
         ads::adview_update,
         ads::adview_unmount,
