@@ -8,6 +8,42 @@
 const OFFSCREEN = { x: -20000, y: -20000, center: false };
 const TEST_EMAIL = 'test.email@overwolf.com';
 
+/** The performance (interstitial) ad of the docs example, appended to <body>. */
+const PERF_DOC = {
+  parent: 'body',
+  cid: null,
+  customTracking: false,
+  attrs: {
+    performance: '',
+    adstyle: 'background-color: rgba(255, 0, 0, 0.5); background-blur: -1;',
+  },
+};
+/** The app "opts in" to a ready rewarded ad by showing its slot again (display:none for 1 s). */
+const REWARD_OPT_IN = (times) => [
+  { at: 12000, do: 'hook-guest-frames', label: 'oam' },
+  ...times.flatMap((at) => [
+    {
+      at,
+      do: 'page-eval',
+      label: 'reward slot hidden',
+      code: `document.querySelector('.slot').style.display = 'none'; 'ok'`,
+    },
+    {
+      at: at + 1000,
+      do: 'page-eval',
+      label: 'reward slot shown (opt-in)',
+      code: `document.querySelector('.slot').style.display = ''; 'ok'`,
+    },
+    { at: at + 3000, do: 'hook-guest-frames', label: 'oam-again' },
+  ]),
+  { at: 20000, do: 'probe-guests', label: 'reward+20s' },
+];
+const PERF_PROBES = [
+  { at: 15000, do: 'probe-guests', label: 'perf+12s' },
+  { at: 45000, do: 'probe-guests', label: 'perf+42s' },
+  { at: 80000, do: 'probe-guests', label: 'perf+77s' },
+];
+
 /** Feature-flag stand-in responses for `--features <preset>` (cmp-required scenario). */
 export const FEATURE_PRESETS = {
   empty: [{ status: 200, body: '{"params":[]}' }],
@@ -370,6 +406,307 @@ export const SCENARIOS = {
       'Live-fill question: the ad window shown at opacity 0 and moved off-screen (-20000,-20000). Combine with --mode live --live-ok --max-live-loads N for live demand.',
     defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 90 },
     config: { windowPosition: [-20000, -20000] },
+  },
+
+  // --- Round 3: ad formats (docs: monetization/advertising/*) ----------------
+  perf: {
+    describe:
+      'R3: performance (interstitial) ad exactly as the docs example: <owadview performance adstyle="background-color: rgba(255, 0, 0, 0.5); background-blur: -1;"> appended to <body> at 3 s, no cid, in a 1200x800 window (docs minimum 1000x600). Element events, removal, layout samples, guest probes.',
+    defaults: { mode: 'test', present: 'transparent', layout: 'none', duration: 120 },
+    config: {
+      window: { width: 1200, height: 800 },
+      elementSpec: [{ at: 3000, ...PERF_DOC }],
+      actions: PERF_PROBES,
+    },
+  },
+
+  'perf-sample': {
+    describe:
+      'R3: performance ad as the official sample creates it: only the empty `performance` attribute, appended to <body> at 3 s (1200x800 window).',
+    defaults: { mode: 'test', present: 'transparent', layout: 'none', duration: 120 },
+    config: {
+      window: { width: 1200, height: 800 },
+      elementSpec: [
+        { at: 3000, parent: 'body', cid: null, customTracking: false, attrs: { performance: '' } },
+      ],
+      actions: PERF_PROBES,
+    },
+  },
+
+  'perf-unit': {
+    describe:
+      'R3: the sample\'s commented-out `unit` attribute: a performance ad with unit="parity_unit" at 3 s, and a 400x300 standard slot with the same unit; where does `unit` reach the ad library (forceAdUnit)?',
+    defaults: { mode: 'test', present: 'transparent', layout: 'none', duration: 60 },
+    config: {
+      window: { width: 1200, height: 800 },
+      elementSpec: [
+        { at: 0, layout: '400x300', attrs: { unit: 'parity_unit' }, cid: 'parity_unit_slot' },
+        { at: 3000, ...PERF_DOC, attrs: { ...PERF_DOC.attrs, unit: 'parity_unit' } },
+      ],
+      actions: PERF_PROBES.slice(0, 2),
+    },
+  },
+
+  'perf-small': {
+    describe:
+      'R3: performance ad (docs example) in a 900x500 window, below the documented 1000x600 minimum.',
+    defaults: { mode: 'test', present: 'transparent', layout: 'none', duration: 90 },
+    config: {
+      window: { width: 900, height: 500 },
+      elementSpec: [{ at: 3000, ...PERF_DOC }],
+      actions: PERF_PROBES,
+    },
+  },
+
+  'perf-with-standard': {
+    describe:
+      'R3: a 300x250 standard ad running, then a performance ad (docs example) added at 20 s; is the standard slot paused/reloaded while the overlay is up, and what follows. Then a second performance ad at 80 s.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 150 },
+    config: {
+      window: { width: 1200, height: 800 },
+      elementSpec: [
+        { at: 20000, ...PERF_DOC },
+        { at: 80000, ...PERF_DOC, id: 'perf2' },
+      ],
+      actions: [
+        { at: 15000, do: 'probe-guests', label: 'before-perf' },
+        { at: 30000, do: 'probe-guests', label: 'perf+10s' },
+        { at: 60000, do: 'probe-guests', label: 'perf+40s' },
+        { at: 100000, do: 'probe-guests', label: 'perf2+20s' },
+      ],
+    },
+  },
+
+  'perf-twice': {
+    describe:
+      'R3: two performance ads (docs example) appended 1 s apart; the docs promise one per window ("other interstitial ad already initiated" in the native SDK).',
+    defaults: { mode: 'test', present: 'transparent', layout: 'none', duration: 90 },
+    config: {
+      window: { width: 1200, height: 800 },
+      elementSpec: [
+        { at: 3000, ...PERF_DOC },
+        { at: 4000, ...PERF_DOC, id: 'perf2' },
+      ],
+      actions: PERF_PROBES,
+    },
+  },
+
+  'perf-remove': {
+    describe:
+      'R3: performance ad (docs example) removed by the app 25 s after it was added; what the host sends and dispatches on removal.',
+    defaults: { mode: 'test', present: 'transparent', layout: 'none', duration: 60 },
+    config: {
+      window: { width: 1200, height: 800 },
+      elementSpec: [{ at: 3000, ...PERF_DOC }],
+      actions: [
+        { at: 15000, do: 'probe-guests', label: 'perf+12s' },
+        {
+          at: 28000,
+          do: 'page-eval',
+          label: 'app removes the performance ad',
+          code: `document.querySelectorAll('owadview[performance]').forEach((e) => e.remove()); 'ok'`,
+        },
+      ],
+    },
+  },
+
+  'high-impact': {
+    describe:
+      'R3: the documented high-impact ad zone: #ads-parent 440 wide x window height (min 670), a 400x600 container with <owadview adstyle="high-impact-ad;"> and a 400x60 container; the documented listeners expand/restore it. Window 1000x760.',
+    defaults: { mode: 'test', present: 'transparent', layout: 'none', duration: 150 },
+    config: {
+      window: { width: 1000, height: 760 },
+      elementSpec: [{ zone: 'high-impact' }],
+      actions: [
+        { at: 15000, do: 'probe-guests', label: 'hi+15s' },
+        { at: 45000, do: 'probe-guests', label: 'hi+45s' },
+        { at: 100000, do: 'probe-guests', label: 'hi+100s' },
+      ],
+    },
+  },
+
+  'high-impact-small-zone': {
+    describe:
+      'R3: high-impact zone in a 1000x560 window, so #ads-parent is below the documented 670 px minimum height.',
+    defaults: { mode: 'test', present: 'transparent', layout: 'none', duration: 90 },
+    config: {
+      window: { width: 1000, height: 560 },
+      elementSpec: [{ zone: 'high-impact' }],
+      actions: [{ at: 15000, do: 'probe-guests', label: 'hi+15s' }],
+    },
+  },
+
+  reward: {
+    describe:
+      'R3: reward ad, full flow: adstyle="rewarded-ad;" on a 400x300 container (smaller slots are refused). The library preloads (video_ad_ready); the app opts the user in by showing the slot (here: display:none for 1 s at 15 s, as a collapsed "watch for reward" panel would), which posts userPlay and plays (play, impression ... complete = reward). A second opt-in at 75 s. App-side DOM changes only, no input events.',
+    defaults: { mode: 'test', present: 'transparent', layout: '400x300', duration: 130 },
+    config: {
+      elementAttrs: [{ adstyle: 'rewarded-ad;' }],
+      actions: REWARD_OPT_IN([15000, 75000]),
+    },
+  },
+
+  'reward-two-slots': {
+    describe:
+      'R3: adstyle="rewarded-ad;" on a 400x300 and a 400x600 container at once, never re-shown: preload only (video_ad_ready, player_loaded), nothing plays.',
+    defaults: { mode: 'test', present: 'transparent', layout: '400x300,400x600', duration: 60 },
+    config: {
+      elementAttrs: [{ adstyle: 'rewarded-ad;' }, { adstyle: 'rewarded-ad;' }],
+      actions: [{ at: 20000, do: 'probe-guests', label: 'reward+20s' }],
+    },
+  },
+
+  'send-command-probe': {
+    describe:
+      'R3: how <owadview>.sendCommand(...) and setPageUrl(...) travel (host -> guest message shape and guest reaction), on a rewarded 400x300 slot. App-side API calls only; no input events.',
+    defaults: { mode: 'test', present: 'transparent', layout: '400x300', duration: 45 },
+    config: {
+      elementAttrs: [{ adstyle: 'rewarded-ad;' }],
+      actions: [
+        {
+          at: 15000,
+          do: 'page-eval',
+          label: 'sendCommand(parity-probe)',
+          code: `(() => { const el = document.querySelector('owadview'); try { return String(el.sendCommand('parity-probe', { a: 1 })); } catch (e) { return 'threw: ' + e; } })()`,
+        },
+        {
+          at: 17000,
+          do: 'page-eval',
+          label: 'sendCommand() no args',
+          code: `(() => { const el = document.querySelector('owadview'); try { return String(el.sendCommand()); } catch (e) { return 'threw: ' + e; } })()`,
+        },
+        {
+          at: 19000,
+          do: 'page-eval',
+          label: 'sendCommand.length + toString',
+          code: `(() => { const f = document.querySelector('owadview').sendCommand; return [f.length, String(f).slice(0, 400)]; })()`,
+        },
+        {
+          at: 21000,
+          do: 'page-eval',
+          label: 'setPageUrl',
+          code: `(() => { const el = document.querySelector('owadview'); try { return String(el.setPageUrl('https://example.com/parity/page-two')); } catch (e) { return 'threw: ' + e; } })()`,
+        },
+        { at: 25000, do: 'probe-guests', label: 'after-commands' },
+      ],
+    },
+  },
+
+  'reward-play-probe': {
+    describe:
+      'R3: what makes a ready rewarded ad play. Frame message hook at 12 s, the embedder window "focus" event at 15 s (GUEST_INSTANCE_FOCUS_CHANGE true), then sendCommand candidates 20 s apart; app-side calls only, no input events.',
+    defaults: { mode: 'test', present: 'transparent', layout: '400x300', duration: 150 },
+    config: {
+      elementAttrs: [{ adstyle: 'rewarded-ad;' }],
+      actions: [
+        { at: 12000, do: 'hook-guest-frames', label: 'oam' },
+        { at: 15000, do: 'window', method: 'emit', args: ['focus'] },
+        ...['userPlay', 'play', 'playAd', 'showRewardedAd', 'reward'].map((name, i) => ({
+          at: 30000 + i * 20000,
+          do: 'page-eval',
+          label: `sendCommand(${name})`,
+          code: `document.querySelectorAll('owadview').forEach((el) => el.sendCommand('${name}')); 'sent'`,
+        })),
+      ],
+    },
+  },
+
+  'reward-visibility-probe': {
+    describe:
+      'R3: a ready rewarded ad and slot visibility: the slot is hidden (display:none) for 1 s at 15 s, then for 8 s at 45 s, then pushed out of the viewport for 1 s at 80 s; does becoming visible again post userPlay and play the ad. Frame message hook on. App-side DOM changes only.',
+    defaults: { mode: 'test', present: 'transparent', layout: '400x300', duration: 150 },
+    config: {
+      elementAttrs: [{ adstyle: 'rewarded-ad;' }],
+      actions: [
+        { at: 12000, do: 'hook-guest-frames', label: 'oam' },
+        ...[
+          [15000, 'none'],
+          [16000, ''],
+          [45000, 'none'],
+          [53000, ''],
+        ].map(([at, display]) => ({
+          at,
+          do: 'page-eval',
+          label: `slot display '${display}'`,
+          code: `document.querySelector('.slot').style.display = '${display}'; 'ok'`,
+        })),
+        { at: 60000, do: 'hook-guest-frames', label: 'oam-after-reload' },
+        {
+          at: 80000,
+          do: 'page-eval',
+          label: 'slot out of viewport',
+          code: `document.body.style.paddingTop = '4000px'; 'ok'`,
+        },
+        {
+          at: 81000,
+          do: 'page-eval',
+          label: 'slot back',
+          code: `document.body.style.paddingTop = ''; 'ok'`,
+        },
+        { at: 100000, do: 'hook-guest-frames', label: 'oam-late' },
+      ],
+    },
+  },
+
+  'adstyle-probe': {
+    describe:
+      'R3: which element attribute values switch the ad library options (OAM `options` on the wire: rewarded, enableHighImpact, forceAdUnit, performanceAd). Eight 300x250 slots, one candidate each; read the options from netlog-requests.json (adformat-report.mjs).',
+    defaults: {
+      mode: 'test',
+      present: 'transparent',
+      layout: '300x250,300x250,300x250,300x250,300x250,300x250,300x250,300x250',
+      duration: 45,
+    },
+    config: {
+      elementAttrs: [
+        { adstyle: 'high-impact-ad;' },
+        { adstyle: 'rewarded;' },
+        { adstyle: 'rewarded-ad;' },
+        { adstyle: 'reward-ad;' },
+        { adstyle: 'reward;' },
+        { adstyle: 'rewarded: true;' },
+        { unit: 'parity_unit' },
+        { adstyle: 'rewarded-ads;' },
+      ],
+      actions: [],
+    },
+  },
+
+  sizes: {
+    describe:
+      'R3: every documented standard container size (working-with-ads#list-of-ad-sizes) in one 1420x860 window laid out so every slot is inside the viewport (a slot below the fold only logs "<owadview> is not visible. waiting..."): 400x600, 160x600, 400x300, 300x250 / 970x90, 400x60 / 728x90.',
+    defaults: {
+      mode: 'test',
+      present: 'transparent',
+      layout: '400x600,160x600,400x300,300x250,970x90,400x60,728x90',
+      duration: 120,
+    },
+    config: {
+      window: { width: 1420, height: 860 },
+      actions: [
+        { at: 20000, do: 'probe-guests', label: 'sizes+20s' },
+        { at: 60000, do: 'probe-guests', label: 'sizes+60s' },
+      ],
+    },
+  },
+
+  house: {
+    describe:
+      'R3: house-ad path: standard slots with ad demand unreachable (run with --offline --offline-allow "*.overwolf.com,overwolf.com" so only Overwolf hosts load). No fill from partners; what the slot shows and dispatches.',
+    defaults: {
+      mode: 'test',
+      present: 'transparent',
+      layout: '400x300,300x250,400x600',
+      duration: 120,
+      offline: true,
+      'offline-allow': '*.overwolf.com,overwolf.com',
+    },
+    config: {
+      actions: [
+        { at: 20000, do: 'probe-guests', label: 'house+20s' },
+        { at: 70000, do: 'probe-guests', label: 'house+70s' },
+      ],
+    },
   },
 
   packages: {
