@@ -126,6 +126,16 @@ pub fn canonicalize_lenient(path: &Path) -> Result<PathBuf, Error> {
     if !path.is_absolute() {
         return Err(Error::forbidden("path must be absolute"));
     }
+    // A `..` may only follow a directory that exists. Windows resolves
+    // `missing\..` lexically where Unix fails it, so check it up front for
+    // the same result on every OS.
+    let mut prefix = PathBuf::new();
+    for component in path.components() {
+        if component == Component::ParentDir && !prefix.is_dir() {
+            return Err(Error::forbidden("path is outside the allowed scope"));
+        }
+        prefix.push(component);
+    }
     // Lexically drop `.` and resolve `..` only against existing ancestors:
     // walk up until an ancestor exists, then canonicalise it.
     let mut existing = path.to_path_buf();
