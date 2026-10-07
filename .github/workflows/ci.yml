@@ -58,6 +58,13 @@ jobs:
         run: |
           cargo clippy -p tauri-plugin-overwolf --all-targets --no-default-features --locked -- -D warnings
           cargo clippy -p tauri-plugin-overwolf --all-targets --no-default-features --features embed-resource --locked -- -D warnings
+      # --all-features turns on test-util, whose hooks use code that an app's
+      # build never reaches; check the library as an app (and the lab) builds it.
+      - name: clippy (the plugin library as an app builds it)
+        shell: bash
+        run: |
+          cargo clippy -p tauri-plugin-overwolf --lib --locked -- -D warnings
+          cargo clippy -p tauri-plugin-overwolf --lib --features lab --locked -- -D warnings
       # Doctests run per package: rustdoc links them with every native search
       # path of the whole build, and on Windows the ACL test app's tauri-build
       # output (a placeholder msvcrt.lib for the static C runtime) breaks
