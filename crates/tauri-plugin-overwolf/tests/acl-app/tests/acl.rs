@@ -1068,6 +1068,75 @@ fn the_performance_guest_stays_on_top() {
     );
 }
 
+/// AF-12: clicks pass through a performance guest from its mount until its
+/// first `display_ad_loaded`, switched in the host without a round trip;
+/// standard guests never pass input through.
+#[test]
+fn the_performance_guest_passes_input_through_until_its_first_ad() {
+    let (app, captured) = app("guest-passthrough");
+    main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
+    let ow = app.overwolf();
+    let perf =
+        guest_of(&invoke(&app, "bw-1", "adview_mount", performance_mount_body("p1")).unwrap());
+    let standard = guest_of(&invoke(&app, "bw-1", "adview_mount", mount_body("s1")).unwrap());
+    let switches = |label: &str| -> Vec<Value> {
+        native_steps(&app, label)
+            .into_iter()
+            .filter(|e| e["kind"] == "passthrough")
+            .map(|e| e["on"].clone())
+            .collect()
+    };
+    assert_eq!(switches(&perf), [json!(true)]);
+    assert_eq!(ow.test_guest(&perf).unwrap()["passthrough"], true);
+    assert!(switches(&standard).is_empty());
+    assert_eq!(ow.test_guest(&standard).unwrap()["passthrough"], false);
+    // Both guests load the ad document (D.6.5: 3 s after the mount).
+    ow.test_ads_tick(ow.test_now() + 3_100);
+    let page = tauri::Url::parse(ADVIEW_PAGE).unwrap();
+    for label in [&perf, &standard] {
+        app.get_webview(label)
+            .unwrap()
+            .navigate(page.clone())
+            .unwrap();
+        ow.test_page_load(label, &page, true);
+    }
+    let event = |label: &str, name: &str| {
+        invoke_from(
+            &app,
+            label,
+            ADVIEW_PAGE,
+            "adview_event",
+            json!({ "name": name, "data": {} }),
+        )
+        .unwrap();
+    };
+    // Other messages leave it alone; the first display_ad_loaded ends it,
+    // a second one changes nothing.
+    event(&perf, "impression");
+    assert_eq!(ow.test_guest(&perf).unwrap()["passthrough"], true);
+    event(&perf, "display_ad_loaded");
+    assert_eq!(switches(&perf), [json!(true), json!(false)]);
+    assert_eq!(ow.test_guest(&perf).unwrap()["passthrough"], false);
+    event(&perf, "display_ad_loaded");
+    event(&standard, "display_ad_loaded");
+    assert_eq!(switches(&perf), [json!(true), json!(false)]);
+    assert!(switches(&standard).is_empty());
+    // The event still reaches the element, after the switch.
+    let all = wait_for(&captured, |m| {
+        adview_events(m)
+            .iter()
+            .filter(|(s, n)| s == "guest" && n == "display_ad_loaded")
+            .count()
+            == 3
+    });
+    assert!(
+        adview_events(&all).contains(&("guest".into(), "impression".into())),
+        "{:?}",
+        adview_events(&all)
+    );
+}
+
 #[test]
 fn adview_update_command_and_window_close() {
     let (app, _) = app("guest-update");

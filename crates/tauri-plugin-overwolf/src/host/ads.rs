@@ -90,6 +90,10 @@ pub(crate) struct Guest {
     pub(crate) reload_at: Option<u64>,
     pub(crate) retry_at: Option<u64>,
     pub(crate) apply_setting_logged: bool,
+    /// Mouse input passes through the guest to the app (B.3.4): a
+    /// performance guest from its mount until its first
+    /// `display_ad_loaded`.
+    pub(crate) passthrough: bool,
 }
 
 impl Guest {
@@ -135,7 +139,9 @@ impl AdsCore {
 /// What a guest event leads to, decided under the lock.
 enum Next {
     Nothing,
-    Forward(String, String, Option<Value>),
+    /// Forward to the embedder; `true` when the guest's input pass-through
+    /// ends first (its first `display_ad_loaded`).
+    Forward(String, String, Option<Value>, bool),
     Reload,
     Close,
     Crash,
@@ -392,6 +398,7 @@ impl<R: Runtime> Host<R> {
         }
         let now = self.now();
         let limits = &self.info.config.ads.guest_limits;
+        let performance = mount.attributes.performance;
         let guest = Guest {
             embedder: embedder_label.clone(),
             window: window.label().to_owned(),
@@ -423,6 +430,7 @@ impl<R: Runtime> Host<R> {
             reload_at: None,
             retry_at: None,
             apply_setting_logged: false,
+            passthrough: performance,
         };
         self.with_core(|c| {
             c.ads.guests.insert(label.clone(), guest);
@@ -438,7 +446,11 @@ impl<R: Runtime> Host<R> {
                 "bounds": [x, y, w, h],
             })
         });
-        // The performance guest stays the top child of its window (B.3.4).
+        // The performance guest stays the top child of its window, and
+        // lets clicks through to the app while it loads (B.3.4).
+        if performance {
+            self.apply_guest_passthrough(&label, true);
+        }
         self.raise_performance_guest(window.label(), &label);
         // A window shown since the last poll counts first: ow-electron sees
         // `show` at once, so its first-visible-window heartbeat precedes the
@@ -496,6 +508,26 @@ impl<R: Runtime> Host<R> {
             crate::lab::record(
                 "wc-events.jsonl",
                 || json!({ "kind": "zorder-native", "label": native, "type": "owadview", "top": is_top }),
+            );
+        });
+    }
+
+    /// Applies an input pass-through state to the guest's native view.
+    /// Lab trace: `passthrough`, then `passthrough-native` with whether the
+    /// platform applied it.
+    fn apply_guest_passthrough(self: &Arc<Self>, label: &str, on: bool) {
+        self.guest_record(
+            "wc-events.jsonl",
+            || json!({ "kind": "passthrough", "label": label, "type": "owadview", "on": on }),
+        );
+        let Some(webview) = self.app.get_webview(label) else {
+            return;
+        };
+        let native = label.to_owned();
+        let _ = crate::platform::webview::set_input_passthrough(&webview, on, move |applied| {
+            crate::lab::record(
+                "wc-events.jsonl",
+                || json!({ "kind": "passthrough-native", "label": native, "type": "owadview", "on": on, "applied": applied }),
             );
         });
     }
@@ -1158,7 +1190,20 @@ impl<R: Runtime> Host<R> {
             }
             match internal {
                 None if InternalEvent::is_reserved(&event.name) => Next::Nothing,
-                None => Next::Forward(g.embedder.clone(), g.element_id.clone(), data.clone()),
+                None => {
+                    // The interstitial turns modal at its first
+                    // `display_ad_loaded` (B.3.4, observed).
+                    let modal = g.passthrough && event.name == "display_ad_loaded";
+                    if modal {
+                        g.passthrough = false;
+                    }
+                    Next::Forward(
+                        g.embedder.clone(),
+                        g.element_id.clone(),
+                        data.clone(),
+                        modal,
+                    )
+                }
                 Some(InternalEvent::Ready) => {
                     g.ready = true;
                     g.nav_started_ms = None;
@@ -1205,7 +1250,12 @@ impl<R: Runtime> Host<R> {
         });
         match next {
             Next::Nothing => {}
-            Next::Forward(embedder, element_id, data) => {
+            Next::Forward(embedder, element_id, data, modal) => {
+                if modal {
+                    // Natively first, so the guest takes clicks by the time
+                    // the element turns modal in the page.
+                    self.apply_guest_passthrough(label, false);
+                }
                 let message = HostMessage::AdviewEvent {
                     element_id,
                     name: event.name,

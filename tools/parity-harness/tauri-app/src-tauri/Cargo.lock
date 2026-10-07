@@ -4139,6 +4139,7 @@ dependencies = [
  "base64 0.23.1",
  "block2",
  "bytes",
+ "gtk",
  "http",
  "http-body-util",
  "hyper",

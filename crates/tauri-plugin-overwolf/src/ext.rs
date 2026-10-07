@@ -505,7 +505,8 @@ impl<R: Runtime> Overwolf<R> {
 
     /// The state of the ad guest `label`: `{ embedder, elementId, navigated,
     /// ready, domReady, loads, recoveries, visible, embedderHidden, embedderMinimized,
-    /// visibilityState, reloadScheduled }`, or `None` when it is gone.
+    /// visibilityState, reloadScheduled, passthrough }`, or `None` when it is
+    /// gone.
     #[must_use]
     pub fn test_guest(&self, label: &str) -> Option<Value> {
         self.0.with_core(|c| {
@@ -523,6 +524,7 @@ impl<R: Runtime> Overwolf<R> {
                     "embedderMinimized": g.embedder_minimized,
                     "visibilityState": if g.sent_visible { "visible" } else { "hidden" },
                     "reloadScheduled": g.reload_at.is_some(),
+                    "passthrough": g.passthrough,
                 })
             })
         })

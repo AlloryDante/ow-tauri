@@ -1,6 +1,7 @@
 //! Platform webview operations the ads and consent services need and Tauri
 //! does not offer: muting a guest, a transparent guest background on macOS,
-//! raising a guest above its sibling webviews, the guest's first navigation with `Referer` and `Origin` (D.8.3), and on
+//! raising a guest above its sibling webviews, letting clicks pass through a
+//! guest, the guest's first navigation with `Referer` and `Origin` (D.8.3), and on
 //! Windows the request shaping handler, guest crash and load-failure reports
 //! (D.7, D.8).
 //!
@@ -180,6 +181,44 @@ pub(crate) fn raise_to_top<R: Runtime>(
             None
         };
         done(top);
+    })
+}
+
+/// Lets mouse input pass through the guest to the webviews under it (`on`),
+/// or makes the guest take its input again (B.3.4: a performance guest
+/// until its first `display_ad_loaded`). The page keeps rendering and
+/// running either way:
+///
+/// - Windows: an empty window region on the guest's container window
+///   (`SetWindowRgn`), which hit-testing skips across processes; `NULL`
+///   restores it. Clipping the guest's paint changes nothing visible while
+///   it loads, because it is transparent.
+/// - macOS: the view's `hitTest:` answers `nil` while a per-view flag is
+///   set, through a subclass made for the view's class at run time (as
+///   key-value observing does), so `AppKit` hit-tests the sibling views.
+/// - Linux: an empty input shape on the guest widget's own `GdkWindow`,
+///   when it has one.
+///
+/// `done` runs on the webview's thread with whether the platform applied
+/// the change. Errors only when the webview is gone.
+pub(crate) fn set_input_passthrough<R: Runtime>(
+    webview: &Webview<R>,
+    on: bool,
+    done: impl FnOnce(bool) + Send + 'static,
+) -> tauri::Result<()> {
+    webview.with_webview(move |pw| {
+        #[cfg(target_os = "macos")]
+        let applied = macos::set_input_passthrough(pw.inner(), on);
+        #[cfg(windows)]
+        let applied = windows_impl::set_input_passthrough(&pw.controller(), on);
+        #[cfg(target_os = "linux")]
+        let applied = linux::set_input_passthrough(&pw.inner(), on);
+        #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+        let applied = {
+            let _ = (pw, on);
+            false
+        };
+        done(applied);
     })
 }
 
@@ -409,9 +448,9 @@ mod macos {
     use std::sync::Mutex;
 
     use objc2::rc::Retained;
-    use objc2::runtime::AnyObject;
+    use objc2::runtime::{AnyClass, AnyObject, Sel};
     use objc2::{class, msg_send, sel};
-    use objc2_foundation::{NSArray, NSHTTPCookie, NSMutableURLRequest, NSString, NSURL};
+    use objc2_foundation::{NSArray, NSHTTPCookie, NSMutableURLRequest, NSPoint, NSString, NSURL};
 
     use crate::host::cookies::StoredCookie;
 
@@ -664,6 +703,136 @@ mod macos {
         Some(is_top())
     }
 
+    /// The pass-through flag's associated-object key (its address).
+    static PASSTHROUGH_KEY: u8 = 0;
+
+    /// The classes whose `hitTest:` is [`passthrough_hit_test`], each with
+    /// the implementation it had before (class and `IMP` addresses).
+    static PASSTHROUGH_ORIGINALS: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+
+    /// The signature of `-[NSView hitTest:]`.
+    type HitTest = unsafe extern "C-unwind" fn(&AnyObject, Sel, NSPoint) -> *mut AnyObject;
+
+    /// The view's own class: its class without the subclasses key-value
+    /// observing puts in (`NSKVONotifying_*`), so every web view of one
+    /// class shares one installation however it is observed.
+    fn own_class(class: &'static AnyClass) -> &'static AnyClass {
+        let mut class = class;
+        while class.name().to_bytes().starts_with(b"NSKVONotifying_") {
+            match class.superclass() {
+                Some(superclass) => class = superclass,
+                None => break,
+            }
+        }
+        class
+    }
+
+    /// The `hitTest:` that [`install_passthrough`] replaced for `class` or
+    /// its nearest ancestor that has one.
+    fn original_hit_test(class: &'static AnyClass) -> Option<HitTest> {
+        let originals = PASSTHROUGH_ORIGINALS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut class = Some(class);
+        while let Some(c) = class {
+            let key = std::ptr::from_ref(c) as usize;
+            if let Some(&(_, imp)) = originals.iter().find(|(k, _)| *k == key) {
+                // SAFETY: stored by `install_passthrough` from the
+                // `hitTest:` method of that class: a valid `HitTest`.
+                return Some(unsafe { std::mem::transmute::<usize, HitTest>(imp) });
+            }
+            class = c.superclass();
+        }
+        None
+    }
+
+    /// `hitTest:` of a web view class with pass-through support: `nil`
+    /// while the view's flag is set (the event goes to the views under
+    /// it), otherwise the class's original `hitTest:`.
+    extern "C-unwind" fn passthrough_hit_test(
+        this: &AnyObject,
+        cmd: Sel,
+        point: NSPoint,
+    ) -> *mut AnyObject {
+        // SAFETY: reads an associated object of a live object.
+        let flag = unsafe {
+            objc2::ffi::objc_getAssociatedObject(this, (&raw const PASSTHROUGH_KEY).cast())
+        };
+        if !flag.is_null() {
+            return std::ptr::null_mut();
+        }
+        match original_hit_test(this.class()) {
+            // SAFETY: the original implementation, with its own arguments.
+            Some(original) => unsafe { original(this, cmd, point) },
+            None => std::ptr::null_mut(),
+        }
+    }
+
+    /// Gives `class` [`passthrough_hit_test`], once, keeping the `hitTest:`
+    /// it had (its own or inherited). The view's class and object stay as
+    /// they are: changing a web view's class at run time breaks `AppKit`'s
+    /// key-value observing and dynamic properties of the view when it
+    /// leaves its window. Views without a set flag behave as before.
+    fn install_passthrough(class: &'static AnyClass) -> bool {
+        let mut originals = PASSTHROUGH_ORIGINALS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let key = std::ptr::from_ref(class) as usize;
+        if originals.iter().any(|(k, _)| *k == key) {
+            return true;
+        }
+        let Some(method) = class.instance_method(sel!(hitTest:)) else {
+            return false;
+        };
+        let original = method.implementation();
+        // SAFETY: a method of a registered class; its encoding outlives
+        // the call.
+        let types = unsafe { objc2::ffi::method_getTypeEncoding(method) };
+        let replacement: HitTest = passthrough_hit_test;
+        // SAFETY: `HitTest` is `hitTest:`'s signature, as `types` says;
+        // the runtime stores the implementation for the class's lifetime.
+        unsafe {
+            objc2::ffi::class_replaceMethod(
+                std::ptr::from_ref(class).cast_mut(),
+                sel!(hitTest:),
+                std::mem::transmute::<HitTest, objc2::runtime::Imp>(replacement),
+                types,
+            );
+        }
+        originals.push((key, original as usize));
+        true
+    }
+
+    /// Sets or clears the view's pass-through flag, giving its class
+    /// pass-through support first. Returns whether the flag is now as
+    /// asked.
+    pub(super) fn set_input_passthrough(view: *mut c_void, on: bool) -> bool {
+        if view.is_null() {
+            return false;
+        }
+        // SAFETY: Tauri hands a live `WKWebView*` on the main thread.
+        let obj: &AnyObject = unsafe { &*view.cast::<AnyObject>() };
+        if on && !install_passthrough(own_class(obj.class())) {
+            return false;
+        }
+        let value: *mut AnyObject = if on {
+            view.cast()
+        } else {
+            std::ptr::null_mut()
+        };
+        // SAFETY: an unretained (assign) associated value on a live object:
+        // the object itself, so it never dangles.
+        unsafe {
+            objc2::ffi::objc_setAssociatedObject(
+                view.cast(),
+                (&raw const PASSTHROUGH_KEY).cast(),
+                value,
+                objc2::ffi::OBJC_ASSOCIATION_ASSIGN,
+            );
+        }
+        true
+    }
+
     /// `-[WKWebView loadRequest:]` with extra header fields.
     pub(super) fn load_request(wk_webview: *mut c_void, url: &str, headers: &[(&str, &str)]) {
         if wk_webview.is_null() {
@@ -735,6 +904,22 @@ mod linux {
         Some(true)
     }
 
+    /// An empty input shape on the widget's own `GdkWindow` (`on`), or
+    /// none. A widget without its own window is left alone. Returns whether
+    /// the shape was set.
+    pub(super) fn set_input_passthrough(webview: &webkit2gtk::WebView, on: bool) -> bool {
+        use gtk::prelude::WidgetExt as _;
+        if !webview.has_window() {
+            return false;
+        }
+        if on {
+            webview.input_shape_combine_region(Some(&gtk::cairo::Region::create()));
+        } else {
+            webview.input_shape_combine_region(None);
+        }
+        true
+    }
+
     /// Chromium's `net::Error` code and name closest to a `WebKitGTK` load
     /// error (D.7); `ERR_FAILED` when none is close.
     fn net_error(error: &webkit2gtk::glib::Error) -> (i64, &'static str) {
@@ -792,6 +977,7 @@ mod windows_impl {
         WebResourceRequestedEventHandler, take_pwstr,
     };
     use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
     use windows::Win32::UI::WindowsAndMessaging::{
         GW_HWNDPREV, GetWindow, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
     };
@@ -841,6 +1027,30 @@ mod windows_impl {
             .ok()?;
             Some(GetWindow(hwnd, GW_HWNDPREV).map_or(true, |prev| prev.is_invalid()))
         }
+    }
+
+    /// An empty window region on the container (`on`), or none. Returns
+    /// whether the region was set.
+    pub(super) fn set_input_passthrough(controller: &ICoreWebView2Controller, on: bool) -> bool {
+        let Some(hwnd) = container(controller) else {
+            return false;
+        };
+        // SAFETY: Win32 calls on a live window of this thread. On success
+        // the system owns the region; on failure it is deleted here.
+        unsafe {
+            if !on {
+                return SetWindowRgn(hwnd, None, true) != 0;
+            }
+            let region = CreateRectRgn(0, 0, 0, 0);
+            if region.is_invalid() {
+                return false;
+            }
+            if SetWindowRgn(hwnd, Some(region), true) == 0 {
+                let _ = DeleteObject(region.into());
+                return false;
+            }
+        }
+        true
     }
 
     fn shape(
