@@ -5,7 +5,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
-import { classCounts, durationOf, LAB_SCENARIOS, shard, stateDirs } from './ci/windows-lab.mjs';
+import {
+  classCounts,
+  durationOf,
+  LAB_SCENARIOS,
+  resetDir,
+  shard,
+  stateDirs,
+} from './ci/windows-lab.mjs';
 import { adformatFacts, compositeAt, guestMuted } from './lib/adformat-report.mjs';
 import { isTransientFsError, snapshotDir } from './lib/fs-snapshot.mjs';
 import { labRequests, windowsDebugger } from './lib/tauri-host.mjs';
@@ -341,4 +348,33 @@ test('a snapshot skips files that vanish or are locked while it reads them', () 
     assert.equal(isTransientFsError(Object.assign(new Error(code), { code })), true);
   assert.equal(isTransientFsError(Object.assign(new Error('EACCES'), { code: 'EACCES' })), false);
   assert.equal(isTransientFsError(null), false);
+});
+
+test('a state folder WebView2 still holds is removed after ending WebView2', () => {
+  // Windows lab: `EBUSY ... EBWebView\\Default\\DIPS` stopped every shard.
+  const busy = Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+  let calls = 0;
+  let killed = 0;
+  const flaky = () => {
+    calls += 1;
+    if (calls === 1) throw busy;
+  };
+  assert.equal(
+    resetDir('x', { rm: flaky, kill: () => (killed += 1) }),
+    'removed after ending WebView2',
+  );
+  assert.deepEqual([calls, killed], [2, 1]);
+  assert.equal(
+    resetDir('x', { rm: () => undefined, kill: () => assert.fail('no kill') }),
+    'removed',
+  );
+  const other = Object.assign(new Error('EACCES'), { code: 'EACCES' });
+  assert.throws(() =>
+    resetDir('x', {
+      rm: () => {
+        throw other;
+      },
+      kill: () => assert.fail('no kill'),
+    }),
+  );
 });

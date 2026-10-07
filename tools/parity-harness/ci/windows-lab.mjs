@@ -105,8 +105,37 @@ export function stateDirs(env = process.env) {
   ];
 }
 
+/** Ends the WebView2 processes a finished run left behind (CI runner only). */
+function killWebViews() {
+  spawnSync('taskkill', ['/F', '/T', '/IM', 'msedgewebview2.exe'], { windowsHide: true });
+}
+
+/**
+ * Removes a state folder. WebView2's browser processes outlive the app
+ * for a moment and keep files such as `EBWebView\Default\DIPS` open, so
+ * removal is retried (Node retries `EBUSY` and `EPERM`) and, if the files
+ * stay locked, the leftover WebView2 processes are ended and it is tried
+ * once more.
+ * @param {string} dir
+ * @param {{rm?: typeof rmSync, kill?: () => void}} [deps]
+ * @returns {'removed' | 'removed after ending WebView2'}
+ */
+export function resetDir(dir, { rm = rmSync, kill = killWebViews } = {}) {
+  const options = { recursive: true, force: true, maxRetries: 10, retryDelay: 500 };
+  try {
+    rm(dir, options);
+    return 'removed';
+  } catch (error) {
+    const code = /** @type {{code?: unknown}} */ (error)?.code;
+    if (code !== 'EBUSY' && code !== 'EPERM') throw error;
+  }
+  kill();
+  rm(dir, options);
+  return 'removed after ending WebView2';
+}
+
 function resetState() {
-  for (const dir of stateDirs()) rmSync(dir, { recursive: true, force: true });
+  for (const dir of stateDirs()) resetDir(dir);
 }
 
 function runArgs(name, host, runId) {
