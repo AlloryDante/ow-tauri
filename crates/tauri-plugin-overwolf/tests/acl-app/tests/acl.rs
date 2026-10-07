@@ -1008,6 +1008,22 @@ fn adview_update_command_and_window_close() {
         )
         .unwrap();
     }
+    // B.3.3: `setPageUrl` and `sendCommand` reach the guest as private
+    // messages `{type, data: [...args]}`, as in ow-electron (observed).
+    let messages: Vec<Value> = ow
+        .test_guest_trace()
+        .into_iter()
+        .filter(|e| e["label"] == guest.as_str() && e["via"] == "private-message")
+        .map(|e| e["message"].clone())
+        .filter(|m| m["type"] == "setPageUrl" || m["type"] == "sendCommand")
+        .collect();
+    assert_eq!(
+        messages,
+        [
+            json!({ "type": "setPageUrl", "data": ["https://example.com/page"] }),
+            json!({ "type": "sendCommand", "data": ["x", 1] }),
+        ]
+    );
     let r = invoke(
         &app,
         "bw-1",

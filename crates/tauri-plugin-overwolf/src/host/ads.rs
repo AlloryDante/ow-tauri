@@ -85,7 +85,6 @@ pub(crate) struct Guest {
     pub(crate) next_page_url: Option<String>,
     pub(crate) reload_at: Option<u64>,
     pub(crate) retry_at: Option<u64>,
-    pub(crate) send_command_logged: bool,
     pub(crate) apply_setting_logged: bool,
 }
 
@@ -105,6 +104,10 @@ pub(crate) struct AdsCore {
     pub(crate) guests: BTreeMap<String, Guest>,
     pub(crate) next: u32,
     pub(crate) system_info: Option<Value>,
+    /// What a host without OS queries (Tauri's mock runtime) sent to its
+    /// guests and did to them natively, in order; tests read it. Always
+    /// empty in an app.
+    pub(crate) test_trace: Vec<Value>,
 }
 
 impl AdsCore {
@@ -407,7 +410,6 @@ impl<R: Runtime> Host<R> {
             next_page_url: None,
             reload_at: None,
             retry_at: None,
-            send_command_logged: false,
             apply_setting_logged: false,
         };
         self.with_core(|c| {
@@ -534,7 +536,7 @@ impl<R: Runtime> Host<R> {
 
     /// Delivers one host message to the guest `label` (D.5).
     fn guest_deliver(self: &Arc<Self>, label: &str, kind: &str, data: Option<&Value>) {
-        crate::lab::record("ipc.jsonl", || {
+        self.guest_record("ipc.jsonl", || {
             // As delivered (no `data` key when there is none).
             json!({ "dir": "host->page", "via": "private-message", "type": "owadview", "label": label, "message": crate::ads::host_message(kind, data) })
         });
@@ -542,6 +544,18 @@ impl<R: Runtime> Host<R> {
         if let (Some(key), Some(w)) = (key, self.app.get_webview(label)) {
             let _ = w.eval(deliver_script(&key, kind, data));
         }
+    }
+
+    /// Appends `entry` to the lab trace file `file` and, in a host without
+    /// OS queries (Tauri's mock runtime), to the guests' test trace.
+    fn guest_record(self: &Arc<Self>, file: &str, entry: impl FnOnce() -> Value) {
+        if self.options.os_queries {
+            crate::lab::record(file, entry);
+            return;
+        }
+        let entry = entry();
+        crate::lab::record(file, || entry.clone());
+        self.with_core(|c| c.ads.test_trace.push(entry));
     }
 
     /// Delivers a host message to every guest (D.5).
@@ -692,32 +706,22 @@ impl<R: Runtime> Host<R> {
             }
             AdviewCommandName::Reload => self.reload_guest(&label),
             AdviewCommandName::SetPageUrl => {
-                let url = args
-                    .first()
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
+                // The `pageurl` of the next load, as the attribute sets it,
+                // then the private message ow-electron sends (observed).
+                let url = args.first().cloned().unwrap_or(Value::Null);
                 self.apply_attribute_patch(
                     &label,
                     AdviewAttributesPatch {
-                        pageurl: Some(url),
+                        pageurl: Some(url.as_str().unwrap_or_default().to_owned()),
                         ..AdviewAttributesPatch::default()
                     },
                 );
+                self.guest_deliver(&label, "setPageUrl", Some(&Value::Array(vec![url])));
             }
             AdviewCommandName::SendCommand => {
-                let first = self.with_core(|c| {
-                    c.ads
-                        .guests
-                        .get_mut(&label)
-                        .is_some_and(|g| !std::mem::replace(&mut g.send_command_logged, true))
-                });
-                if first {
-                    self.log(
-                        LogLevel::Debug,
-                        "owadview sendCommand() has no effect (B.3.3)",
-                    );
-                }
+                // Forwarded verbatim as a private message (observed); the
+                // ad page decides what, if anything, it does with it.
+                self.guest_deliver(&label, "sendCommand", Some(&Value::Array(args.to_vec())));
             }
         }
         Ok(())

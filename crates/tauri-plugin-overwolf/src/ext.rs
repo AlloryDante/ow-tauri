@@ -528,6 +528,15 @@ impl<R: Runtime> Overwolf<R> {
         })
     }
 
+    /// What the host sent to its ad guests and did to them natively, in
+    /// order, as lab trace records: host messages (`via:
+    /// "private-message"`) and the native steps (`kind` `transparent`,
+    /// `zorder`, `passthrough`). A host without OS queries records them.
+    #[must_use]
+    pub fn test_guest_trace(&self) -> Vec<Value> {
+        self.0.with_core(|c| c.ads.test_trace.clone())
+    }
+
     /// As if the platform reported a crash of the ad guest `label`.
     pub fn test_guest_crashed(&self, label: &str, reason: crate::ads::GoneReason) {
         self.0.guest_crashed(label, reason, 0);
