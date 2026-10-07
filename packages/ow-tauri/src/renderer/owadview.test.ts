@@ -668,9 +668,11 @@ describe('lifecycle (B.3.2, B.3.4)', () => {
     await tick();
     expect(callsOf('adview_command')).toHaveLength(0);
     expect(services.logs.join('\n')).toContain('sendCommand() before attach is ignored');
+    // Removed after attach: dead, as on ow-electron [OBS].
     document.body.append(wrapper);
     await tick();
-    expect(callsOf('adview_mount')).toHaveLength(3);
+    expect(callsOf('adview_mount')).toHaveLength(2);
+    expect(runtime.elements()).toEqual([]);
   });
 
   it('reports geometry and visibility changes', async () => {
@@ -806,12 +808,37 @@ describe('lifecycle (B.3.2, B.3.4)', () => {
   });
 });
 
+/** The events the official sample's performance ad listens to (`performance-ad.tsx`). */
+const SAMPLE_PERFORMANCE_EVENTS = [
+  'complete',
+  'impression',
+  'shutdown',
+  'performance_ad_no_fill',
+  'performance_ad_dismiss',
+  'performance_ad_loaded',
+  'performance_ad_clicked',
+  'performance_ad_video_complete',
+  'performance_ad_video_skipped',
+];
+
+/**
+ * The official sample's `performanceAd()` (`performance-ad.tsx`), with the
+ * events it receives recorded instead of logged.
+ */
+function samplePerformanceAd(seen: string[]): AdElement {
+  const performanceAdview = document.createElement('owadview');
+  performanceAdview.setAttribute('performance', '');
+  for (const event of [...SAMPLE_PERFORMANCE_EVENTS, 'destroyed'])
+    performanceAdview.addEventListener(event, () => seen.push(event));
+  document.body.appendChild(performanceAdview);
+  return layout(performanceAdview, { width: 0, height: 0 });
+}
+
 describe('performance ads (B.3.4)', () => {
   it('mounts one performance element over the whole viewport', async () => {
     await startRuntime();
     const first = createAd({ performance: '' }, { width: 0, height: 0 });
-    const second = createAd({ performance: '', cid: 'second' });
-    document.body.append(first, second);
+    document.body.append(first);
     await tick();
     expect(callsOf('adview_mount')).toEqual([
       expect.objectContaining({
@@ -826,25 +853,187 @@ describe('performance ads (B.3.4)', () => {
         visible: true,
       }),
     ]);
-    expect(services.warnings.join('\n')).toContain(
-      `owadview:performance:${String(runtime.elementId(second))}`,
+  });
+
+  it('removes a second performance element in the same tick, silently [OBS]', async () => {
+    await startRuntime();
+    const seen: string[] = [];
+    const first = samplePerformanceAd(seen);
+    await tick();
+    // The sample's button pressed again while the first ad is up.
+    const second = samplePerformanceAd(seen);
+    expect(second.isConnected).toBe(true);
+    // Mutation observers run at the end of this task, before any timer.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(second.isConnected).toBe(false);
+    expect(first.isConnected).toBe(true);
+    await tick();
+    expect(names()).toEqual(['adview_mount']);
+    expect(seen).toEqual([]);
+    expect(services.warnings).toEqual([]);
+    expect(services.logs.join('\n')).toContain(
+      `debug: <owadview> ${String(runtime.elementId(second))}: a window shows one performance ad at a time; this one is removed`,
     );
   });
 
-  it('closes the guest on shutdown and reopens on an attribute change', async () => {
+  it('removes the element in a task after shutdown, with no destroyed [OBS]', async () => {
     await startRuntime();
-    const el = createAd({ performance: '' });
-    document.body.append(el);
+    const seen: string[] = [];
+    const el = samplePerformanceAd(seen);
     await tick();
-    services.emit({ elementId: runtime.elementId(el), name: 'shutdown', source: 'guest' });
+    let connectedInListener: boolean | undefined;
+    el.addEventListener('shutdown', () => (connectedInListener = el.isConnected));
+    vi.useFakeTimers();
+    try {
+      services.emit({
+        elementId: runtime.elementId(el),
+        name: 'shutdown',
+        data: {},
+        source: 'guest',
+      });
+      expect(connectedInListener).toBe(true);
+      expect(el.isConnected).toBe(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(el.isConnected).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
     await tick();
+    expect(seen).toEqual(['shutdown']);
     expect(names()).toEqual(['adview_mount', 'adview_unmount']);
-    runtime.flush();
-    await tick();
-    expect(callsOf('adview_mount')).toHaveLength(1);
+    // Dead: re-inserting it, or changing it, attaches nothing.
+    document.body.append(el);
     el.setAttribute('cid', 'again');
     await tick();
+    runtime.flush();
+    expect(callsOf('adview_mount')).toHaveLength(1);
+    expect(services.logs.join('\n')).toContain('does not attach again');
+  });
+
+  it('leaves an element the app removed before the shutdown task alone', async () => {
+    await startRuntime();
+    const el = samplePerformanceAd([]);
+    await tick();
+    el.addEventListener('shutdown', () => {
+      el.remove();
+    });
+    services.emit({ elementId: runtime.elementId(el), name: 'shutdown', source: 'guest' });
+    await tick();
+    expect(el.isConnected).toBe(false);
+    expect(names()).toEqual(['adview_mount', 'adview_unmount']);
+  });
+
+  it('dispatches destroyed, then unmounts, when the app removes it [OBS]', async () => {
+    await startRuntime();
+    const seen: string[] = [];
+    const el = samplePerformanceAd(seen);
+    await tick();
+    let callsAtDestroyed: string[] | undefined;
+    let destroyed: Event | undefined;
+    el.addEventListener('destroyed', (event) => {
+      destroyed = event;
+      callsAtDestroyed = names();
+    });
+    document.body.removeChild(el);
+    await tick();
+    expect(seen).toEqual(['destroyed']);
+    expect(callsAtDestroyed).toEqual(['adview_mount']);
+    expect(names()).toEqual(['adview_mount', 'adview_unmount']);
+    expect(destroyed?.constructor).toBe(Event);
+    expect(destroyed?.bubbles).toBe(false);
+    const base = new Set(Object.keys(new Event('x')));
+    expect(Object.keys(destroyed ?? {}).filter((key) => !base.has(key))).toEqual([]);
+    // A new element works as before.
+    samplePerformanceAd(seen);
+    await tick();
     expect(callsOf('adview_mount')).toHaveLength(2);
+  });
+});
+
+describe('element lifecycle of the official sample (B.3.4) [OBS]', () => {
+  /** The sample's `startAd()` (`ad.tsx`) for one container, recording events. */
+  function sampleStartAd(
+    container: HTMLElement,
+    id: string,
+    adSize: [number, number],
+    seen: string[],
+    enableHighImpact = false,
+  ): AdElement {
+    const tempAdView = document.createElement('owadview');
+    const customTrackingJsonStr = JSON.stringify({ testQAKey: 'testQAValue' });
+    tempAdView.setAttribute('id', `${id}-adview`);
+    tempAdView.setAttribute('cid', 'mainAd');
+    tempAdView.setAttribute('slotsize', `${String(adSize[0])}x${String(adSize[1])}`);
+    tempAdView.setAttribute('customTracking', customTrackingJsonStr);
+    if (enableHighImpact) tempAdView.setAttribute('adstyle', 'high-impact-ad;');
+    for (const name of ['display_ad_loaded', 'destroyed', 'shutdown'])
+      tempAdView.addEventListener(name, () => seen.push(`${id}:${name}`));
+    const ad = layout(tempAdView, { width: adSize[0], height: adSize[1] });
+    container.appendChild(tempAdView);
+    return ad;
+  }
+
+  it('stopAd() (removeChild) dispatches destroyed and unmounts a standard slot', async () => {
+    await startRuntime();
+    const seen: string[] = [];
+    const container = document.createElement('div');
+    container.id = 'owadview-container';
+    document.body.append(container);
+    const ad = sampleStartAd(container, 'owadview-container', [400, 300], seen);
+    await tick();
+    expect(callsOf('adview_mount')).toHaveLength(1);
+    container.removeChild(ad);
+    await tick();
+    expect(seen).toEqual(['owadview-container:destroyed']);
+    expect(names()).toEqual(['adview_mount', 'adview_unmount']);
+    // startAd() again: the sample makes a new element, which attaches.
+    sampleStartAd(container, 'owadview-container', [400, 300], seen);
+    await tick();
+    expect(callsOf('adview_mount')).toHaveLength(2);
+  });
+
+  it('a container removed and re-appended (documented high-impact handler) stays dead', async () => {
+    await startRuntime();
+    const seen: string[] = [];
+    const zone = document.createElement('div');
+    const tower = document.createElement('div');
+    const small = document.createElement('div');
+    zone.append(tower, small);
+    document.body.append(zone);
+    const hi = sampleStartAd(tower, 'owadview-container', [400, 600], seen, true);
+    const smallAd = sampleStartAd(small, 'owadview-container2', [400, 60], seen);
+    await tick();
+    expect(callsOf('adview_mount')).toHaveLength(2);
+    // high-impact-ad-loaded: remove the small container; -removed: append it again.
+    services.emit({ elementId: runtime.elementId(hi), name: 'high-impact-ad-loaded' });
+    zone.removeChild(small);
+    await tick();
+    services.emit({ elementId: runtime.elementId(hi), name: 'high-impact-ad-removed' });
+    zone.appendChild(small);
+    await tick();
+    runtime.flush();
+    await tick();
+    expect(seen).toEqual(['owadview-container2:destroyed']);
+    expect(callsOf('adview_mount')).toHaveLength(2);
+    expect(callsOf('adview_unmount')).toEqual([{ elementId: runtime.elementId(smallAd) }]);
+    expect(runtime.elements()).toEqual([hi]);
+    expect(services.logs.join('\n')).toContain(
+      `debug: <owadview> ${String(runtime.elementId(smallAd))} was attached and removed before`,
+    );
+  });
+
+  it('an element never attached may move freely', async () => {
+    await startRuntime();
+    const el = createAd({}, { width: 0 });
+    document.body.append(el);
+    await tick();
+    el.remove();
+    await tick();
+    el.box.width = 300;
+    document.body.append(el);
+    await tick();
+    expect(callsOf('adview_mount')).toHaveLength(1);
   });
 });
 

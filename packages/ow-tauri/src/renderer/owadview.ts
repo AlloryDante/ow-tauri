@@ -10,6 +10,12 @@
  * (`adview_unmount`), and re-dispatches the guest's events on the element
  * exactly as ow-electron does (B.3.5).
  *
+ * The element lifecycle follows ow-electron [OBS]: an element the app
+ * removes after attach gets a plain `destroyed` event, then its guest
+ * closes, and it never attaches again (the app creates a new element); a
+ * performance element leaves the document in the task after its `shutdown`
+ * event; a second performance element while one is up is removed at once.
+ *
  * Before it is attached the element is a plain `HTMLElement`; at attach the
  * runtime defines the element members ow-electron has after attach: own
  * attribute-backed properties (`customTracking`, `pageUrl`, ...), the
@@ -163,6 +169,13 @@ interface Entry {
   id: string;
   /** Whether {@link Entry.id} was already used for a mount. */
   used: boolean;
+  /**
+   * The element was attached and then left the document: it never attaches
+   * again, as on ow-electron [OBS]; the app creates a new element (B.3.4).
+   */
+  dead: boolean;
+  /** The runtime removes (or removed) the element itself after `shutdown`: no `destroyed` follows. */
+  hostRemoved: boolean;
   /** Mount generation: incremented by every mount and unmount. */
   gen: number;
   tracked: boolean;
@@ -480,6 +493,8 @@ export class AdviewRuntime implements FacadeOwadview {
         key: id,
         id,
         used: false,
+        dead: false,
+        hostRemoved: false,
         gen: 0,
         tracked: false,
         mounted: false,
@@ -500,6 +515,13 @@ export class AdviewRuntime implements FacadeOwadview {
 
   #track(entry: Entry): void {
     if (entry.tracked || !this.#started) return;
+    if (entry.dead) {
+      this.#services.log(
+        'debug',
+        `<owadview> ${entry.id} was attached and removed before; it does not attach again (create a new element)`,
+      );
+      return;
+    }
     if (entry.el.getRootNode() !== this.#env.document) {
       this.#services.warnOnce(
         'owadview:shadow',
@@ -533,7 +555,7 @@ export class AdviewRuntime implements FacadeOwadview {
     for (const record of records) {
       if (record.type === 'attributes') {
         const entry = isAdview(record.target) ? this.#register(record.target) : undefined;
-        if (entry) {
+        if (entry && !entry.dead) {
           // An attribute change reopens an element closed after `shutdown` or a failed mount.
           if (!entry.mounted) entry.closed = false;
           touched.add(entry);
@@ -563,8 +585,12 @@ export class AdviewRuntime implements FacadeOwadview {
   /** Mounts, remounts, updates or unmounts one element as its state requires (B.3.4). */
   #evaluate(entry: Entry): void {
     const { el } = entry;
-    if (!this.#started) return;
-    if (!entry.tracked || !el.isConnected) {
+    if (!this.#started || entry.dead) return;
+    if (!el.isConnected) {
+      if (entry.used) this.#detach(entry);
+      return;
+    }
+    if (!entry.tracked) {
       if (entry.mounted) this.#unmount(entry);
       return;
     }
@@ -593,10 +619,12 @@ export class AdviewRuntime implements FacadeOwadview {
       return;
     }
     if (attributes.performance && this.#otherPerformance(entry)) {
-      this.#services.warnOnce(
-        `owadview:performance:${entry.key}`,
-        'a window shows at most one performance <owadview>; this one is ignored',
+      // ow-electron removes it in the same tick, without a guest, an event or a warning [OBS].
+      this.#services.log(
+        'debug',
+        `<owadview> ${entry.id}: a window shows one performance ad at a time; this one is removed`,
       );
+      el.remove();
       return;
     }
     this.#mount(entry);
@@ -638,6 +666,22 @@ export class AdviewRuntime implements FacadeOwadview {
       }
     });
     this.#updatePoll();
+  }
+
+  /**
+   * The element left the document after it was attached: it is dead from
+   * now on (B.3.4). A mounted element the app removed gets a plain
+   * `destroyed` event first, then its guest closes, as on ow-electron
+   * [OBS]; one the runtime removed after `shutdown` was unmounted already.
+   */
+  #detach(entry: Entry): void {
+    entry.dead = true;
+    if (!entry.mounted) return;
+    if (!entry.hostRemoved) {
+      const EventCtor = (this.#env.window as Window & { Event?: typeof Event }).Event ?? Event;
+      entry.el.dispatchEvent(createAdviewEvent('destroyed', undefined, EventCtor));
+    }
+    this.#unmount(entry);
   }
 
   #unmount(entry: Entry): void {
@@ -936,8 +980,15 @@ export class AdviewRuntime implements FacadeOwadview {
     const twin = SPELLING_TWINS[name];
     if (twin !== undefined) entry.el.dispatchEvent(createAdviewEvent(twin, data, EventCtor));
     if (name === 'shutdown' && entry.attributes?.performance === true && entry.mounted) {
+      // The guest closes now; the element leaves the document in a later
+      // task, after the listeners of `shutdown` ran (B.3.4) [OBS].
       this.#unmount(entry);
       entry.closed = true;
+      entry.hostRemoved = true;
+      const { el } = entry;
+      setTimeout(() => {
+        if (this.#started && el.isConnected) el.remove();
+      }, 0);
     }
   }
 }
