@@ -663,6 +663,7 @@ async function startWindowAndActions() {
   record('windows.jsonl', { kind: 'created', ...describeWindow(mainWindow) });
   mainWindow.on('closed', () => record('windows.jsonl', { kind: 'closed', windowId: 1 }));
   if (config.present === 'transparent') {
+    record('events.jsonl', { kind: 'step', step: 'show-inactive' });
     mainWindow.showInactive();
     if (config.windowPosition) {
       mainWindow.setPosition(x, y);
@@ -679,7 +680,9 @@ async function startWindowAndActions() {
     ...(config.elementAttrs ? { attrs: JSON.stringify(config.elementAttrs) } : {}),
     ...(config.elementSpec ? { spec: JSON.stringify(config.elementSpec) } : {}),
   });
+  record('events.jsonl', { kind: 'step', step: 'load-file' });
   await mainWindow.loadFile('index.html', { search: query.toString() });
+  record('events.jsonl', { kind: 'step', step: 'loaded' });
   runActions();
   for (const at of [30_000, 120_000, 300_000]) {
     if (at < config.durationMs) setTimeout(() => snapshotOverwolf(`t+${at / 1000}s`), at);

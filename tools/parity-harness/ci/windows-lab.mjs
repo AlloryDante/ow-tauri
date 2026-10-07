@@ -213,6 +213,8 @@ function main() {
     (r) =>
       r.electron.status !== 0 ||
       r.tauri.status !== 0 ||
+      r.electron.exit?.timedOut ||
+      r.tauri.exit?.timedOut ||
       !r.diffFound ||
       (r.counts.BUG ?? 0) > 0 ||
       r.checks.some((c) => c.pass === false),
@@ -232,7 +234,9 @@ function main() {
         .filter(([k]) => k.startsWith('intended'))
         .reduce((n, [, v]) => n + v, 0);
       const checks = r.checks.map((c) => `${c.id} ${c.probe}: ${c.pass}`).join('<br>') || '-';
-      return `| ${r.scenario} | ${r.electron.status} | ${r.tauri.status} | ${r.counts.BUG ?? 0} | ${r.counts.variance ?? 0} | ${intended} | ${r.counts['not-mirrored'] ?? 0} | ${checks} |`;
+      const how = (h) =>
+        h.exit?.timedOut ? 'timed out' : h.exit ? `exit ${h.exit.code}` : `run ${h.status}`;
+      return `| ${r.scenario} | ${how(r.electron)} | ${how(r.tauri)} | ${r.counts.BUG ?? 0} | ${r.counts.variance ?? 0} | ${intended} | ${r.counts['not-mirrored'] ?? 0} | ${checks} |`;
     }),
     '',
   ].join('\n');
