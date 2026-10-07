@@ -345,6 +345,46 @@ describe('BrowserWindow (B.2.2)', () => {
     ]);
   });
 
+  it('restores a minimized window on maximize()', async () => {
+    await start();
+    const win = new BrowserWindow();
+    win.minimize();
+    win.maximize();
+    expect(win.isMinimized()).toBe(false);
+    expect(win.isMaximized()).toBe(true);
+    await win.whenCreated();
+    await settle();
+    const windowCommands = names().filter((n) => n.startsWith('plugin:window|'));
+    expect(windowCommands.slice(-3)).toEqual([
+      'plugin:window|minimize',
+      'plugin:window|unminimize',
+      'plugin:window|maximize',
+    ]);
+    // Not minimized: no extra restore.
+    host.clearCalls();
+    win.unmaximize();
+    win.maximize();
+    await settle();
+    expect(names().filter((n) => n.startsWith('plugin:window|'))).toEqual([
+      'plugin:window|unmaximize',
+      'plugin:window|maximize',
+    ]);
+  });
+
+  it('counts a minimized window as not visible on macOS only', async () => {
+    await start({ snapshot: { platform: 'darwin' } });
+    const mac = new BrowserWindow();
+    mac.minimize();
+    expect(mac.isVisible()).toBe(false);
+    mac.restore();
+    expect(mac.isVisible()).toBe(true);
+    host.dispose();
+    await start({ snapshot: { platform: 'win32' } });
+    const win = new BrowserWindow();
+    win.minimize();
+    expect(win.isVisible()).toBe(true);
+  });
+
   it('does not emit show when the native call fails', async () => {
     await start({
       commands: { 'plugin:window|show': () => Promise.reject({ code: 'io', message: 'x' }) },

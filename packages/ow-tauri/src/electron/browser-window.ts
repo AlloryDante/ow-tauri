@@ -631,11 +631,14 @@ export class BrowserWindow extends EventEmitter {
   }
 
   /**
-   * Whether the window is visible.
+   * Whether the window is visible. As in Electron, a minimized window counts
+   * as not visible on macOS (`NativeWindowMac::IsVisible`) and as visible on
+   * Windows and Linux.
    *
    * @returns the cached state
    */
   isVisible(): boolean {
+    if (this.#state.minimized && kernel.state.get('platform') === 'darwin') return false;
     return this.#state.visible;
   }
 
@@ -656,11 +659,15 @@ export class BrowserWindow extends EventEmitter {
 
   /**
    * Maximizes the window. A hidden window is shown first (not focused), and
-   * `show` is emitted, as in Electron.
+   * `show` is emitted, as in Electron. A minimized window is restored first:
+   * Electron's `maximize()` leaves no window minimized, while the native
+   * zoom alone keeps a minimized window in the Dock.
    */
   maximize(): void {
+    const minimized = this.#state.minimized;
     this.#showIfHidden();
     this.#set({ maximized: true, minimized: false });
+    if (minimized) this.#native('unminimize');
     this.#native('maximize');
   }
 
