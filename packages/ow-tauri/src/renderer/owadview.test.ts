@@ -134,7 +134,7 @@ type AdElement = HTMLElement & {
   shown: boolean;
   customTracking?: unknown;
   pageUrl?: unknown;
-  setPageUrl?: (url: unknown) => void;
+  setPageUrl?: (...args: unknown[]) => void;
   sendCommand?: (...args: unknown[]) => void;
   setAudioMuted?: (muted: unknown) => void;
   reload?: () => void;
@@ -480,10 +480,11 @@ describe('lifecycle (B.3.2, B.3.4)', () => {
         args: { elementId: runtime.elementId(el), attributes: { customTracking: { c: 3 } } },
       },
       {
-        name: 'adview_update',
+        name: 'adview_command',
         args: {
           elementId: runtime.elementId(el),
-          attributes: { pageurl: 'https://example.com/next' },
+          command: 'setPageUrl',
+          args: ['https://example.com/next'],
         },
       },
     ]);
@@ -1338,6 +1339,84 @@ describe('element methods (B.3.3)', () => {
       { elementId: id, command: 'setAudioMuted', args: [true] },
       { elementId: id, command: 'reload', args: [] },
     ]);
+  });
+});
+
+describe('sendCommand and setPageUrl reach the guest unchanged (B.3.3, AF-8)', () => {
+  async function mounted(): Promise<AdElement> {
+    await startRuntime();
+    const el = createAd();
+    document.body.append(el);
+    await tick();
+    services.calls.length = 0;
+    return el;
+  }
+
+  it('sendCommand passes JSON arguments through as given, in order', async () => {
+    const el = await mounted();
+    const id = runtime.elementId(el);
+    const nested = { a: [1, 'two', { three: true }], b: null, c: -0.5, d: '' };
+    el.sendCommand?.('userPlay');
+    el.sendCommand?.();
+    el.sendCommand?.('play', 1, true, null, ['x', 2], nested, 'é😀');
+    await tick();
+    expect(callsOf('adview_command')).toEqual([
+      { elementId: id, command: 'sendCommand', args: ['userPlay'] },
+      { elementId: id, command: 'sendCommand', args: [] },
+      {
+        elementId: id,
+        command: 'sendCommand',
+        args: ['play', 1, true, null, ['x', 2], nested, 'é😀'],
+      },
+    ]);
+    // The arguments are copies: a later change by the app does not leak in.
+    expect(callsOf('adview_command')[2]?.['args']).not.toBe(nested);
+  });
+
+  it('setPageUrl sends [url] and sets the attribute, without a second update', async () => {
+    const el = await mounted();
+    const id = runtime.elementId(el);
+    el.setPageUrl?.('https://example.com/a');
+    await tick();
+    el.setPageUrl?.('https://example.com/a');
+    await tick();
+    el.setPageUrl?.(undefined);
+    await tick();
+    expect(el.getAttribute('pageurl')).toBe('');
+    expect(services.calls).toEqual([
+      {
+        name: 'adview_command',
+        args: { elementId: id, command: 'setPageUrl', args: ['https://example.com/a'] },
+      },
+      {
+        name: 'adview_command',
+        args: { elementId: id, command: 'setPageUrl', args: ['https://example.com/a'] },
+      },
+      { name: 'adview_command', args: { elementId: id, command: 'setPageUrl', args: [null] } },
+    ]);
+  });
+
+  it('setPageUrl with a non-string keeps the value and stores its string form', async () => {
+    const el = await mounted();
+    const id = runtime.elementId(el);
+    el.setPageUrl?.(42, 'ignored');
+    await tick();
+    expect(el.getAttribute('pageurl')).toBe('42');
+    expect(services.calls).toEqual([
+      { name: 'adview_command', args: { elementId: id, command: 'setPageUrl', args: [42] } },
+      { name: 'adview_update', args: { elementId: id, attributes: { pageurl: '42' } } },
+    ]);
+  });
+
+  it('setPageUrl on a detached element only sets the attribute', async () => {
+    const el = await mounted();
+    el.remove();
+    await tick();
+    services.calls.length = 0;
+    el.setPageUrl?.('https://example.com/late');
+    await tick();
+    expect(el.getAttribute('pageurl')).toBe('https://example.com/late');
+    expect(services.calls).toEqual([]);
   });
 });
 

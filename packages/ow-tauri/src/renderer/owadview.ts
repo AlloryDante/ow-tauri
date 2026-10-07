@@ -953,6 +953,9 @@ export class AdviewRuntime implements FacadeOwadview {
     const command = (entry: Entry, name: string, args: unknown[]): void => {
       this.#command(entry, name, args);
     };
+    const setPageUrl = (entry: Entry, url: unknown): void => {
+      this.#setPageUrl(entry, url);
+    };
     const method = (fn: (entry: Entry, args: unknown[]) => void): PropertyDescriptor => ({
       value: function (this: unknown, ...args: unknown[]): void {
         const entry =
@@ -965,7 +968,7 @@ export class AdviewRuntime implements FacadeOwadview {
     });
     const proto = Object.create(base, {
       setPageUrl: method((entry, [url]) => {
-        entry.el.setAttribute('pageurl', url === undefined || url === null ? '' : domString(url));
+        setPageUrl(entry, url);
       }),
       sendCommand: method((entry, args) => {
         command(entry, 'sendCommand', jsonArgs(args));
@@ -981,7 +984,30 @@ export class AdviewRuntime implements FacadeOwadview {
     return proto;
   }
 
-  /** Runs an element command on the guest of `entry` (B.3.3). */
+  /**
+   * `setPageUrl(url)` (B.3.3): sets the `pageurl` attribute (the guest's
+   * `pageUrl` from its next load on) and, on a mounted element, sends the
+   * `setPageUrl` command with `[url]` as given, which Rust applies to the
+   * next load and forwards to the page as ow-electron's private message
+   * `{type: 'setPageUrl', data: [url]}` [OBS]. The command already carries
+   * a string (or absent) URL, so the attribute change sends no separate
+   * update; any other value is stored as its string form by that update.
+   */
+  #setPageUrl(entry: Entry, url: unknown): void {
+    const value = url === undefined || url === null ? '' : domString(url);
+    entry.el.setAttribute('pageurl', value);
+    if (!entry.mounted) return;
+    if (entry.attributes && (typeof url === 'string' || value === ''))
+      entry.attributes = { ...entry.attributes, pageurl: value };
+    this.#command(entry, 'setPageUrl', jsonArgs([url]));
+  }
+
+  /**
+   * Runs an element command on the guest of `entry` (B.3.3). The arguments
+   * travel as JSON: JSON values arrive unchanged, `undefined` and functions
+   * inside arrays become `null`, a `bigint` its decimal string, and
+   * arguments that cannot be encoded (a cycle) an empty list.
+   */
   #command(entry: Entry, name: string, args: unknown[]): void {
     if (!entry.mounted) {
       this.#services.log('debug', `<owadview> ${entry.id}: ${name}() before attach is ignored`);
