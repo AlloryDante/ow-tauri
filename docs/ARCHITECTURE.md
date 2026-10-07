@@ -309,7 +309,12 @@ hidden (not destroyed), and the guest is told so the way ow-electron tells
 it (its `document.visibilityState`, plus a `window-hidden` message when the
 window hides); the ad page then reloads itself until it is visible again.
 Guests also receive ow-electron's `consent`, `customTracking` and `eHashes`
-messages (CONTRACT D.5). A crashed guest is reloaded at once, without a cap
+messages (CONTRACT D.5). A guest's `consent` and `consentFull` start as the
+unified consent string stored at launch (empty on a first launch), and the
+documents of a window's guests become hidden just before the window is
+destroyed, both as in ow-electron (observed). `setUserEmailHashes()` also
+stores the hashes as `eHashes` in `ow-electron.json`, as ow-electron does
+(observed). A crashed guest is reloaded at once, without a cap
 (CONTRACT D.7).
 
 ### 4.3 Consent
@@ -371,8 +376,24 @@ flowchart LR
 ```
 
 The diagram shows the default label `tauri`. The user agent of every host
-request is the platform webview's user agent
+request, ad guest and consent window is the platform webview's user agent
 with `<Label>/<hostVersion>` in place of Electron's token (CONTRACT E.1).
+The WKWebView default has no browser product tokens, and ad stacks rate
+such a user agent as an unknown browser and serve it no demand, so on macOS
+Safari's own tokens are added where Electron keeps Chromium's
+(`<PNNS>/<ver> Version/<safari> Tauri/<tv> Safari/<webkit>`, the version
+read from the installed Safari). The engine is never changed.
+
+Host requests go out through a plain hyper client (system proxy, TLS with
+ALPN, gzip/deflate/br/zstd decoding), so the wire carries exactly the
+headers ow-electron sends, in its order (observed): `content-length` first
+on InsertStats, no `accept`, and no cookies (ow-electron's host session
+sends none and stores none). Requests start in call order without waiting
+for each other's responses, so a burst leaves together as in ow-electron.
+There is no HTTP cache: where ow-electron revalidates a URL its Chromium
+cache holds from an earlier launch (`if-none-match`, answered `304`),
+ow-tauri sends the plain request, which reaches the same server
+(optimised, same outcome).
 
 ### 4.5 Packages
 
