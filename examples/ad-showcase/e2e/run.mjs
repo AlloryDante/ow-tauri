@@ -10,8 +10,8 @@
 // --host tauri (default): stages the ow-tauri frontend with the lab driver
 //   (scripts/stage.mjs --lab) and builds the debug app with the `lab`
 //   feature into src-tauri/target/e2e.
-// --host electron: stages the ow-electron app and runs it on the workspace's
-//   ow-electron, from a throwaway folder whose main entry
+// --host electron: stages the ow-electron app and runs it on the parity
+//   harness's ow-electron (scripts/ow-electron.mjs), from a throwaway folder whose main entry
 //   (e2e/electron-main.cjs) keeps every window at opacity 0.
 // --steps smoke (default): start, page 1, wait for display_ad_loaded, quit.
 //   --steps tour: every page and its buttons (no ad is ever clicked).
@@ -34,10 +34,11 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
-import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+
+import { owElectron } from '../scripts/ow-electron.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const exampleDir = resolve(here, '..');
@@ -166,12 +167,10 @@ function prepareElectron() {
     join(appDir, 'package.json'),
     JSON.stringify({ ...pkg, main: 'e2e-main.cjs' }, null, 2),
   );
-  const require = createRequire(join(exampleDir, 'package.json'));
-  return {
-    appDir,
-    exe: require('@overwolf/ow-electron'),
-    version: require('@overwolf/ow-electron/package.json').version,
-  };
+  const found = owElectron();
+  if (!found)
+    fail('ow-electron is not installed: cd tools/parity-harness && npm install --workspaces=false');
+  return { appDir, exe: found.exe, version: found.version };
 }
 
 // ------------------------------------------------------- monitor and probe

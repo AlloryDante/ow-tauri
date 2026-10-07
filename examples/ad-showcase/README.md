@@ -21,13 +21,20 @@ read every event the ad element raises in the timeline on the right.
 
 - Node 22.12 or newer and the [Tauri 2 prerequisites](https://tauri.app/start/prerequisites/)
   for your OS (Rust, WebView2 on Windows, WebKitGTK on Linux).
-- Install from the repository root, so `ow-tauri` links to `packages/ow-tauri`
-  and `@overwolf/ow-electron` is installed for the twin:
+- Install from the repository root, so `ow-tauri` links to `packages/ow-tauri`,
+  and install ow-electron for the twin in `tools/parity-harness` (its own
+  install, outside the workspace):
 
 ```shell
 npm install
 npm run build --workspace ow-tauri
+(cd tools/parity-harness && npm install --workspaces=false)
 ```
+
+The showcase runs ow-electron from there
+([scripts/ow-electron.mjs](scripts/ow-electron.mjs)) instead of depending on
+it: hoisted into the workspace next to ow-tauri, ow-electron's `electron`
+types would merge with ow-tauri's ambient ones.
 
 ## Run both hosts
 
@@ -44,7 +51,7 @@ From `examples/ad-showcase`:
 | `npm run check:rust`                  | `cargo fmt --check`, `cargo clippy -D warnings` with and without the `lab` feature |
 | `npm run lab:smoke`                   | the invisible lab smoke run (macOS, agents; see [e2e/README.md](e2e/README.md))    |
 
-`ow-electron` downloads its runtime on first use. `src-tauri/` is its own
+ow-electron downloads its runtime on first use. `src-tauri/` is its own
 Cargo workspace with its own `Cargo.lock`, like the packages sample.
 
 ## TEST vs LIVE

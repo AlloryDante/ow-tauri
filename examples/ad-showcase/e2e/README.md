@@ -9,7 +9,7 @@ never bundles the driver, and the Tauri shell has the lab only with its
 # From examples/ad-showcase, after `npm install` at the repository root.
 node e2e/run.mjs --host tauri                 # stage --lab, debug build with `lab`, smoke run
 node e2e/run.mjs --host tauri --no-build
-node e2e/run.mjs --host electron              # stage, then the workspace's ow-electron
+node e2e/run.mjs --host electron              # stage, then tools/parity-harness's ow-electron
 node e2e/run.mjs --host electron --steps tour # every page and its buttons
 ```
 
