@@ -6,8 +6,15 @@ all-features = true
 
 [advisories]
 # Every RustSec advisory fails the build unless it is listed here with a
-# reason and a tracking issue.
-ignore = []
+# reason and the dependency path that brings it in.
+ignore = [
+  # proc-macro-error 1.0.4 is unmaintained (no vulnerability). It is a
+  # build-time proc-macro dependency of the gtk-rs 0.18 bindings Tauri uses on
+  # Linux only: glib-macros / gtk3-macros 0.18 -> glib / gtk 0.18 -> muda,
+  # tao, webkit2gtk, wry -> tauri 2.12. No release of Tauri 2 moves off gtk-rs
+  # 0.18, so there is no upgrade to take; drop this entry when one lands.
+  { id = "RUSTSEC-2024-0370", reason = "unmaintained proc-macro in Tauri's Linux gtk-rs 0.18 tree (glib-macros, gtk3-macros); no upgrade available" },
+]
 
 [licenses]
 # Permissive licenses compatible with distributing ow-tauri under MIT.

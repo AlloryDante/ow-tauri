@@ -179,9 +179,20 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The cargo-deny container ships its own default toolchain; install the
+      # one rust-toolchain.toml pins up front, so the container's rustup does
+      # not have to recover from a missing override toolchain.
+      - name: Toolchain channel (from rust-toolchain.toml)
+        id: toolchain
+        shell: bash
+        run: |
+          channel="$(sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)"
+          test -n "$channel"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
       - name: cargo-deny (advisories, bans, licenses, sources)
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
+          rust-version: ${{ steps.toolchain.outputs.channel }}
           command: check advisories bans licenses sources
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
