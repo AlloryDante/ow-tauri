@@ -351,6 +351,8 @@ async function main() {
       }
     }
     if (race) {
+      // The app may quit within one poll of the driver's last record.
+      if (!doneAt && readJsonl(e2eFile).some((r) => r.kind === 'done')) doneAt = Date.now();
       verdict = safetyKill
         ? 'safety-kill'
         : doneAt
