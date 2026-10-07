@@ -31,6 +31,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "lab")]
     let builder =
         builder.invoke_handler(tauri::generate_handler![lab::e2e_config, lab::e2e_record]);
+    // An invisible lab app never comes to the front: activated at launch, it
+    // would take the keyboard from the app the user is typing in.
+    #[cfg(all(feature = "lab", target_os = "macos"))]
+    let builder = builder.activate_ignoring_other_apps(!lab::invisible());
 
     // macOS reports a crashed web content process only through this hook;
     // the plugin restarts the main webview, recovers ad guests and emits
