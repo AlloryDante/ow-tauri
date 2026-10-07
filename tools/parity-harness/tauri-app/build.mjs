@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..', '..');
@@ -18,7 +18,8 @@ const crateDir = join(here, 'src-tauri');
 /** Bundles web/main.js (ow-tauri/electron inlined) and copies the pages. */
 export async function buildWeb() {
   const require = createRequire(join(repoRoot, 'package.json'));
-  const { build } = await import(require.resolve('rolldown'));
+  // A file URL: on Windows a bare absolute path reads as a URL scheme (`d:`).
+  const { build } = await import(pathToFileURL(require.resolve('rolldown')).href);
   mkdirSync(distDir, { recursive: true });
   await build({
     input: join(here, 'web', 'main.js'),
