@@ -162,9 +162,14 @@ export class Overwolf implements OverwolfApi {
     return this.#string('identity.uid', 'app.overwolf.uid');
   }
 
-  /** Machine id (E.4), from the state cache. */
+  /**
+   * Machine id (E.4), from the state cache: ow-electron's getter answers
+   * `muidV2` (on Windows the per-install id, while analytics and the ad
+   * guests carry `muid`) [OBS: Windows lab]; on macOS the two are equal.
+   */
   get muid(): string {
-    return this.#string('identity.muid', 'app.overwolf.muid');
+    const v2 = this.#string('identity.muidV2', 'app.overwolf.muid');
+    return v2 === '' ? this.#string('identity.muid', 'app.overwolf.muid') : v2;
   }
 
   /** Rollout bucket, 0 to 99 (E.4), from the state cache. */

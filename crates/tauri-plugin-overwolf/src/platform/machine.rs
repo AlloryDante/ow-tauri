@@ -15,6 +15,10 @@ pub(crate) struct MachineIds {
 
 impl MachineIds {
     /// `muid` and `muidV2` derived from one platform id.
+    #[cfg_attr(
+        all(windows, not(test)),
+        expect(dead_code, reason = "Windows fills the ids in windows_ids")
+    )]
     pub(crate) fn from_platform_id(id: &str) -> Self {
         let muid = machine_muid(id);
         MachineIds {
@@ -27,10 +31,13 @@ impl MachineIds {
 /// Reads the machine ids, or says why they are unavailable.
 ///
 /// macOS: `IOPlatformUUID` through `IOKit` (matches ow-electron, observed).
-/// Windows: the registry values ow-electron apps share, else derived from
-/// `MachineGuid` and written back. Linux (inferred): `/etc/machine-id`, else
-/// `/var/lib/dbus/machine-id`.
-pub(crate) fn machine_ids() -> Result<MachineIds, String> {
+/// Windows: the registry values ow-electron apps share, else `muid` derived
+/// from `MachineGuid` and `muidV2` from `new_install_id` (a random UUID v4,
+/// as ow-electron creates it), both written back ([`windows_ids`]). Linux
+/// (inferred): `/etc/machine-id`, else `/var/lib/dbus/machine-id`.
+pub(crate) fn machine_ids(new_install_id: impl FnOnce() -> String) -> Result<MachineIds, String> {
+    #[cfg(not(windows))]
+    let _ = new_install_id;
     #[cfg(target_os = "macos")]
     {
         macos::platform_uuid()
@@ -39,7 +46,7 @@ pub(crate) fn machine_ids() -> Result<MachineIds, String> {
     }
     #[cfg(windows)]
     {
-        windows::machine_ids()
+        windows::machine_ids(new_install_id)
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
@@ -50,6 +57,30 @@ pub(crate) fn machine_ids() -> Result<MachineIds, String> {
         .map(|id| MachineIds::from_platform_id(&id))
         .ok_or_else(|| "no readable machine-id file".to_owned())
     }
+}
+
+/// The Windows machine ids (E.4) from the registry values ow-electron apps
+/// share (`muid`, `muid_v2`), filling a missing `muid` from `machine_guid`
+/// with the macOS formula and a missing `muidV2` with `new_install_id`: on
+/// Windows ow-electron's `MUIDV2` is a separate per-install random UUID v4
+/// (Windows lab: it differed on every runner while `MUID` did not).
+#[cfg(any(test, windows))]
+pub(crate) fn windows_ids(
+    muid: Option<String>,
+    muid_v2: Option<String>,
+    machine_guid: impl FnOnce() -> Option<String>,
+    new_install_id: impl FnOnce() -> String,
+) -> Result<MachineIds, String> {
+    let muid = match muid {
+        Some(m) => m,
+        None => {
+            machine_muid(&machine_guid().ok_or_else(|| "MachineGuid could not be read".to_owned())?)
+        }
+    };
+    Ok(MachineIds {
+        muid,
+        muid_v2: muid_v2.unwrap_or_else(new_install_id),
+    })
 }
 
 /// The first non-empty, trimmed content among `paths`.
@@ -303,29 +334,33 @@ mod windows {
         }
     }
 
-    pub(super) fn machine_ids() -> Result<MachineIds, String> {
+    pub(super) fn machine_ids(
+        new_install_id: impl FnOnce() -> String,
+    ) -> Result<MachineIds, String> {
         let muid = read_string(HKEY_CURRENT_USER, "Software\\OverwolfElectron", "MUID");
         let muid_v2 = read_string(HKEY_CURRENT_USER, "Software\\OverwolfPersist", "MUIDV2");
-        match (muid, muid_v2) {
-            (Some(muid), Some(muid_v2)) => Ok(MachineIds { muid, muid_v2 }),
-            (muid, muid_v2) => {
-                let guid = read_string(
+        if let (Some(muid), Some(muid_v2)) = (&muid, &muid_v2) {
+            return Ok(MachineIds {
+                muid: muid.clone(),
+                muid_v2: muid_v2.clone(),
+            });
+        }
+        let ids = super::windows_ids(
+            muid,
+            muid_v2,
+            || {
+                read_string(
                     HKEY_LOCAL_MACHINE,
                     "SOFTWARE\\Microsoft\\Cryptography",
                     "MachineGuid",
                 )
-                .ok_or_else(|| "MachineGuid could not be read".to_owned())?;
-                let derived = MachineIds::from_platform_id(&guid);
-                let ids = MachineIds {
-                    muid: muid.unwrap_or(derived.muid),
-                    muid_v2: muid_v2.unwrap_or(derived.muid_v2),
-                };
-                // Best effort: the uninstaller reads both values (I.6).
-                let _ = write_string("Software\\OverwolfElectron", "MUID", &ids.muid);
-                let _ = write_string("Software\\OverwolfPersist", "MUIDV2", &ids.muid_v2);
-                Ok(ids)
-            }
-        }
+            },
+            new_install_id,
+        )?;
+        // Best effort: the uninstaller reads both values (I.6).
+        let _ = write_string("Software\\OverwolfElectron", "MUID", &ids.muid);
+        let _ = write_string("Software\\OverwolfPersist", "MUIDV2", &ids.muid_v2);
+        Ok(ids)
     }
 
     pub(super) fn cpu_brand() -> Option<String> {
@@ -346,6 +381,22 @@ mod tests {
         let ids = MachineIds::from_platform_id("DA3889E5-CB8A-8A15-CD1B-DCE6B5A71203");
         assert_eq!(ids.muid, "601860a3-90c7-b77b-a42e-636035921a81");
         assert_eq!(ids.muid_v2, ids.muid);
+    }
+
+    /// Regression (Windows lab): ow-electron's `MUIDV2` on Windows is a
+    /// per-install random id, not the machine-derived `muid`.
+    #[test]
+    fn windows_ids_keep_the_shared_values_and_fill_the_missing_ones() {
+        let guid = || Some("DA3889E5-CB8A-8A15-CD1B-DCE6B5A71203".to_owned());
+        let install = || "0f0e0d0c-0b0a-4908-8706-050403020100".to_owned();
+        let shared = windows_ids(Some("m".into()), Some("v".into()), || None, install).unwrap();
+        assert_eq!((shared.muid.as_str(), shared.muid_v2.as_str()), ("m", "v"));
+        let fresh = windows_ids(None, None, guid, install).unwrap();
+        assert_eq!(fresh.muid, "601860a3-90c7-b77b-a42e-636035921a81");
+        assert_eq!(fresh.muid_v2, install());
+        let v2_only = windows_ids(None, Some("v".into()), guid, || unreachable!()).unwrap();
+        assert_eq!(v2_only.muid_v2, "v");
+        assert!(windows_ids(None, None, || None, install).is_err());
     }
 
     #[test]
@@ -379,7 +430,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn macos_reads_the_platform_uuid() {
-        let ids = machine_ids().unwrap();
+        let ids = machine_ids(String::new).unwrap();
         assert_eq!(ids.muid.len(), 36);
         assert_eq!(ids.muid, ids.muid.to_lowercase());
         assert!(!cpu_brand().is_empty());

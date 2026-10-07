@@ -55,6 +55,23 @@ describe('app.overwolf synchronous members (B.1.1, B.1.6)', () => {
     await settle();
   });
 
+  // Regression (Windows lab): ow-electron's app.overwolf.muid is the
+  // per-install muidV2; ow-tauri answered the machine muid.
+  it('answers muidV2 for app.overwolf.muid, as ow-electron does [OBS]', () => {
+    host = mockHost({
+      snapshot: {
+        identity: { uid: 'u1', cuid: 'c1', muid: 'machine', muidV2: 'install', phasePercent: 1 },
+      },
+    });
+    expect(overwolf.muid).toBe('install');
+    host = mockHost({
+      snapshot: {
+        identity: { uid: 'u1', cuid: 'c1', muid: 'machine', muidV2: '', phasePercent: 1 },
+      },
+    });
+    expect(overwolf.muid).toBe('machine');
+  });
+
   it('reports utmParams as undefined, not null, when there are none [OBS]', () => {
     host = mockHost();
     expect(host.snapshot.utmParams).toBeNull();

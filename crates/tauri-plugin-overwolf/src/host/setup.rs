@@ -202,15 +202,17 @@ pub(crate) fn setup<R: Runtime>(
     }
     let stored = ow_tauri.get();
     let machine = match config.analytics.muid_strategy {
-        MuidStrategy::MachineId if options.os_queries => match machine_ids() {
-            Ok(ids) => Some(ids),
-            Err(reason) => {
-                warnings.push(format!(
-                    "machine id unavailable ({reason}); using a per-install muid"
-                ));
-                None
+        MuidStrategy::MachineId if options.os_queries => {
+            match machine_ids(|| uuid::Uuid::new_v4().to_string()) {
+                Ok(ids) => Some(ids),
+                Err(reason) => {
+                    warnings.push(format!(
+                        "machine id unavailable ({reason}); using a per-install muid"
+                    ));
+                    None
+                }
             }
-        },
+        }
         _ => None,
     };
     let MachineIds { muid, muid_v2 } = if let Some(ids) = machine {
