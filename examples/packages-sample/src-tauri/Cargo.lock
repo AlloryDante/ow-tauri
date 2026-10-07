@@ -773,6 +773,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-url"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
+
+[[package]]
 name = "dbus"
 version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3926,6 +3932,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "cookie",
+ "data-url",
  "dirs",
  "dunce",
  "embed_plist",
@@ -4129,12 +4136,20 @@ dependencies = [
 name = "tauri-plugin-overwolf"
 version = "0.1.0"
 dependencies = [
+ "async-compression",
  "base64 0.23.1",
  "block2",
+ "bytes",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-tls",
+ "hyper-util",
  "libc",
  "log",
  "md5",
  "minisign-verify",
+ "native-tls",
  "objc2",
  "objc2-foundation",
  "reqwest",
@@ -4151,6 +4166,7 @@ dependencies = [
  "tauri-plugin-opener",
  "thiserror 2.0.21",
  "tokio",
+ "tower-service",
  "url",
  "uuid",
  "webkit2gtk",

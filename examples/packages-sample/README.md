@@ -83,6 +83,9 @@ ow-electron without a package runtime.
   browser arguments before app code runs) and is a no-op elsewhere.
 - Installer: Tauri names the setup `<productName>_<version>_x64-setup.exe`
   (no `artifactName`) and has no `legalTrademarks` field.
+- `e2e/` drives every page and button in an invisible lab (macOS) and
+  compares each action with the upstream sample on ow-electron; see
+  `e2e/README.md`.
 
 ---
 

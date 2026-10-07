@@ -58,6 +58,8 @@ The numbering matches `docs/PORT-MAP.md` section 5.
 | Path | Purpose |
 |---|---|
 | `src-tauri/` | The Tauri app: `Cargo.toml` (tauri 2.12.1, single-instance, `serde_json` for `generate_context!`, the plugin as a path dependency), `build.rs` (`embed_manifest`, NSIS hooks), `src/main.rs`, `tauri.conf.json` (CSP, NSIS, `plugins.overwolf`; `app.security.freezePrototype` stays off because Tauri would inject it into every webview, ad guests and consent pages included, which ow-electron never does), `tauri.windows.conf.json`, `capabilities/ui.json` (`overwolf:renderer` only; window dragging comes from the plugin's `ow-tauri-ui-chrome` capability), neutral generated icons |
+| `src-tauri/src/lab.rs`, the `lab` Cargo feature | The end-to-end lab (off by default, never shipped): a run-time manifest override for the lab identity, the driver's configuration and records |
+| `e2e/` | End-to-end run of every page and button in an invisible lab, on ow-tauri and on the upstream sample on ow-electron, and an action-by-action comparison (`e2e/README.md`) |
 | `CHANGES-FROM-UPSTREAM.md` | This file |
 | `.env.example` | Names of the optional environment variables, no values |
 

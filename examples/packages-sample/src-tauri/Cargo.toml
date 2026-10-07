@@ -21,6 +21,12 @@ path = "src/main.rs"
 test = false
 doctest = false
 
+[features]
+# The end-to-end lab (`e2e/README.md`): the plugin's lab trace and invisible
+# windows, the lab identity at run time and the driver's `e2e_record`
+# command. Off by default; never enable it in a shipped build.
+lab = ["tauri-plugin-overwolf/lab"]
+
 [dependencies]
 tauri = { version = "2.12.1", features = ["unstable"] }
 tauri-plugin-single-instance = "2.5.2"
