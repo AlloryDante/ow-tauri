@@ -142,7 +142,12 @@ pub struct GuestLimits {
     pub event_burst: u32,
     /// Encoded `data` bytes per second.
     pub bytes_per_second: u64,
-    /// System-browser opens per minute.
+    /// System-browser opens per minute, per guest (D.7); default 20.
+    ///
+    /// Every open also needs its own user gesture in the guest (one
+    /// gesture, one open), which is the real safeguard; this cap only bounds
+    /// a burst. It stays above the 5 opens Overwolf's own ad QA step makes
+    /// ("click the ad 5 times", five browser windows).
     pub external_opens_per_minute: u32,
 }
 
@@ -152,7 +157,7 @@ impl Default for GuestLimits {
             events_per_second: 50,
             event_burst: 100,
             bytes_per_second: 262_144,
-            external_opens_per_minute: 5,
+            external_opens_per_minute: 20,
         }
     }
 }
@@ -878,7 +883,7 @@ mod tests {
           "packagesBackend": "none",
           "ads": { "testAd": false, "requestShaping": true, "owVersionOverride": null, "macPrivateHeaderApi": false,
                    "gestureWindowMs": 1500, "maxRecoveries": null, "loadErrorRetryMs": 5000,
-                   "guestLimits": { "eventsPerSecond": 50, "eventBurst": 100, "bytesPerSecond": 262144, "externalOpensPerMinute": 5 } },
+                   "guestLimits": { "eventsPerSecond": 50, "eventBurst": 100, "bytesPerSecond": 262144, "externalOpensPerMinute": 20 } },
           "analytics": { "hostLabel": "tauri", "hostVersion": null, "muidStrategy": "machine-id", "userSwitch": false },
           "consent": { "cmpUrl": null, "readyTimeoutMs": 30000, "hostCookieFallback": "auto" },
           "logging": { "enabled": false },

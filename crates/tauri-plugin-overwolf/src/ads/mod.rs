@@ -980,6 +980,38 @@ mod tests {
         assert_eq!(b.try_open(0, &bad, Some(true)), Err(OpenRefusal::Url));
     }
 
+    /// D.7 defaults: 20 opens a minute, each needing its own gesture, so
+    /// Overwolf's QA step (5 clicks, 5 browser windows) passes.
+    #[test]
+    fn default_open_budget_allows_twenty_gestures_a_minute() {
+        let limits = crate::config::GuestLimits::default();
+        assert_eq!(limits.external_opens_per_minute, 20);
+        let url: url::Url = "https://advertiser.example/".parse().unwrap();
+        let mut b = OpenBudget::new(1_500, limits.external_opens_per_minute);
+        for i in 0..20_u64 {
+            let at = i * 1_000;
+            assert_eq!(
+                b.try_open(at, &url, None),
+                Err(OpenRefusal::NoGesture),
+                "no gesture, no open ({i})"
+            );
+            b.gesture(at);
+            assert_eq!(b.try_open(at + 10, &url, None), Ok(()), "click {i}");
+            assert_eq!(
+                b.try_open(at + 20, &url, None),
+                Err(OpenRefusal::NoGesture),
+                "one gesture, one open ({i})"
+            );
+        }
+        b.gesture(20_000);
+        assert_eq!(
+            b.try_open(20_010, &url, None),
+            Err(OpenRefusal::RateLimited)
+        );
+        b.gesture(60_011);
+        assert_eq!(b.try_open(60_020, &url, None), Ok(()), "a minute later");
+    }
+
     #[test]
     fn config_keys_in_d2_order() {
         let attributes = AdviewAttributes {
