@@ -202,11 +202,16 @@ impl<R: Runtime> Host<R> {
             Url::parse("about:blank").map_err(|_| Error::backend("about:blank does not parse"))?;
         let (w, h) = o.size();
         let visible = o.show.unwrap_or(true);
+        // `show: false` creates the window without focus, as Electron does:
+        // a later `showInactive()` must find it unfocused (Windows lab: the
+        // webview took focus at creation, so ad guests read
+        // `windowFocused: true`). `show()` still focuses it.
         let mut b = WebviewWindowBuilder::new(&self.app, &label, WebviewUrl::External(blank))
             .on_new_window(self.new_window_handler(id))
             .initialization_script(renderer_init_script(&origin, &bootstrap))
             .inner_size(w, h)
             .visible(visible)
+            .focused(visible)
             .title(
                 o.title
                     .clone()
