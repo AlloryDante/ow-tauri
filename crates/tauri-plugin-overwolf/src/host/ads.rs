@@ -195,6 +195,15 @@ impl<R: Runtime> GuestReports for Reports<R> {
     }
 }
 
+/// The `documentReferrer` the guest shim answers `document.referrer` with
+/// (D.8.3): the shaped document's `Referer`, on platforms whose webview
+/// does not take it from the header; `None` without shaping.
+fn document_referrer(shaping: Option<&Shaping>) -> Option<String> {
+    shaping
+        .filter(|_| crate::platform::webview::SHIM_DOCUMENT_REFERRER)
+        .map(|s| s.referer.clone())
+}
+
 /// Where the embedder's page starts in its window (logical): the embedder
 /// webview's position, moved below the window's content inset when the
 /// platform insets the page there (macOS 26 title bar). Guest rectangles
@@ -363,6 +372,9 @@ impl<R: Runtime> Host<R> {
         let mut config = guest_config(&facts, sent_visible);
         if let Value::Object(m) = &mut config {
             m.insert("hostKey".into(), Value::from(host_key.as_str()));
+            if let Some(referrer) = document_referrer(self.shaping(&window_name).as_ref()) {
+                m.insert("documentReferrer".into(), Value::from(referrer));
+            }
         }
         let script =
             splice_config(ADVIEW_HOST_JS, ADVIEW_CONFIG_TOKEN, &config).unwrap_or_else(|| {
@@ -1486,6 +1498,20 @@ impl<R: Runtime> Host<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_shim_answers_document_referrer_only_where_the_webview_does_not() {
+        let shaping = Shaping {
+            referer: "https://www.overwolf.com/u".to_owned(),
+            origin: "https://www.overwolf.com".to_owned(),
+            uid: "u".to_owned(),
+            phase: "1".to_owned(),
+            window: "index".to_owned(),
+        };
+        let want = cfg!(windows).then(|| "https://www.overwolf.com/u".to_owned());
+        assert_eq!(document_referrer(Some(&shaping)), want);
+        assert_eq!(document_referrer(None), None);
+    }
 
     #[test]
     fn the_shim_carries_its_configuration_token() {

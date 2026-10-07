@@ -983,7 +983,7 @@ Every member of the ow-electron 42.11.4 typings, with the same signature.
 | `setExternalPaymentUserId` | `(options: ExternalPaymentUserIdOptions): Promise<void>` | supported | `set_external_payment_user_id`; a missing `userId` gives a rejected promise (never a synchronous throw) with `Error('providerName and userId are mandatory')` [OBS] |
 | `phasePercent` | `readonly number` | supported | cache `identity.phasePercent` (E.4) |
 | `utmParams` | `readonly any` | supported | cache `utmParams`; `undefined` (not `null`) when `ow-electron.json` has none [OBS] (F.2) |
-| `muid` | `readonly string` | supported | cache `identity.muid` (E.4) |
+| `muid` | `readonly string` | supported | cache `identity.muidV2`, else `identity.muid` (E.4): ow-electron's getter answers the `MUIDV2` id [OBS: Windows lab]; equal on macOS |
 | `uid` | `readonly string` | supported | cache `identity.uid` (G.2) |
 | `__settings__` | `readonly object` (not in the typings) | supported | a deep-frozen constant, copied from ow-electron [OBS]: `src` = `https://www.overwolf.com/monsdk/electron/latest/adview.html`, `forceSandboxMode` = `false`, `adsSetting` = `{ gvlUrlV1: 'https://content.overwolf.com/cmp', gvlUrl: 'https://content.overwolf.com/cmp/v3', cmpFeatureUrl: 'https://features.overwolf.com/experiments/cmp-eu-only', cmpUrl: 'https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/ow-cmp-v2.html', cmpSettingUrl: 'https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/cmp.html' }`, `logger` = `{ enabled: false }`, `adsOptimization` = `{ anonymous: true }`, which becomes `{ anonymous: true, disable: true }` after `disableAdsOptimization()` or `disableAdsFPD()` [OBS]. Frozen except for that one change |
 
@@ -2104,7 +2104,7 @@ frozen functions with `length` 0; the page gets no `window.overwolf` [OBS]:
 
 | Global | Behaviour |
 |---|---|
-| `window.cmp.saveConsent(value)` | `cmp_event saveConsent { consent }` (a TCData object is reduced to its `tcString`); Rust stores `cmp.cmpString` and `cmp.timeStamp` = now in seconds (F.2) |
+| `window.cmp.saveConsent(value)` | `cmp_event saveConsent { consent }` (a TCData object is reduced to its `tcString`; `""` is sent and clears the value, D.6.2; any other value without a consent string is dropped); Rust stores `cmp.cmpString` and `cmp.timeStamp` = now in seconds (F.2) |
 | `window.cmp.saveUnifiedConsent(value)` | `cmp_event saveUnifiedConsent { consent }`; Rust stores `cmp.unifiedConsentString`, URL-encoded (F.2) |
 | `window.privacy.enableAdOptimization(enabled)` | `cmp_event enableAdOptimization { enabled }`; stored as `adOptimization` in `ow-tauri.json`; returns a resolved promise |
 | `window.privacy.getIsAdOptimizationEnabled()` | resolves the stored value, default `false` (ow-electron answered `false` [OBS]); whether `enableAdOptimization(true)` changes ow-electron's answer: **Unknown (R3-8)** |
@@ -2224,7 +2224,13 @@ is on by default and exists only to switch shaping off while debugging.
 Notes:
 
 - **Windows:** a lab check confirms that WebView2 sends the changed `Origin`
-  and `Referer` values on the wire [INF]. With web security off (D.8.1) the
+  and `Referer` values on the wire [INF]. WebView2 takes `document.referrer`
+  from the navigation's initiator, not from the `Referer` header, so a host
+  navigation leaves it empty even with the header set [OBS: Windows lab].
+  The plugin passes the referrer to the guest shim (configuration key
+  `documentReferrer`, Windows only; not part of `__overwolf__`), which
+  answers `document.referrer` with it while the platform's own value is
+  empty. With web security off (D.8.1) the
   forced `Origin` does not break CORS, as in ow-electron.
 - **macOS gap.** The subresource `Origin` and the `x-ow-*` headers cannot be
   set with public WebKit API, and web security cannot be turned off. The gap
@@ -2456,12 +2462,17 @@ The result is lower-case, with no UUID version or variant bits forced.
    `HKCU\Software\OverwolfPersist` value `MUIDV2`. Overwolf's uninstaller
    reads both to tag its uninstall event [BUILDER]. When present, use them as
    they are, so ow-tauri shares the ids of any ow-electron app on the machine.
-2. Otherwise derive `muid` with the macOS formula from
-   `HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid`, set `muidV2 = muid`,
+2. Otherwise derive a missing `muid` with the macOS formula from
+   `HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid`, create a missing
+   `muidV2` as a lower-case random UUID v4 (as ow-electron does, item 3),
    and write both registry values, so the installer's uninstall event works
    for Tauri installs (I.6).
-3. **Unknown (R2-10):** whether `MachineGuid` is ow-electron's source on
-   Windows, and whether `MUIDV2` is a separate persisted id.
+3. **Observed (Windows lab, R2-10):** `MUIDV2` is a separate per-install
+   id, a lower-case random UUID v4 that ow-electron creates on a machine
+   without one; its analytics carry `MUID` (the machine id) and `MUIDV2`,
+   the ad guests and consent pages get `muid` = `MUID`, and
+   `app.overwolf.muid` answers `MUIDV2`. **Unknown:** whether `MachineGuid`
+   is ow-electron's `MUID` source.
 
 **Linux** [INF]: the macOS formula over `/etc/machine-id`, else
 `/var/lib/dbus/machine-id`, trimmed; `muidV2 = muid`. **Unknown (R2-10).**

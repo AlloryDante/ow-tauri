@@ -1,12 +1,14 @@
 import { Window as HappyWindow } from 'happy-dom';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { hostFunction } from './outbox.js';
 import {
   ADVIEW_COMMAND,
   DATA_KEYS,
   EARLY_EVENTS_ON_SHOW,
   MAX_HANDLERS,
   DEFAULT_HOST_KEY,
+  answerDocumentReferrer,
   hostKeyOf,
   installAdviewHost,
   type AdviewHostApi,
@@ -341,6 +343,32 @@ describe('host to guest (D.5)', () => {
     expect(Object.isFrozen(g.host)).toBe(true);
     expect(Object.keys(g.win)).not.toContain(HOST_KEY);
     expect(Reflect.get(g.win, DEFAULT_HOST_KEY)).toBeUndefined();
+  });
+
+  // Regression (Windows lab): WebView2 left document.referrer empty although
+  // the host navigated with the Referer header; ow-electron's guest reads
+  // https://www.overwolf.com/<uid>.
+  it('answers document.referrer from documentReferrer, kept out of __overwolf__', () => {
+    const referrer = 'https://www.overwolf.com/abc';
+    const g = guest(ADVIEW_URL, config({ documentReferrer: referrer }));
+    expect(g.win.document.referrer).toBe(referrer);
+    expect('documentReferrer' in g.ow).toBe(false);
+    const getter = Object.getOwnPropertyDescriptor(g.win.document, 'referrer')?.get;
+    expect(String(getter)).toContain('[native code]');
+    // Without the key (macOS: WebKit takes it from the header) nothing changes.
+    expect(Object.getOwnPropertyDescriptor(guest().win.document, 'referrer')).toBeUndefined();
+  });
+
+  it('leaves a non-empty platform referrer and odd values alone', () => {
+    const { win } = guest(ADVIEW_URL, config());
+    Object.defineProperty(win.document, 'referrer', {
+      configurable: true,
+      get: () => 'https://www.overwolf.com/native',
+    });
+    expect(answerDocumentReferrer(win, 'https://www.overwolf.com/x', hostFunction)).toBe(false);
+    expect(win.document.referrer).toBe('https://www.overwolf.com/native');
+    expect(answerDocumentReferrer(win, '', hostFunction)).toBe(false);
+    expect(answerDocumentReferrer(win, 42, hostFunction)).toBe(false);
   });
 
   it('takes the host key from the configuration, else the default', () => {

@@ -59,10 +59,13 @@ export function installCmp(win: Window, config: unknown): boolean {
     typeof config === 'object' && config !== null && Reflect.get(config, 'adOptimization') === true;
 
   const fn = hostFunction;
+  // An empty string is sent too: it clears the stored value, as the startup
+  // page `ow-cmp-v2.html?clear=true` does (D.6.2). Anything else that
+  // reduces to no consent string is dropped.
   const save = (name: string) =>
     fn((...args: unknown[]) => {
       const consent = consentString(args[0]);
-      if (consent !== '') post(name, { consent });
+      if (consent !== '' || args[0] === '') post(name, { consent });
     });
 
   const cmp = Object.freeze({

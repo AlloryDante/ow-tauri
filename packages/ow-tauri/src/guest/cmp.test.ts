@@ -55,6 +55,26 @@ describe('installCmp (D.6.6)', () => {
     ]);
   });
 
+  // Regression (Windows lab, cmp): cmp-eu-only answered no-cmp, the startup
+  // page `ow-cmp-v2.html?clear=true` called saveConsent("") and
+  // saveUnifiedConsent(""), and the shim dropped both, so the state file
+  // never got ow-electron's cleared `cmp` block.
+  it('sends an empty consent string, which clears the stored value', () => {
+    const { win, sent } = consentWindow(
+      `${CMP_URL.replace('cmp.html', 'ow-cmp-v2.html')}?clear=true`,
+    );
+    const g = win as unknown as CmpGlobals;
+    g.cmp.saveConsent('');
+    g.cmp.saveUnifiedConsent('');
+    g.cmp.saveConsent(undefined);
+    g.cmp.saveConsent({ tcString: '' });
+    expect(sent.map((s) => s.args)).toEqual([
+      { name: 'ready' },
+      { name: 'saveConsent', data: { consent: '' } },
+      { name: 'saveUnifiedConsent', data: { consent: '' } },
+    ]);
+  });
+
   it('defines frozen globals whose functions have length 0', () => {
     const { win } = consentWindow();
     const g = win as unknown as CmpGlobals;

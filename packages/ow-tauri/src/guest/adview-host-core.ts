@@ -140,6 +140,38 @@ function readStoredPageUrl(win: Window, key: string): string | undefined {
 }
 
 /**
+ * Answers `document.referrer` with `referrer` while the platform's own value
+ * is empty (D.8.3): WebView2 sends the `Referer` header of the host's
+ * navigation but leaves the document's referrer empty, where ow-electron's
+ * guest reads `https://www.overwolf.com/<uid>` [OBS: Windows lab]. Rust
+ * passes `documentReferrer` only on such platforms.
+ *
+ * @param win - the guest window
+ * @param referrer - the configuration's `documentReferrer`
+ * @param fn - wraps the getter as a host function
+ * @returns whether `document.referrer` was answered
+ */
+export function answerDocumentReferrer(
+  win: Window,
+  referrer: unknown,
+  fn: typeof hostFunction,
+): boolean {
+  if (typeof referrer !== 'string' || referrer === '') return false;
+  const doc = win.document;
+  try {
+    if (doc.referrer !== '') return false;
+    Object.defineProperty(doc, 'referrer', {
+      configurable: true,
+      enumerable: true,
+      get: fn(() => referrer),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Installs the ad shim in `win` with the configuration Rust spliced in.
  * Does nothing (and returns `false`) outside the main frame of
  * {@link ADVIEW_ORIGIN}, without a configuration object, or when the shim
@@ -249,6 +281,7 @@ export function installAdviewHost(win: Window, config: unknown): boolean {
   } catch {
     // A page that redefined them first keeps its own.
   }
+  answerDocumentReferrer(win, config['documentReferrer'], fn);
 
   const dispatch = (message: HostMessage): void => {
     for (const handler of handlers.slice()) {

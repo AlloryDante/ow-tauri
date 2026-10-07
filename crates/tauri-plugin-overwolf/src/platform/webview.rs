@@ -280,6 +280,13 @@ pub(crate) fn load_shaped<R: Runtime>(
     webview.navigate(url.clone()).is_ok()
 }
 
+/// Whether the guest shim answers `document.referrer` (D.8.3): WebView2
+/// sends the `Referer` header of a host navigation but takes the
+/// document's referrer from the navigation's initiator, which a host
+/// navigation does not have, so the page would read `""`. `WebKit` takes
+/// it from the header.
+pub(crate) const SHIM_DOCUMENT_REFERRER: bool = cfg!(windows);
+
 /// The header fields the plugin itself puts on the ad document request
 /// (D.8.3), as `Name: value` lines in order; the platform adds the rest.
 pub(crate) fn document_header_fields(shaping: Option<&Shaping>) -> Vec<String> {
