@@ -486,7 +486,20 @@ export function loadCapture(runDir) {
     formats: adformatFacts(runDir),
     windowEnd:
       readJsonl(join(runDir, 'window-monitor.jsonl')).find((e) => e.kind === 'end') ?? null,
+    osClick: sentOsClick(runDir),
   };
+}
+
+/**
+ * Whether the lab sent a system click (Windows `SendInput`) into the app:
+ * one that activates the app's window, as ow-electron's synthetic
+ * `sendInputEvent` click does not.
+ * @param {string} runDir
+ */
+export function sentOsClick(runDir) {
+  return readJsonl(join(runDir, 'events.jsonl')).some(
+    (e) => e.kind === 'hit-probe' && e.native?.click?.sent === true,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -510,6 +523,16 @@ const WEBVIEW_OWN = [
  * the document that makes it intended.
  */
 const RULES = [
+  {
+    when: (d) => d.section === 'guest' && d.osClickFocus === true,
+    cls: 'variance',
+    why: 'the lab clicked the ow-tauri app with a system click (SendInput), which activates its window, and the ow-electron app with a synthetic one, which does not; a guest created afterwards reads a different embedder focus',
+  },
+  {
+    when: (d) => d.section === 'guest' && d.systemInfoPending === true,
+    cls: 'variance',
+    why: 'ow-electron answered getSystemInformation() with {} (it had not collected its GPU info yet; Windows lab: other guests of the same run got the full object); ow-tauri answers at once',
+  },
   {
     when: (d) => d.packageRuntime === true,
     cls: 'intended:deviation',
@@ -1256,7 +1279,14 @@ function compareStateFile(e, t, out) {
   }
 }
 
-const GUEST_SKIP = new Set(['localStorage', 'innerSize', 'devicePixelRatio', 'label', 'hasFocus']);
+const GUEST_SKIP = new Set([
+  'localStorage',
+  'innerSize',
+  'devicePixelRatio',
+  'label',
+  'hasFocus',
+  'webContentsId',
+]);
 
 function guestProbesByContainer(runDir) {
   const out = new Map();
@@ -1344,6 +1374,8 @@ function compareGuests(e, t, out) {
               field: 'value',
               electron: av,
               tauri: bv,
+              systemInfoPending: key === 'systemInfo' && isEmptyObject(av),
+              osClickFocus: key === 'windowFocused' && t.osClick && !e.osClick,
             });
         }
         continue;
@@ -1355,10 +1387,27 @@ function compareGuests(e, t, out) {
           field: k,
           electron: normaliseDeep(a[k]),
           tauri: normaliseDeep(b[k]),
+          systemInfoPending: k === 'calls' && callsDifferOnlyByPendingSystemInfo(a.calls, b.calls),
         });
       }
     }
   }
+}
+
+/** A plain object with no own keys. */
+function isEmptyObject(v) {
+  return typeof v === 'object' && v !== null && !Array.isArray(v) && Object.keys(v).length === 0;
+}
+
+/**
+ * Whether a guest's recorded calls differ only in an ow-electron
+ * `getSystemInformation()` that answered `{}`.
+ */
+export function callsDifferOnlyByPendingSystemInfo(electron, tauri) {
+  if (!isEmptyObject(electron?.getSystemInformation) || tauri?.getSystemInformation === undefined)
+    return false;
+  const filled = { ...electron, getSystemInformation: tauri.getSystemInformation };
+  return stable(normaliseDeep(filled)) === stable(normaliseDeep(tauri));
 }
 
 /** Ad events whose presence depends on the ads served (fills, playback). */

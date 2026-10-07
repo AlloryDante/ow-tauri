@@ -291,9 +291,16 @@ export function labRequests(runDir) {
       source: 'lab:shaped-requests',
     });
   }
-  for (const r of readJsonl(join(runDir, 'wc-events.jsonl'))) {
-    // Consent window documents (the host loads them; no custom headers).
-    if (r.kind !== 'created' || r.type !== 'cmp' || !r.url) continue;
+  const wc = readJsonl(join(runDir, 'wc-events.jsonl'));
+  // Consent window documents (the host loads them; no custom headers): every
+  // allowed navigation to a web page. A window's `created` record names the
+  // page it was created for, but on Windows that is still `about:blank` when
+  // the host navigates the window after creating it, so creation records only
+  // count in captures without navigation records.
+  const navigated = wc.some((r) => r.kind === 'navigation' && r.type === 'cmp');
+  for (const r of wc) {
+    if (r.type !== 'cmp' || !/^https?:/.test(r.url ?? '')) continue;
+    if (navigated ? r.kind !== 'navigation' || r.allowed !== true : r.kind !== 'created') continue;
     out.push({
       id: `cmp-${out.length}`,
       url: r.url,

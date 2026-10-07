@@ -7,7 +7,7 @@ import { after, test } from 'node:test';
 
 import { classCounts, durationOf, LAB_SCENARIOS, shard, stateDirs } from './ci/windows-lab.mjs';
 import { adformatFacts, compositeAt, guestMuted } from './lib/adformat-report.mjs';
-import { windowsDebugger } from './lib/tauri-host.mjs';
+import { labRequests, windowsDebugger } from './lib/tauri-host.mjs';
 import { audioChecks, labLayersChecks, topLabel, windowsChecks } from './lib/windows-checks.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'windows-lab-test-'));
@@ -272,5 +272,66 @@ test('a hang is dumped with the Windows SDK debugger when the runner has it', ()
   assert.equal(
     windowsDebugger({}, () => true),
     null,
+  );
+});
+
+test('a consent window created blank and then navigated counts as its page', () => {
+  // Windows lab: the startup consent window's `created` record is
+  // `about:blank`; the page it loads arrives as a navigation record.
+  const page = 'https://content.overwolf.com/cmp/ow-cmp-v2.html?clear=true';
+  const dir = run('cmp-navigated', {
+    'wc-events.jsonl': [
+      {
+        t: 1,
+        wall: 1,
+        kind: 'navigation',
+        label: 'ow-main',
+        type: 'main',
+        url: 'http://tauri.localhost/',
+        allowed: true,
+      },
+      {
+        t: 2,
+        wall: 2,
+        kind: 'navigation',
+        label: 'ow-cmp-startup',
+        type: 'cmp',
+        url: page,
+        allowed: true,
+      },
+      { t: 3, wall: 3, kind: 'created', label: 'ow-cmp-startup', type: 'cmp', url: 'about:blank' },
+      {
+        t: 4,
+        wall: 4,
+        kind: 'navigation',
+        label: 'ow-cmp',
+        type: 'cmp',
+        url: 'data:text/html,x',
+        allowed: true,
+      },
+      {
+        t: 5,
+        wall: 5,
+        kind: 'navigation',
+        label: 'ow-cmp',
+        type: 'cmp',
+        url: 'https://example.com/',
+        allowed: false,
+      },
+    ],
+  });
+  assert.deepEqual(
+    labRequests(dir).map((r) => [r.requestType, r.url, r.label]),
+    [['main frame', page, 'ow-cmp-startup']],
+  );
+  // Captures from before navigation records name the page on creation.
+  const old = run('cmp-created', {
+    'wc-events.jsonl': [
+      { t: 1, wall: 1, kind: 'created', label: 'ow-cmp', type: 'cmp', url: page },
+    ],
+  });
+  assert.deepEqual(
+    labRequests(old).map((r) => r.url),
+    [page],
   );
 });

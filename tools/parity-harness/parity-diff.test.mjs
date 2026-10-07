@@ -10,6 +10,7 @@ import { test } from 'node:test';
 
 import { colourClass, compositeAt, sortKeys } from './lib/adformat-report.mjs';
 import {
+  callsDifferOnlyByPendingSystemInfo,
   classify,
   compareAdformats,
   consentDuringAttach,
@@ -21,6 +22,7 @@ import {
   normalise,
   PACKAGE_RUNTIME_FILE,
   PACKAGE_RUNTIME_REQUEST,
+  sentOsClick,
   withoutPackageRuntime,
   withoutPointerEvents,
 } from './parity-diff.mjs';
@@ -553,4 +555,82 @@ test("ow-electron's package manager traffic on Windows is a documented deviation
     classify({ section: 'host-request', field: 'missing', packageRuntime: false }).class,
     'BUG',
   );
+});
+
+test('an ow-electron getSystemInformation() that answered {} is variance', () => {
+  const info = { gpus: [], cpu: 'CPU', displays: [] };
+  assert.ok(
+    callsDifferOnlyByPendingSystemInfo(
+      { getSystemInformation: {}, getCustomTracking: { a: 1 } },
+      { getSystemInformation: info, getCustomTracking: { a: 1 } },
+    ),
+  );
+  assert.ok(
+    !callsDifferOnlyByPendingSystemInfo(
+      { getSystemInformation: {}, getCustomTracking: { a: 1 } },
+      { getSystemInformation: info, getCustomTracking: { a: 2 } },
+    ),
+  );
+  assert.ok(
+    !callsDifferOnlyByPendingSystemInfo(
+      { getSystemInformation: { cpu: 'x' } },
+      { getSystemInformation: info },
+    ),
+  );
+  assert.equal(
+    classify({ section: 'guest', field: 'value', systemInfoPending: true }).class,
+    'variance',
+  );
+  assert.equal(
+    classify({ section: 'guest', field: 'value', systemInfoPending: false }).class,
+    'BUG',
+  );
+});
+
+test('embedder focus after a system click into one host only is variance', () => {
+  // Windows lab: the ow-tauri app gets a SendInput click (which activates
+  // its window); ow-electron's click is a synthetic sendInputEvent.
+  const dir = mkdtempSync(join(tmpdir(), 'os-click-'));
+  const line = (e) => JSON.stringify(e) + '\n';
+  writeFileSync(
+    join(dir, 'events.jsonl'),
+    line({ kind: 'hit-probe', click: { sent: true } }) +
+      line({ kind: 'hit-probe', native: { click: { sent: false } } }),
+  );
+  assert.equal(sentOsClick(dir), false);
+  writeFileSync(
+    join(dir, 'events.jsonl'),
+    line({ kind: 'hit-probe', native: { click: { sent: true, inputs: 3 } } }),
+  );
+  assert.equal(sentOsClick(dir), true);
+  const focus = { section: 'guest', key: 'guest x __overwolf__.windowFocused', field: 'value' };
+  assert.equal(classify({ ...focus, osClickFocus: true }).class, 'variance');
+  assert.equal(classify({ ...focus, osClickFocus: false }).class, 'BUG');
+});
+
+test('a probe that carries its webContents id names its guest without file times', () => {
+  // CI artifacts come back with one time on every file.
+  const dir = mkdtempSync(join(tmpdir(), 'parity-vis-id-'));
+  const probe = (cid, id) => JSON.stringify({ overwolf: { containerId: cid }, webContentsId: id });
+  writeFileSync(join(dir, 'guest-1-dom-ready-0.json'), probe('std', 5));
+  writeFileSync(join(dir, 'guest-2-dom-ready-0.json'), probe('reward', 4));
+  writeFileSync(
+    join(dir, 'events.jsonl'),
+    [4, 5]
+      .map((id) => JSON.stringify({ kind: 'guest-probe', webContentsId: id, label: 'dom-ready-0' }))
+      .join('\n'),
+  );
+  const vis = (id, state) =>
+    JSON.stringify({
+      via: 'webContents._sendInternal',
+      type: 'owadview',
+      webContentsId: id,
+      url: 'https://ad/',
+      args: JSON.stringify(['GUEST_INSTANCE_VISIBILITY_CHANGE', state]),
+    });
+  writeFileSync(
+    join(dir, 'ipc.jsonl'),
+    [vis(4, 'visible'), vis(5, 'visible'), vis(4, 'hidden')].join('\n'),
+  );
+  assert.deepEqual(guestVisibility(dir), { reward: ['visible', 'hidden'], std: ['visible'] });
 });

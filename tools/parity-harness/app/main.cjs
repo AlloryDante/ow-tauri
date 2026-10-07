@@ -783,7 +783,9 @@ async function probeGuest(wc, label) {
   try {
     const result = await wc.executeJavaScript(OWN_MARKER + GUEST_PROBE, false);
     const index = contentsInfo.get(wc.id).guestIndex;
-    writeJson(`guest-${index}-${label}.json`, result);
+    // The webContents id names the guest in the diff without relying on
+    // file times, which a downloaded CI artifact does not keep.
+    writeJson(`guest-${index}-${label}.json`, { ...result, webContentsId: wc.id });
     record('events.jsonl', { kind: 'guest-probe', webContentsId: wc.id, label, href: result.href });
   } catch (error) {
     record('events.jsonl', {
