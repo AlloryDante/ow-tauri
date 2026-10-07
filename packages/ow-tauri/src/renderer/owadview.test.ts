@@ -284,8 +284,19 @@ describe('discovery and attach (B.3.1)', () => {
     expect(enumerable).toContain('customTracking');
     expect(enumerable).toContain('pageUrl');
     expect(enumerable).not.toContain('sendCommand');
-    for (const method of ['setPageUrl', 'sendCommand', 'setAudioMuted', 'reload'])
+    // As on ow-electron's element, the methods are inherited, not own
+    // (regression: they were own properties).
+    const proto = Object.getPrototypeOf(el) as object;
+    for (const method of ['setPageUrl', 'sendCommand', 'setAudioMuted', 'reload']) {
       expect(typeof (el as unknown as Record<string, unknown>)[method]).toBe('function');
+      expect(Object.hasOwn(el, method)).toBe(false);
+      expect(Object.hasOwn(proto, method)).toBe(true);
+    }
+    expect(el).toBeInstanceOf(HTMLElement);
+    const second = createAd({ cid: 'second' });
+    document.body.append(second);
+    await tick();
+    expect(Object.getPrototypeOf(second)).toBe(proto);
     el.customTracking = null;
     expect(el.hasAttribute('customtracking')).toBe(false);
     el.customTracking = '{"b":2}';

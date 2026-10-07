@@ -11,9 +11,10 @@
  * exactly as ow-electron does (B.3.5).
  *
  * Before it is attached the element is a plain `HTMLElement`; at attach the
- * runtime defines the element members ow-electron has after attach
- * (`customTracking`, `pageUrl`, `setPageUrl`, `sendCommand`,
- * `setAudioMuted`, `reload`) and an open shadow root with a `<style>` and an
+ * runtime defines the element members ow-electron has after attach: own
+ * attribute-backed properties (`customTracking`, `pageUrl`, ...), the
+ * methods `setPageUrl`, `sendCommand`, `setAudioMuted` and `reload` on the
+ * element's prototype, and an open shadow root with a `<style>` and an
  * `<iframe>` placeholder [OBS].
  *
  * @packageDocumentation
@@ -228,6 +229,8 @@ export class AdviewRuntime implements FacadeOwadview {
   #resize: ResizeObserver | undefined;
   #intersection: IntersectionObserver | undefined;
   #cleanups: (() => void)[] = [];
+  /** The methods' prototype, by the element prototype it extends. */
+  readonly #prototypes = new Map<object, object>();
 
   /**
    * @param services - kernel services
@@ -794,7 +797,9 @@ export class AdviewRuntime implements FacadeOwadview {
    * `adstyle` and `customTracking`, in ow-electron's order [OBS], each backed
    * by its attribute (`performance` is a boolean) [DEC]. A value an app
    * assigned to one of them on the plain element is moved into the attribute
-   * first, so it is not lost.
+   * first, so it is not lost. The methods live on a prototype inserted
+   * between the element and its own prototype, as on ow-electron's element
+   * [OBS], so they are not own properties.
    */
   #defineMembers(entry: Entry): void {
     if (entry.membersDefined) return;
@@ -818,45 +823,70 @@ export class AdviewRuntime implements FacadeOwadview {
       enumerable: true,
       configurable: true,
     });
-    const command = (name: string, args: unknown[]): void => {
-      if (!entry.mounted) {
-        this.#services.log('debug', `<owadview> ${entry.id}: ${name}() before attach is ignored`);
-        return;
-      }
-      const { gen, id } = entry;
-      this.#enqueue(entry, async () => {
-        if (entry.gen !== gen) return;
-        try {
-          await this.#services.command('adview_command', { elementId: id, command: name, args });
-        } catch (error) {
-          this.#services.log('debug', `adview_command ${name} failed: ${(error as Error).message}`);
-        }
-      });
+    const members: PropertyDescriptorMap = {};
+    for (const [property, attribute] of REFLECTED) members[property] = accessor(attribute);
+    Object.defineProperties(el, members);
+    const base = Object.getPrototypeOf(el) as object | null;
+    if (base !== null && ![...this.#prototypes.values()].includes(base)) {
+      Object.setPrototypeOf(el, this.#methodsPrototype(base));
+    }
+    this.#attachShadow(entry);
+  }
+
+  /**
+   * The prototype that carries the element methods (B.3.3) on top of
+   * `base`, one per base prototype.
+   */
+  #methodsPrototype(base: object): object {
+    const known = this.#prototypes.get(base);
+    if (known) return known;
+    const entries = this.#entries;
+    const command = (entry: Entry, name: string, args: unknown[]): void => {
+      this.#command(entry, name, args);
     };
-    const method = (fn: (...args: unknown[]) => void): PropertyDescriptor => ({
-      value: fn,
+    const method = (fn: (entry: Entry, args: unknown[]) => void): PropertyDescriptor => ({
+      value: function (this: unknown, ...args: unknown[]): void {
+        const entry =
+          typeof this === 'object' && this !== null ? entries.get(this as Element) : undefined;
+        if (entry) fn(entry, args);
+      },
       writable: true,
       configurable: true,
       enumerable: false,
     });
-    const members: PropertyDescriptorMap = {};
-    for (const [property, attribute] of REFLECTED) members[property] = accessor(attribute);
-    Object.defineProperties(el, {
-      ...members,
-      setPageUrl: method((url: unknown) => {
-        el.setAttribute('pageurl', url === undefined || url === null ? '' : domString(url));
+    const proto = Object.create(base, {
+      setPageUrl: method((entry, [url]) => {
+        entry.el.setAttribute('pageurl', url === undefined || url === null ? '' : domString(url));
       }),
-      sendCommand: method((...args: unknown[]) => {
-        command('sendCommand', jsonArgs(args));
+      sendCommand: method((entry, args) => {
+        command(entry, 'sendCommand', jsonArgs(args));
       }),
-      setAudioMuted: method((muted: unknown) => {
-        command('setAudioMuted', [muted === true]);
+      setAudioMuted: method((entry, [muted]) => {
+        command(entry, 'setAudioMuted', [muted === true]);
       }),
-      reload: method(() => {
-        command('reload', []);
+      reload: method((entry) => {
+        command(entry, 'reload', []);
       }),
+    }) as object;
+    this.#prototypes.set(base, proto);
+    return proto;
+  }
+
+  /** Runs an element command on the guest of `entry` (B.3.3). */
+  #command(entry: Entry, name: string, args: unknown[]): void {
+    if (!entry.mounted) {
+      this.#services.log('debug', `<owadview> ${entry.id}: ${name}() before attach is ignored`);
+      return;
+    }
+    const { gen, id } = entry;
+    this.#enqueue(entry, async () => {
+      if (entry.gen !== gen) return;
+      try {
+        await this.#services.command('adview_command', { elementId: id, command: name, args });
+      } catch (error) {
+        this.#services.log('debug', `adview_command ${name} failed: ${(error as Error).message}`);
+      }
     });
-    this.#attachShadow(entry);
   }
 
   #attachShadow(entry: Entry): void {
