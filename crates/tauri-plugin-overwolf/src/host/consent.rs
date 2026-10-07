@@ -18,8 +18,8 @@ use crate::ads::is_overwolf_url;
 use crate::config::CookieFallback;
 use crate::consent::{
     CMP_CONFIG_TOKEN, CMP_SCOPE, CmpEventData, CmpEventName, CmpWindowOptions, ConsentFacts,
-    DEFAULT_BACKGROUND, DEFAULT_CMP_URL, HIDDEN_WINDOW_SIZE, STARTUP_CMP_URL, cmp_config,
-    consent_cookie, cookie_values, default_consent_url, eu_only_outcome, preloader_url,
+    DEFAULT_BACKGROUND, DEFAULT_CMP_URL, HIDDEN_WINDOW_SIZE, STARTUP_CMP_URL, clear_consent_url,
+    cmp_config, consent_cookie, cookie_values, default_consent_url, eu_only_outcome, preloader_url,
     settings_url, startup_url, stored_unified, valid_consent,
 };
 use crate::error::Error;
@@ -79,6 +79,9 @@ pub(crate) struct ConsentCore {
     pub(crate) default_opened: bool,
     /// A non-empty `params` body was logged.
     pub(crate) params_logged: bool,
+    /// The last `cmp-eu-only` answer said consent is not required
+    /// (`isCMPRequired()` is `false`, D.6.2).
+    pub(crate) not_required: bool,
     /// The origin of the settings window's `cmpURL` when it is not an
     /// Overwolf page: the window may load it (D.6.4).
     pub(crate) settings_origin: Option<String>,
@@ -151,7 +154,7 @@ impl<R: Runtime> Host<R> {
     fn spawn_round(self: &Arc<Self>, round: u32) {
         let host = self.clone();
         tauri::async_runtime::spawn(async move {
-            let cacheable = if host.analytics.user_enabled() {
+            let (cacheable, required) = if host.analytics.user_enabled() {
                 let request = host.analytics.reporter().cmp_eu_only();
                 let body = match host.analytics.dispatcher.send(request, false).await {
                     Ok(r) => Some(r.body),
@@ -168,13 +171,14 @@ impl<R: Runtime> Host<R> {
                         host.log(LogLevel::Debug, &format!("cmp-eu-only params: {p}"));
                     }
                 }
-                outcome.cacheable
+                (outcome.cacheable, outcome.cmp_required)
             } else {
                 // The ow-tauri user switch is off: no request; the window
                 // opens as after a failed request.
-                true
+                (true, true)
             };
             host.with_core(|c| {
+                c.consent.not_required = !required;
                 if c.consent.mode == CacheMode::Pending || round == 1 {
                     c.consent.mode = if cacheable {
                         CacheMode::Cached
@@ -187,9 +191,15 @@ impl<R: Runtime> Host<R> {
         });
     }
 
-    /// The hidden consent window of startup round `round` (D.6.1).
+    /// The hidden consent window of startup round `round` (D.6.1): the
+    /// consent page, or the clearing page when consent is not required
+    /// (D.6.2).
     fn open_startup_window(self: &Arc<Self>, round: u32) {
         let label = startup_label(round);
+        if self.with_core(|c| c.consent.not_required) {
+            self.open_startup_url(&label, &clear_consent_url(), round);
+            return;
+        }
         let stored = self
             .ow_electron
             .read()
@@ -205,14 +215,17 @@ impl<R: Runtime> Host<R> {
             ow_version: &ow_version,
             app_version: &app_version,
         };
-        let url = startup_url(&facts, stored.as_deref());
-        if let Err(err) = self.open_hidden_window(&label, &url, Some(round)) {
+        self.open_startup_url(&label, &startup_url(&facts, stored.as_deref()), round);
+    }
+
+    fn open_startup_url(self: &Arc<Self>, label: &str, url: &str, round: u32) {
+        if let Err(err) = self.open_hidden_window(label, url, Some(round)) {
             self.log(
                 LogLevel::Warn,
                 &format!("the startup consent window failed: {err}"),
             );
-            self.with_core(|c| c.consent.hidden.remove(&label));
-            self.consent_window_failed(&label, Some(round));
+            self.with_core(|c| c.consent.hidden.remove(label));
+            self.consent_window_failed(label, Some(round));
         }
     }
 
@@ -464,9 +477,9 @@ impl<R: Runtime> Host<R> {
         }
     }
 
-    /// `is_cmp_required` (A.2.2, D.6.2): always `true`, after this launch's
-    /// request and startup page load; with a `{}` body every call runs its
-    /// own round.
+    /// `is_cmp_required` (A.2.2, D.6.2): after this launch's request and
+    /// startup page load, `false` when the request answered `no-cmp`, else
+    /// `true`; with a `{}` body every call runs its own round.
     pub(crate) async fn is_cmp_required(self: &Arc<Self>) -> bool {
         enum Wait {
             Now,
@@ -480,8 +493,9 @@ impl<R: Runtime> Host<R> {
             }
             CacheMode::Cached | CacheMode::Pending => Wait::Round(1, false),
         });
+        let required = |host: &Arc<Self>| host.with_core(|c| !c.consent.not_required);
         let Wait::Round(round, new) = wait else {
-            return true;
+            return required(self);
         };
         let (tx, rx) = oneshot::channel();
         let already = self.with_core(|c| {
@@ -501,12 +515,15 @@ impl<R: Runtime> Host<R> {
         if !already {
             let _ = rx.await;
         }
-        true
+        required(self)
     }
 
     /// The hidden default-consent window of the first settings call of a
-    /// launch (D.6.4).
+    /// launch (D.6.4); none when consent is not required (D.6.2).
     fn open_default_consent_once(self: &Arc<Self>) {
+        if self.with_core(|c| c.consent.not_required) {
+            return;
+        }
         if !self.with_core(|c| std::mem::replace(&mut c.consent.default_opened, true))
             && let Err(err) =
                 self.open_hidden_window(CMP_DEFAULT_LABEL, &default_consent_url(), None)
@@ -563,7 +580,7 @@ impl<R: Runtime> Host<R> {
             options.tab.as_deref().unwrap_or("purposes"),
             options.language.as_deref().unwrap_or("en"),
             self.analytics.first_launch(),
-            true,
+            self.with_core(|c| !c.consent.not_required),
         );
         let page = Url::parse(&page).map_err(|e| Error::invalid_argument(e.to_string()))?;
         let background = options
@@ -666,10 +683,12 @@ impl<R: Runtime> Host<R> {
             return Err(Error::forbidden("This page cannot save consent."));
         }
         let data = data.unwrap_or_default();
+        // An empty string clears the stored consent: the clearing startup
+        // page saves "" when consent is not required (D.6.2) [OBS].
         let consent = || {
             data.consent
                 .clone()
-                .filter(|s| valid_consent(s))
+                .filter(|s| s.is_empty() || valid_consent(s))
                 .ok_or_else(|| Error::invalid_argument("Invalid consent string."))
         };
         let write = |block: &CmpBlock| {
@@ -683,9 +702,14 @@ impl<R: Runtime> Host<R> {
             }
             CmpEventName::SaveConsent => {
                 let s = consent()?;
-                let secs = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_secs());
+                // ow-electron stores timeStamp 0 with a cleared string [OBS].
+                let secs = if s.is_empty() {
+                    0
+                } else {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs())
+                };
                 write(&CmpBlock {
                     cmp_string: Some(s.clone()),
                     time_stamp: Some(secs),

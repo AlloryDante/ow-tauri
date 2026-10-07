@@ -222,12 +222,19 @@ pub struct EuOnlyOutcome {
     /// without `params`) is not cached: every `isCMPRequired()` call sends
     /// a new request and opens a new startup window.
     pub cacheable: bool,
+    /// `isCMPRequired()`: `false` only when `params` holds the string
+    /// `"no-cmp"` (the answer outside the consent region [OBS: Windows lab,
+    /// a US runner]); `true` for every other body and a failed request.
+    pub cmp_required: bool,
     /// A non-empty `params` body, logged once at debug level.
     pub params: Option<String>,
 }
 
+/// The `params` entry that makes consent not required (D.6.2).
+pub const NO_CMP_PARAM: &str = "no-cmp";
+
 /// Interprets a `cmp-eu-only` response body (or `None` when the request
-/// failed). The result is `true` in every case (D.6.2).
+/// failed, D.6.2).
 ///
 /// ```
 /// use tauri_plugin_overwolf::consent::eu_only_outcome;
@@ -236,6 +243,8 @@ pub struct EuOnlyOutcome {
 /// assert!(eu_only_outcome(Some(b"not json")).cacheable);
 /// assert!(eu_only_outcome(None).cacheable);
 /// assert_eq!(eu_only_outcome(Some(br#"{"params":[true]}"#)).params.as_deref(), Some("[true]"));
+/// assert!(eu_only_outcome(Some(br#"{"params":["false"]}"#)).cmp_required);
+/// assert!(!eu_only_outcome(Some(br#"{"params":["no-cmp"]}"#)).cmp_required);
 /// ```
 #[must_use]
 pub fn eu_only_outcome(body: Option<&[u8]>) -> EuOnlyOutcome {
@@ -244,10 +253,15 @@ pub fn eu_only_outcome(body: Option<&[u8]>) -> EuOnlyOutcome {
         Some(Value::Object(m)) => match m.get("params") {
             None => EuOnlyOutcome {
                 cacheable: false,
+                cmp_required: true,
                 params: None,
             },
             Some(p) => EuOnlyOutcome {
                 cacheable: true,
+                cmp_required: !matches!(
+                    p,
+                    Value::Array(a) if a.iter().any(|v| v.as_str() == Some(NO_CMP_PARAM))
+                ),
                 params: match p {
                     Value::Array(a) if a.is_empty() => None,
                     other => Some(other.to_string().chars().take(512).collect()),
@@ -256,9 +270,22 @@ pub fn eu_only_outcome(body: Option<&[u8]>) -> EuOnlyOutcome {
         },
         _ => EuOnlyOutcome {
             cacheable: true,
+            cmp_required: true,
             params: None,
         },
     }
+}
+
+/// The startup consent window's URL when consent is not required (D.6.1,
+/// D.6.2): the page clears the stored consent itself (`saveConsent("")`,
+/// `saveUnifiedConsent("")`) [OBS: Windows lab].
+///
+/// ```
+/// assert!(tauri_plugin_overwolf::consent::clear_consent_url().ends_with("ow-cmp-v2.html?clear=true"));
+/// ```
+#[must_use]
+pub fn clear_consent_url() -> String {
+    format!("{STARTUP_CMP_URL}?clear=true")
 }
 
 /// Validates a consent string: not empty, printable ASCII (0x21 to 0x7E),
@@ -430,6 +457,31 @@ pub fn preloader_url(background: &str, spinner_color: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression (Windows lab, a US runner): `cmp-eu-only` answered
+    /// `{"params":["no-cmp"]}` and ow-electron's `isCMPRequired()` was
+    /// `false`; ow-tauri said `true` and ran the full consent page.
+    #[test]
+    fn no_cmp_is_the_only_answer_that_makes_consent_not_required() {
+        let required = |body: Option<&[u8]>| eu_only_outcome(body).cmp_required;
+        assert!(!required(Some(br#"{"params":["no-cmp"]}"#)));
+        assert!(!required(Some(br#"{"params":["x","no-cmp"]}"#)));
+        let no_cmp = eu_only_outcome(Some(br#"{"params":["no-cmp"]}"#));
+        assert!(no_cmp.cacheable);
+        assert_eq!(no_cmp.params.as_deref(), Some(r#"["no-cmp"]"#));
+        for body in [
+            &br#"{"params":[]}"#[..],
+            br#"{"params":[false]}"#,
+            br#"{"params":["NO-CMP"]}"#,
+            br#"{"params":"no-cmp"}"#,
+            br#"{"params":{"no-cmp":true}}"#,
+            b"{}",
+            b"not json",
+        ] {
+            assert!(required(Some(body)), "{}", String::from_utf8_lossy(body));
+        }
+        assert!(required(None));
+    }
 
     #[test]
     fn decode_roundtrip() {

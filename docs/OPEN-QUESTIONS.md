@@ -53,7 +53,7 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 | [OQ-30](#oq-30-linux) | Ads | Linux | Low | Decided | D.8.3 |
 | [OQ-32](#oq-32-element-extensions-pageurl-setpageurl-sendcommand) | Ads | `pageUrl`, `setPageUrl`, `sendCommand` | Medium | Answered (present); open: pending harness (R3-2, behaviour) | B.3.2, B.3.3, D.2 |
 | [OQ-35](#oq-35-dom-event-shape) | Ads | DOM event shape | Low | Answered | B.3.5 |
-| [OQ-06](#oq-06-iscmprequired-source) | Consent | `isCMPRequired` source | High | Answered; open: Overwolf (the rule that gives `false`) | D.6.2 |
+| [OQ-06](#oq-06-iscmprequired-source) | Consent | `isCMPRequired` source | High | Answered (`no-cmp` gives `false`); open: Overwolf (other values) | D.6.2 |
 | [OQ-07](#oq-07-consent-pages-and-the-first-layer) | Consent | consent pages, first layer, `cmpURL` | High | Answered; open: Overwolf (skip when not required); pending harness (R3-5) | D.6.1, D.6.4 |
 | [OQ-08](#oq-08-consent-cookies) | Consent | consent cookies | High | Answered | D.6.3 |
 | [OQ-26](#oq-26-opencmpwindow-promise-timing) | Consent | `openCMPWindow` promise timing | Low | Answered | A.2.2 |
@@ -419,8 +419,11 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 - **Source.** Observed; typings ("will never throw an exception - the default
   value is true");
   https://dev.overwolf.com/ow-electron/reference/ads/consent-management-platform.
-- **Open with Overwolf.** Which response, if any, makes it `false`, and is the
-  startup consent window then skipped (OQ-07)?
+- **Answered (Windows lab, a US runner).** `{"params":["no-cmp"]}` makes it
+  `false`; the startup window is not skipped but loads
+  `ow-cmp-v2.html?clear=true`, which clears the stored consent (CONTRACT
+  D.6.2). ow-tauri does the same.
+- **Open with Overwolf.** Any other response that gives `false`.
 
 ### OQ-07: consent pages and the first layer
 
@@ -445,8 +448,8 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
   https://dev.overwolf.com/ow-electron/reference/ads/consent-management-platform
   (an app with its own installer shows the first layer; `openCMPWindow` is
   deprecated); typings (`cmpURL`).
-- **Open with Overwolf.** Is the startup window skipped when consent is not
-  required? (Not observable: OQ-06.)
+- **Answered (OQ-06).** When consent is not required the startup window
+  is not skipped: it loads `ow-cmp-v2.html?clear=true`.
 - **Open.** R3-5: `firstRun` and `cmpRequired` in the settings query on a
   later launch (observed `true` on fresh profiles).
 

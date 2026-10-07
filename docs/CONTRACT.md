@@ -637,7 +637,7 @@ webview's own position in the window.
 
 | Command | Arguments | Returns | Behaviour |
 |---|---|---|---|
-| `cmp_event` | `{ name: 'ready' \| 'saveConsent' \| 'saveUnifiedConsent' \| 'enableAdOptimization' \| 'close'; data?: { consent?: string; enabled?: boolean } }` | `void` | Consent page to host, from the startup consent window (`ow-cmp-startup`), the default-consent window (`ow-cmp-default`) or the settings window (`ow-cmp`), D.6. Consent strings must be printable ASCII (0x21 to 0x7E) and at most 16 KiB. Calls from a page outside `https://content.overwolf.com/monsdk/electron/` are refused (D.6.4). |
+| `cmp_event` | `{ name: 'ready' \| 'saveConsent' \| 'saveUnifiedConsent' \| 'enableAdOptimization' \| 'close'; data?: { consent?: string; enabled?: boolean } }` | `void` | Consent page to host, from the startup consent window (`ow-cmp-startup`), the default-consent window (`ow-cmp-default`) or the settings window (`ow-cmp`), D.6. Consent strings must be empty or printable ASCII (0x21 to 0x7E) and at most 16 KiB; an empty string clears the stored value (`saveConsent("")` stores `timeStamp: 0`), as the clearing startup page does (D.6.2) [OBS]. Calls from a page outside `https://content.overwolf.com/monsdk/electron/` are refused (D.6.4). |
 
 #### A.2.8 Updater (`overwolf:main`)
 
@@ -1965,10 +1965,9 @@ body, a dropped connection) [OBS]:
   creation [OBS]. If it is still open after `consent.readyTimeoutMs`, or its
   main-frame load fails, the host closes it [DEC].
 - `isCMPRequired()` resolves when this page reaches `did-finish-load`, or
-  right after its load fails [OBS]. Whether ow-electron skips the window when
-  consent is not required cannot be observed: every response ow-electron was
-  given resolved `true` (D.6.2). **Interim (OQ-06):** ow-tauri always opens
-  it.
+  right after its load fails [OBS]. When consent is not required (a
+  `no-cmp` answer, D.6.2) the window still opens, on
+  `ow-cmp-v2.html?clear=true` [OBS: Windows lab]; ow-tauri does the same.
 - The window sends no analytics of its own (it is never shown, E.2).
 
 What the page does [OBS]:
@@ -2002,9 +2001,17 @@ every case, so ow-tauri runs it too.
 - The result was `true` for every response ow-electron was given [OBS]:
   `{"params":[]}`, `params` of `[false]`, `[true]`, `["false"]`, name/value
   and key/value objects, `enabled: false`, HTTP 500 and 404, invalid JSON and
-  a dropped connection. ow-tauri resolves `true` and logs a non-empty
-  `params` body once at debug level. The rule that would give `false` is
-  **Open: Overwolf** (OQ-06).
+  a dropped connection. ow-tauri logs a non-empty `params` body once at
+  debug level.
+- **`{"params":["no-cmp"]}`** (the answer outside the consent region; Windows
+  lab, a US runner) [OBS]: `isCMPRequired()` resolves `false`. The startup
+  consent window loads `ow-cmp-v2.html?clear=true` (no other query), whose
+  page calls `saveConsent("")` and `saveUnifiedConsent("")`, so `cmp` is
+  stored as `{"cmpString":"","timeStamp":0,"unifiedConsentString":""}` and no
+  consent cookies exist; the settings window URL carries `cmpRequired=false`;
+  no default-consent window opens (D.6.4). ow-tauri does the same: `false`
+  only when `params` is an array holding the string `"no-cmp"` (OQ-06,
+  answered for this value).
 - **`{}` body** (no `params` key) [OBS]: the result is not cached, so every
   `isCMPRequired()` call sends a new request **and** opens a new startup
   consent window (five calls gave five requests and five windows). ow-tauri

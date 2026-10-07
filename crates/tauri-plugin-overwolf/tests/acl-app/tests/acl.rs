@@ -1322,6 +1322,116 @@ fn consent_sequencing() {
     ));
 }
 
+/// Answers `cmp-eu-only` with `{"params":["no-cmp"]}` and every other host
+/// request with an empty 200.
+#[derive(Default)]
+struct NoCmp;
+
+impl tauri_plugin_overwolf::analytics::Transport for NoCmp {
+    fn send(
+        &self,
+        request: tauri_plugin_overwolf::analytics::HostRequest,
+    ) -> tauri_plugin_overwolf::analytics::BoxFuture<
+        Result<tauri_plugin_overwolf::analytics::HostResponse, String>,
+    > {
+        let body = if request.url.contains("cmp-eu-only") {
+            br#"{"params":["no-cmp"]}"#.to_vec()
+        } else {
+            Vec::new()
+        };
+        Box::pin(async move {
+            Ok(tauri_plugin_overwolf::analytics::HostResponse {
+                status: 200,
+                body,
+                ..Default::default()
+            })
+        })
+    }
+}
+
+/// Regression (Windows lab, a US runner): `cmp-eu-only` answered `no-cmp`;
+/// ow-electron's `isCMPRequired()` was `false`, its startup window loaded
+/// the clearing page, which saved empty consent, and no default-consent
+/// window opened. ow-tauri resolved `true` and ran the full consent page.
+#[test]
+fn consent_not_required_loads_the_clearing_page() {
+    let mut context = ow_tauri_acl_tests::context();
+    context.config_mut().plugins.0.insert(
+        "overwolf".into(),
+        json!({ "state": { "appDataDir": temp_dir("consent-no-cmp") } }),
+    );
+    let app = mock_builder()
+        .plugin(
+            Builder::new()
+                .manifest_json(ow_tauri_acl_tests::manifest())
+                .companion_plugins(false)
+                .main_webview(false)
+                .skip_os_queries()
+                .skip_updater_os_steps()
+                .analytics_transport(Arc::new(NoCmp) as _)
+                .argv(vec!["acl-fixture".into()])
+                .build(),
+        )
+        .build(context)
+        .unwrap();
+    main_and_window(&app);
+    let ow = app.overwolf();
+    ow.test_start_consent();
+    let start = Instant::now();
+    while !ow
+        .test_hidden_consent_windows()
+        .contains(&"ow-cmp-startup".to_owned())
+    {
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "no startup window"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let window = app.get_webview_window("ow-cmp-startup").unwrap();
+    let url = window.url().unwrap();
+    assert_eq!(
+        url.as_str(),
+        "https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/ow-cmp-v2.html?clear=true"
+    );
+    ow.test_page_load("ow-cmp-startup", &url, true);
+    let handle = app.handle().clone();
+    assert!(!tauri::async_runtime::block_on(
+        handle.overwolf().test_is_cmp_required()
+    ));
+    for name in ["saveConsent", "saveUnifiedConsent"] {
+        invoke_from(
+            &app,
+            "ow-cmp-startup",
+            CMP_PAGE,
+            "cmp_event",
+            json!({ "name": name, "data": { "consent": "" } }),
+        )
+        .unwrap();
+    }
+    let state: Value =
+        serde_json::from_slice(&std::fs::read(ow.state_dir().join("ow-electron.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        state["cmp"],
+        json!({ "cmpString": "", "timeStamp": 0, "unifiedConsentString": "" })
+    );
+    // The settings window opens without a default-consent window.
+    invoke(
+        &app,
+        "ow-main",
+        "open_ad_privacy_settings_window",
+        json!({}),
+    )
+    .unwrap();
+    assert!(app.get_webview_window("ow-cmp").is_some());
+    assert!(
+        !ow.test_hidden_consent_windows()
+            .contains(&"ow-cmp-default".to_owned())
+    );
+    assert!(app.get_webview_window("ow-cmp-default").is_none());
+}
+
 #[test]
 fn guest_visibility_follows_the_window_and_the_element() {
     let (app, _) = app("guest-visibility");
