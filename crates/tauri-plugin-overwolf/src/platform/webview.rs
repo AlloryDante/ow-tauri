@@ -408,7 +408,11 @@ pub(crate) fn content_inset_top<R: Runtime>(window: &tauri::Window<R>) -> f64 {
 /// `-[NSWindow orderFrontRegardless]` on the main thread, as ow-electron
 /// shows an inactive window. `Window::show` would call
 /// `makeKeyAndOrderFront:`, which activates the app and takes the keyboard
-/// from the app the user is in. Elsewhere `Window::show`.
+/// from the app the user is in. On Windows `ShowWindow(SW_SHOWNOACTIVATE)`,
+/// as Electron's `showInactive()` does there: `Window::show` (`SW_SHOW`)
+/// activates the window and moves focus into its webview, which, from a
+/// command answered inside a `WebView2` callback, never returned (Windows
+/// lab). Elsewhere `Window::show`.
 ///
 /// On the main thread the window is ordered front before this returns, so a
 /// visibility read right after sees it shown; elsewhere the show is queued
@@ -423,7 +427,18 @@ pub(crate) fn show_inactive<R: Runtime>(window: &tauri::Window<R>) -> tauri::Res
             |show| window.run_on_main_thread(show),
         )
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        // The mock runtime has no native window: show it the Tauri way.
+        match window.hwnd() {
+            Ok(hwnd) => {
+                windows_impl::show_no_activate(hwnd.0 as isize);
+                Ok(())
+            }
+            Err(_) => window.show(),
+        }
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         window.show()
     }
@@ -1302,7 +1317,8 @@ mod windows_impl {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GW_HWNDPREV, GetWindow, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
+        GW_HWNDPREV, GetWindow, HWND_TOP, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOSIZE, SetWindowPos, ShowWindow,
     };
     use windows::core::{BOOL, HSTRING, Interface, PWSTR};
 
@@ -1310,6 +1326,14 @@ mod windows_impl {
         GuestReports, HookTarget, RequestShape, Shaping, request_shape, webview2_net_error,
     };
     use crate::ads::GoneReason;
+
+    /// `ShowWindow(SW_SHOWNOACTIVATE)`: shown in place, neither activated
+    /// nor focused. `IsWindowVisible` (Tauri's `is_visible`) reads it at once.
+    pub(super) fn show_no_activate(hwnd: isize) {
+        // SAFETY: a window handle of this process; a stale one makes the
+        // call fail, which is ignored.
+        let _ = unsafe { ShowWindow(HWND(hwnd as *mut std::ffi::c_void), SW_SHOWNOACTIVATE) };
+    }
 
     pub(super) fn set_muted(controller: &ICoreWebView2Controller, muted: bool) {
         // SAFETY: COM calls on the webview's own thread.
@@ -1543,6 +1567,46 @@ mod windows_impl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression (Windows lab): `showInactive()` used `Window::show`
+    /// (`SW_SHOW`), which activates the window and focuses its webview; the
+    /// command never returned. The window is now shown without activation.
+    #[cfg(windows)]
+    #[test]
+    fn show_inactive_shows_without_activating_on_windows() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, GetForegroundWindow, IsWindowVisible, WINDOW_EX_STYLE,
+            WS_OVERLAPPEDWINDOW,
+        };
+        use windows::core::w;
+        // SAFETY: a plain top-level window of this thread, destroyed below.
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!("show-inactive test"),
+                WS_OVERLAPPEDWINDOW,
+                -32000,
+                -32000,
+                100,
+                100,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        .expect("a test window");
+        // SAFETY: as above.
+        assert!(!unsafe { IsWindowVisible(hwnd) }.as_bool());
+        windows_impl::show_no_activate(hwnd.0 as isize);
+        // SAFETY: as above.
+        unsafe {
+            assert!(IsWindowVisible(hwnd).as_bool());
+            assert_ne!(GetForegroundWindow(), hwnd);
+            let _ = DestroyWindow(hwnd);
+        }
+    }
 
     /// Regression (parity lab, macOS 26): a window's content view reaches
     /// under the title bar and `WKWebView` insets the page below it; guests
