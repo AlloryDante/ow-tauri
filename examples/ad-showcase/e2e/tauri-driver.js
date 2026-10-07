@@ -13,6 +13,17 @@ import { runSteps } from './steps.cjs';
 
 const invoke = (cmd, args) => globalThis.__TAURI_INTERNALS__.invoke(cmd, args);
 
+// A show becomes an inactive show, as e2e/electron-main.cjs does on
+// ow-electron: the invisible lab app must never become the frontmost app.
+// The facade's show() also focuses the window, which activates the app on
+// macOS even in the invisible lab (core bug CB-2, open); this bundle only
+// exists in lab builds, so the normal build keeps the plain show().
+const plainShow = BrowserWindow.prototype.show;
+BrowserWindow.prototype.show = function labShow() {
+  if (typeof this.showInactive === 'function') return this.showInactive();
+  return plainShow.call(this);
+};
+
 const isShowcase = (w) => /renderer\/index\.html/.test(w.webContents.getURL() || '');
 
 async function start() {
@@ -45,6 +56,16 @@ async function start() {
     quit: () => {
       void chain.then(() => app.quit());
     },
+    // The window's native hit test and the test-mode click (src-tauri/src/lab.rs).
+    nativeProbe: (points, click) => invoke('e2e_native_probe', { points, click }),
+    still: (name) => invoke('e2e_still', { name }),
+    probeGuests: (phase) => invoke('e2e_probe_guests', { phase }),
+    windows: () =>
+      BrowserWindow.getAllWindows().map((w) => ({
+        id: w.id,
+        visible: w.isVisible(),
+        url: (w.webContents.getURL() || '').replace(/^.*\/renderer\//, '<app>/renderer/'),
+      })),
   };
   app
     .whenReady()

@@ -7,7 +7,7 @@
 
 'use strict';
 
-const { app, BrowserWindow, dialog, shell } = require('electron');
+const { app, BrowserWindow, dialog, shell, webContents } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runSteps } = require('./steps.cjs');
@@ -99,6 +99,38 @@ shell.openPath = async (p) => {
 shell.openExternal = async (u) => blocked('shell.openExternal', u);
 shell.showItemInFolder = (p) => blocked('shell.showItemInFolder', p);
 
+// --- Ad guest console (observation only) ----------------------------------
+// What the ad pages log (`<owadview> is not visible. waiting...` and the like)
+// goes to guest-console.jsonl, as the ow-tauri lab trace records its guests.
+// The <owadview> guests are not always announced through
+// 'web-contents-created', so a poll picks them up too.
+const watchedContents = new Set();
+function watchConsole(wc) {
+  if (watchedContents.has(wc.id)) return;
+  watchedContents.add(wc.id);
+  wc.on('console-message', (...args) => {
+    const detail = args[0] && typeof args[0] === 'object' && 'message' in args[0] ? args[0] : null;
+    const message = detail ? detail.message : args[2];
+    const type = wc.getType();
+    if (type === 'window') return;
+    fs.appendFileSync(
+      path.join(config.runDir, 'guest-console.jsonl'),
+      JSON.stringify({
+        wall: Date.now(),
+        id: wc.id,
+        type,
+        message: String(message).slice(0, 2000),
+      }) + '\n',
+    );
+  });
+}
+app.on('web-contents-created', (_event, wc) => watchConsole(wc));
+app.whenReady().then(() => {
+  setInterval(() => {
+    for (const wc of webContents.getAllWebContents()) watchConsole(wc);
+  }, 250).unref();
+});
+
 // --- The showcase, unchanged ------------------------------------------------
 require('./main/main.js');
 
@@ -111,6 +143,23 @@ const host = {
   mainWindow: () =>
     BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && isShowcase(w)) || null,
   quit: () => app.quit(),
+  // A click into the app's own page (test mode only; the steps send it only
+  // when the page's hit test names the app's button, never at an ad).
+  pageClick: (x, y) => {
+    if (config.mode !== 'test') return { sent: false, refused: 'not in test mode' };
+    const win = host.mainWindow();
+    if (!win) return { sent: false, refused: 'no window' };
+    for (const type of ['mouseDown', 'mouseUp']) {
+      win.webContents.sendInputEvent({ type, x, y, button: 'left', clickCount: 1 });
+    }
+    return { sent: true };
+  },
+  windows: () =>
+    BrowserWindow.getAllWindows().map((w) => ({
+      id: w.id,
+      visible: w.isVisible(),
+      url: (w.webContents.getURL() || '').replace(/^.*\/renderer\//, '<app>/renderer/'),
+    })),
 };
 host.record({ kind: 'driver', host: 'electron', versions: process.versions });
 app

@@ -1,11 +1,20 @@
 #!/usr/bin/env node
 // The showcase in the invisible lab (macOS). See e2e/README.md.
 //
-//   node e2e/run.mjs [--host tauri|electron] [--steps smoke|tour] [--run-id ID]
-//                    [--no-build] [--identity FILE] [--timeout S]
-//                    [--ad-wait MS] [--dwell MS]
+//   node e2e/run.mjs [--host tauri|electron] [--steps smoke|tour|live-*]
+//                    [--mode test|live] [--run-id ID] [--no-build]
+//                    [--identity FILE] [--timeout S] [--ad-wait MS]
+//                    [--dwell MS] [--stills DIR] [--live-cap N]
+//                    [--no-privacy-window]
 //
-// Test ads only (--test-ad): this runner never starts a LIVE run.
+// --mode test (default): test ads (--test-ad), smoke or tour.
+// --mode live: real ads, only with a live-* scenario (live-layout,
+//   live-300x250, live-reward, live-perf), which starts the app on one page
+//   (--showcase-page) so that it mounts only the planned ad guests. Every
+//   live ad load is logged in e2e/out/live-loads.jsonl with its run id and
+//   running count; the run is refused when the planned loads would take
+//   that count over --live-cap (default 10). The steps never click an ad
+//   and never play a reward video in live mode.
 //
 // --host tauri (default): stages the ow-tauri frontend with the lab driver
 //   (scripts/stage.mjs --lab) and builds the debug app with the `lab`
@@ -28,6 +37,7 @@ import {
   createWriteStream,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -52,9 +62,14 @@ const { values: opts } = parseArgs({
     'run-id': { type: 'string' },
     'no-build': { type: 'boolean', default: false },
     identity: { type: 'string' },
-    timeout: { type: 'string', default: '300' },
+    timeout: { type: 'string', default: '1500' },
     'ad-wait': { type: 'string', default: '60000' },
     dwell: { type: 'string', default: '8000' },
+    mode: { type: 'string', default: 'test' },
+    stills: { type: 'string' },
+    'live-cap': { type: 'string', default: '10' },
+    'live-observe': { type: 'string', default: '90000' },
+    'no-privacy-window': { type: 'boolean', default: false },
   },
 });
 
@@ -64,11 +79,23 @@ function fail(message) {
 }
 if (process.platform !== 'darwin') fail('the invisible lab and the window monitor are macOS only');
 if (!['tauri', 'electron'].includes(opts.host)) fail(`unknown --host ${opts.host}`);
-if (!['smoke', 'tour'].includes(opts.steps)) fail(`unknown --steps ${opts.steps}`);
+const LIVE_STEPS = {
+  'live-layout': { route: 'layouts/combo-classic', loads: 2 },
+  'live-300x250': { route: 'sizes/300x250', loads: 1 },
+  'live-reward': { route: 'reward', loads: 2 },
+  'live-perf': { route: 'interstitial', loads: 1 },
+};
+if (!['test', 'live'].includes(opts.mode)) fail(`unknown --mode ${opts.mode}`);
+if (opts.mode === 'test' && !['smoke', 'tour'].includes(opts.steps))
+  fail(`--mode test runs smoke or tour, not ${opts.steps}`);
+if (opts.mode === 'live' && !(opts.steps in LIVE_STEPS))
+  fail(`--mode live runs one of ${Object.keys(LIVE_STEPS).join(', ')}`);
+const live = opts.mode === 'live';
 
 const runId =
   opts['run-id'] ?? `${opts.host}-${opts.steps}-${new Date().toISOString().replace(/[:.]/g, '-')}`;
 const outRoot = join(here, 'out');
+const ledgerFile = join(outRoot, 'live-loads.jsonl');
 const runDir = join(outRoot, runId);
 rmSync(runDir, { recursive: true, force: true });
 mkdirSync(runDir, { recursive: true });
@@ -193,7 +220,7 @@ const isWebKit = (p) => p.name.startsWith('com.apple.WebKit.');
 // responsible for (they are not in its process group). An app started from
 // a terminal is not responsible for itself, so WebKit processes of the same
 // responsible process that appeared after the launch count too.
-function ownedProcesses(probe, appPid, before, appOwner) {
+function ownedProcesses(probe, appPid, before, appOwner, webKit) {
   const ps = processList();
   const owners = new Map(
     spawnSync(
@@ -213,7 +240,11 @@ function ownedProcesses(probe, appPid, before, appOwner) {
         p.pid === appPid ||
         p.ppid === appPid ||
         owners.get(p.pid) === appPid ||
-        (isWebKit(p) && !before.has(p.pid) && owner !== undefined && owners.get(p.pid) === owner),
+        (webKit &&
+          isWebKit(p) &&
+          !before.has(p.pid) &&
+          owner !== undefined &&
+          owners.get(p.pid) === owner),
     ),
   };
 }
@@ -254,17 +285,45 @@ async function main() {
   const config = {
     runDir,
     steps: opts.steps,
+    mode: opts.mode,
     adWaitMs: Number(opts['ad-wait']),
     dwellMs: Number(opts.dwell),
+    liveObserveMs: Number(opts['live-observe']),
+    privacyWindow: !opts['no-privacy-window'],
+    ...(opts.stills ? { stillsDir: resolve(opts.stills) } : {}),
   };
   env.OW_SHOWCASE_E2E_CONFIG = JSON.stringify(config);
   const meta = {
     runId,
     host: opts.host,
     steps: opts.steps,
-    mode: 'test',
+    mode: opts.mode,
     startedAt: new Date().toISOString(),
   };
+  // Live: the budget, reserved before the launch.
+  const plan = live ? LIVE_STEPS[opts.steps] : null;
+  const modeArgs = live ? [] : ['--test-ad'];
+  const routeArgs = plan ? [`--showcase-page=${plan.route}`] : [];
+  if (plan) {
+    const used = liveTotal();
+    const cap = Number(opts['live-cap']);
+    if (used + plan.loads > cap)
+      fail(`live budget: ${used} loads used, ${plan.loads} planned, cap ${cap}`);
+    appendFileSync(
+      ledgerFile,
+      JSON.stringify({
+        kind: 'reserve',
+        runId,
+        host: opts.host,
+        steps: opts.steps,
+        planned: plan.loads,
+        usedBefore: used,
+        at: new Date().toISOString(),
+      }) + '\n',
+    );
+    meta.live = { planned: plan.loads, usedBefore: used, cap };
+    log(`LIVE run ${runId}: ${plan.loads} planned loads, ${used} used before, cap ${cap}`);
+  }
   let exe;
   let args;
   if (tauri) {
@@ -275,12 +334,20 @@ async function main() {
       OW_TAURI_LAB_INVISIBLE: '1',
       OW_TAURI_LAB_PACKAGE_JSON: join(stageDir, 'package.json'),
     });
-    args = ['--test-ad'];
+    args = [...modeArgs, ...routeArgs];
     meta.exe = exe;
   } else {
     const prepared = prepareElectron();
     exe = prepared.exe;
-    args = ['--test-ad', '--use-mock-keychain', prepared.appDir];
+    args = [
+      ...modeArgs,
+      ...routeArgs,
+      '--use-mock-keychain',
+      // The live fill check reads the impression pings from the net log.
+      `--log-net-log=${join(runDir, 'netlog.json')}`,
+      '--net-log-capture-mode=Default',
+      prepared.appDir,
+    ];
     meta.owElectron = prepared.version;
   }
   writeFileSync(join(runDir, 'meta.json'), JSON.stringify(meta, null, 2));
@@ -291,7 +358,7 @@ async function main() {
       .map((p) => p.pid),
   );
   let appOwner;
-  log(`launching ${opts.host} (test ads, ${opts.steps})`);
+  log(`launching ${opts.host} (${live ? 'LIVE' : 'test'} ads, ${opts.steps})`);
   const child = spawn(exe, args, {
     env,
     cwd: runDir,
@@ -308,7 +375,7 @@ async function main() {
   });
   running.add(mon);
   const ownerProbe = setTimeout(() => {
-    appOwner ??= ownedProcesses(procOwner, child.pid, webKitBefore, appOwner).owner;
+    appOwner ??= ownedProcesses(procOwner, child.pid, webKitBefore, appOwner, tauri).owner;
   }, 2000);
   // The invisible app must never be the frontmost app.
   let everFront = false;
@@ -397,7 +464,7 @@ async function main() {
     runId,
     host: opts.host,
     steps: opts.steps,
-    mode: 'test',
+    mode: opts.mode,
     verdict,
     exit,
     safetyKill,
@@ -416,11 +483,28 @@ async function main() {
   if (left) log(`WARNING: processes left in the app's group: ${left}`);
   let owned = [];
   for (let i = 0; i < 20; i += 1) {
-    owned = ownedProcesses(procOwner, child.pid, webKitBefore, appOwner).procs;
+    owned = ownedProcesses(procOwner, child.pid, webKitBefore, appOwner, tauri).procs;
     if (!owned.length) break;
     await new Promise((ok) => setTimeout(ok, 500));
   }
   summary.leftProcesses = owned;
+  summary.stepsRun = steps.length;
+  summary.export = records.find((r) => r.kind === 'export') ?? null;
+  summary.stills = records.filter((r) => r.kind === 'still').length;
+  summary.ads = adSummary(records, runDir, tauri);
+  if (plan) {
+    // One ledger line per live ad load (each guest the app mounted).
+    let n = liveTotal();
+    for (const cid of summary.ads.mounted) {
+      n += 1;
+      appendFileSync(
+        ledgerFile,
+        JSON.stringify({ kind: 'load', runId, host: opts.host, cid, count: n }) + '\n',
+      );
+      log(`live load ${n}: ${runId} ${opts.host} ${cid}`);
+    }
+    summary.live = { planned: plan.loads, loads: summary.ads.mounted.length, total: n };
+  }
   writeFileSync(join(runDir, 'summary.json'), JSON.stringify(summary, null, 2));
   log(JSON.stringify(summary));
   if (owned.length)
@@ -431,8 +515,60 @@ async function main() {
     !everFront &&
     !owned.length &&
     summary.started &&
-    summary.displayAdLoaded;
+    !summary.fatal.length &&
+    (live || summary.displayAdLoaded);
   process.exitCode = ok ? 0 : 1;
+}
+
+/** Live ad loads logged so far (the ledger's `load` lines, else reservations). */
+function liveTotal() {
+  const lines = readJsonl(ledgerFile);
+  const loads = lines.filter((l) => l.kind === 'load').length;
+  // A reservation without its loads (a run that died) counts as planned.
+  const done = new Set(lines.filter((l) => l.kind === 'load').map((l) => l.runId));
+  const open = lines
+    .filter((l) => l.kind === 'reserve' && !done.has(l.runId) && l.runId !== runId)
+    .reduce((n, l) => n + l.planned, 0);
+  return loads + open;
+}
+
+/**
+ * Per slot: the guests mounted (did-attach), the fill events, and the
+ * impression pings the ad pages sent (ow-electron: the net log; ow-tauri:
+ * the lab's guest probes).
+ */
+function adSummary(records, dir, tauriHost) {
+  const events = records.flatMap((r) => (r.kind === 'step' ? r.events : []));
+  const perCid = {};
+  for (const e of events) {
+    if (e.cid === 'app' || e.name.startsWith('control:')) continue;
+    perCid[e.cid] ??= {};
+    perCid[e.cid][e.name] = (perCid[e.cid][e.name] ?? 0) + 1;
+  }
+  const mounted = Object.entries(perCid)
+    .filter(([, c]) => c['did-attach'])
+    .map(([cid]) => cid);
+  let urls = [];
+  if (tauriHost) {
+    for (const f of readdirSync(dir).filter((n) => /^guest-\d+-.*\.json$/.test(n))) {
+      try {
+        const probe = JSON.parse(readFileSync(join(dir, f), 'utf8'));
+        urls.push(...(probe.labResources ?? []));
+      } catch {
+        // A partial probe file.
+      }
+    }
+  } else if (existsSync(join(dir, 'netlog.json'))) {
+    const text = readFileSync(join(dir, 'netlog.json'), 'utf8');
+    urls = [...text.matchAll(/"url":"([^"]+)"/g)].map((m) => m[1]);
+  }
+  const distinct = (re) => new Set(urls.filter((u) => re.test(u))).size;
+  return {
+    mounted,
+    perCid,
+    impressionPings: distinct(/owads_scl_impression/),
+    gptAdRequests: distinct(/\/gampad\/ads/),
+  };
 }
 
 main().catch((error) => {

@@ -25,7 +25,7 @@ doctest = false
 # The invisible lab (`e2e/README.md`): the plugin's lab trace and invisible
 # windows, a lab manifest at run time and the driver's commands. Off by
 # default; never enable it in a shipped build.
-lab = ["tauri-plugin-overwolf/lab"]
+lab = ["tauri-plugin-overwolf/lab", "dep:objc2", "dep:block2", "dep:objc2-foundation"]
 
 [dependencies]
 tauri = { version = "2.12.1", features = ["unstable"] }
@@ -34,13 +34,22 @@ tauri-plugin-single-instance = "2.5.2"
 serde_json = "1"
 tauri-plugin-overwolf = { path = "../../../crates/tauri-plugin-overwolf" }
 
+# The lab's native probes (src/lab/native.rs, macOS): hit test and
+# in-process stills. Versions as in the plugin; only with the `lab` feature.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6.5", optional = true }
+block2 = { version = "0.6.2", optional = true }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSGeometry"], optional = true }
+
 [build-dependencies]
 tauri-build = { version = "2.7.1", features = [] }
 tauri-plugin-overwolf = { path = "../../../crates/tauri-plugin-overwolf", default-features = false }
 
 [lints.rust]
 missing_docs = "deny"
-unsafe_code = "forbid"
+# Only the lab's native probes (src/lab/native.rs, feature `lab`) call
+# Objective-C.
+unsafe_code = "deny"
 rust_2018_idioms = { level = "warn", priority = -1 }
 
 [lints.clippy]

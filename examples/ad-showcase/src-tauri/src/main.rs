@@ -29,8 +29,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
     #[cfg(feature = "lab")]
-    let builder =
-        builder.invoke_handler(tauri::generate_handler![lab::e2e_config, lab::e2e_record]);
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        lab::e2e_config,
+        lab::e2e_record,
+        lab::e2e_probe_guests,
+        lab::e2e_native_probe,
+        lab::e2e_still
+    ]);
     // An invisible lab app never comes to the front: activated at launch, it
     // would take the keyboard from the app the user is typing in.
     #[cfg(all(feature = "lab", target_os = "macos"))]
