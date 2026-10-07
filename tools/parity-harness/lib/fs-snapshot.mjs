@@ -36,8 +36,26 @@ export function snapshotDir(root, outDir) {
   return result;
 }
 
+/**
+ * Whether `error` is a file that went away or is held open while the
+ * snapshot reads it: on Windows the WebView2 browser processes outlive the
+ * app for a moment and remove or lock their files (`lockfile`) meanwhile.
+ * @param {unknown} error
+ */
+export function isTransientFsError(error) {
+  const code = /** @type {{code?: unknown}} */ (error)?.code;
+  return code === 'ENOENT' || code === 'EBUSY' || code === 'EPERM';
+}
+
 function walk(root, dir, outDir, files) {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch (error) {
+    if (isTransientFsError(error)) return;
+    throw error;
+  }
+  for (const entry of entries) {
     const full = join(dir, entry.name);
     const rel = relative(root, full);
     if (entry.isDirectory()) {
@@ -49,15 +67,26 @@ function walk(root, dir, outDir, files) {
       continue;
     }
     if (!entry.isFile()) continue;
-    const stat = statSync(full);
+    let stat;
+    try {
+      stat = statSync(full);
+    } catch (error) {
+      if (isTransientFsError(error)) continue;
+      throw error;
+    }
     const record = { path: rel, size: stat.size, mtime: stat.mtime.toISOString(), copied: false };
     if (stat.size <= COPY_LIMIT) {
-      const bytes = readFileSync(full);
-      record.sha256 = createHash('sha256').update(bytes).digest('hex');
-      const target = join(outDir, 'files', rel);
-      mkdirSync(dirname(target), { recursive: true });
-      copyFileSync(full, target);
-      record.copied = true;
+      try {
+        const bytes = readFileSync(full);
+        record.sha256 = createHash('sha256').update(bytes).digest('hex');
+        const target = join(outDir, 'files', rel);
+        mkdirSync(dirname(target), { recursive: true });
+        copyFileSync(full, target);
+        record.copied = true;
+      } catch (error) {
+        if (!isTransientFsError(error)) throw error;
+        // Listed with its size, not copied: it was locked or went away.
+      }
     }
     files.push(record);
   }

@@ -7,6 +7,7 @@ import { after, test } from 'node:test';
 
 import { classCounts, durationOf, LAB_SCENARIOS, shard, stateDirs } from './ci/windows-lab.mjs';
 import { adformatFacts, compositeAt, guestMuted } from './lib/adformat-report.mjs';
+import { isTransientFsError, snapshotDir } from './lib/fs-snapshot.mjs';
 import { labRequests, windowsDebugger } from './lib/tauri-host.mjs';
 import { audioChecks, labLayersChecks, topLabel, windowsChecks } from './lib/windows-checks.mjs';
 
@@ -275,48 +276,39 @@ test('a hang is dumped with the Windows SDK debugger when the runner has it', ()
   );
 });
 
-test('a consent window created blank and then navigated counts as its page', () => {
+test('a consent window created blank counts as the page it starts loading', () => {
   // Windows lab: the startup consent window's `created` record is
-  // `about:blank`; the page it loads arrives as a navigation record.
+  // `about:blank`; its page shows up when it starts loading (a navigation
+  // record may or may not come first).
   const page = 'https://content.overwolf.com/cmp/ow-cmp-v2.html?clear=true';
-  const dir = run('cmp-navigated', {
+  const dir = run('cmp-loaded', {
     'wc-events.jsonl': [
       {
         t: 1,
         wall: 1,
-        kind: 'navigation',
+        kind: 'did-start-loading',
         label: 'ow-main',
         type: 'main',
         url: 'http://tauri.localhost/',
-        allowed: true,
       },
-      {
-        t: 2,
-        wall: 2,
-        kind: 'navigation',
-        label: 'ow-cmp-startup',
-        type: 'cmp',
-        url: page,
-        allowed: true,
-      },
-      { t: 3, wall: 3, kind: 'created', label: 'ow-cmp-startup', type: 'cmp', url: 'about:blank' },
+      { t: 2, wall: 2, kind: 'created', label: 'ow-cmp-startup', type: 'cmp', url: 'about:blank' },
+      { t: 3, wall: 3, kind: 'did-start-loading', label: 'ow-cmp-startup', type: 'cmp', url: page },
       {
         t: 4,
         wall: 4,
         kind: 'navigation',
         label: 'ow-cmp',
         type: 'cmp',
-        url: 'data:text/html,x',
-        allowed: true,
+        url: 'https://example.com/',
+        allowed: false,
       },
       {
         t: 5,
         wall: 5,
-        kind: 'navigation',
+        kind: 'did-start-loading',
         label: 'ow-cmp',
         type: 'cmp',
-        url: 'https://example.com/',
-        allowed: false,
+        url: 'data:text/html,x',
       },
     ],
   });
@@ -324,7 +316,7 @@ test('a consent window created blank and then navigated counts as its page', () 
     labRequests(dir).map((r) => [r.requestType, r.url, r.label]),
     [['main frame', page, 'ow-cmp-startup']],
   );
-  // Captures from before navigation records name the page on creation.
+  // Captures without load records name the page on creation.
   const old = run('cmp-created', {
     'wc-events.jsonl': [
       { t: 1, wall: 1, kind: 'created', label: 'ow-cmp', type: 'cmp', url: page },
@@ -334,4 +326,19 @@ test('a consent window created blank and then navigated counts as its page', () 
     labRequests(old).map((r) => r.url),
     [page],
   );
+});
+
+test('a snapshot skips files that vanish or are locked while it reads them', () => {
+  const dir = join(root, 'snap');
+  mkdirSync(join(dir, 'EBWebView'), { recursive: true });
+  writeFileSync(join(dir, 'EBWebView', 'kept.json'), '{}');
+  const snap = snapshotDir(dir, join(root, 'snap-out'));
+  assert.deepEqual(
+    snap.files.map((f) => f.path.replaceAll('\\', '/')),
+    ['EBWebView/kept.json'],
+  );
+  for (const code of ['ENOENT', 'EBUSY', 'EPERM'])
+    assert.equal(isTransientFsError(Object.assign(new Error(code), { code })), true);
+  assert.equal(isTransientFsError(Object.assign(new Error('EACCES'), { code: 'EACCES' })), false);
+  assert.equal(isTransientFsError(null), false);
 });
