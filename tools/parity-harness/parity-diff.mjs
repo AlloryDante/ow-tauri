@@ -64,6 +64,25 @@ export function normalise(text) {
   );
 }
 
+/**
+ * Whether `tauri` is ow-electron's user agent `electron` under the labelling
+ * rule (CONTRACT E.1): the same platform part and app token
+ * (`<PNNS>/<ver>`), a `Tauri/<tv>` token and no `Electron/` token. The
+ * engine part may differ (WebKit); anything else is not the host label.
+ */
+export function labelledUserAgent(electron, tauri) {
+  if (typeof electron !== 'string' || typeof tauri !== 'string') return false;
+  const platform = /^Mozilla\/5\.0 \([^)]*\)/.exec(electron)?.[0];
+  const app = /\s(\S+\/\S+)\s+Chrome\//.exec(electron)?.[1];
+  if (!platform || !app) return false;
+  return (
+    tauri.startsWith(platform) &&
+    tauri.split(' ').includes(app) &&
+    /(?:^|\s)Tauri\/\d+\.\d+\.\d+(?:\s|$)/.test(tauri) &&
+    !tauri.includes('Electron/')
+  );
+}
+
 /** Fields whose whole value is the host version (CONTRACT 0). */
 const VERSION_FIELDS = new Set(['owver', 'owVersion', 'oweVersion']);
 
@@ -441,7 +460,10 @@ const RULES = [
     why: 'HTTP/2 pseudo-header order is best effort (CONTRACT E.1); the h2 crate fixes it',
   },
   {
-    when: (d) => d.section === 'host-request' && d.field === 'header:user-agent',
+    when: (d) =>
+      d.section === 'host-request' &&
+      d.field === 'header:user-agent' &&
+      labelledUserAgent(d.electron, d.tauri),
     cls: 'intended:host-label',
     why: "UA keeps the platform engine, adds Tauri/<tv> and on WKWebView Safari's product tokens (CONTRACT E.1, PARITY user agent)",
   },
@@ -470,7 +492,10 @@ const RULES = [
     why: 'the lab polls the WebKit cookie store; two cookies written within one poll keep store order',
   },
   {
-    when: (d) => d.section === 'guest' && ['userAgent', 'cookie-order'].includes(d.field),
+    when: (d) =>
+      d.section === 'guest' &&
+      (d.field === 'cookie-order' ||
+        (d.field === 'userAgent' && labelledUserAgent(d.electron, d.tauri))),
     cls: 'intended:os-gap',
     why: 'the guest engine is WebKit (CONTRACT D.1); WebKit orders document.cookie by its store',
   },
@@ -491,9 +516,10 @@ const RULES = [
   {
     when: (d) =>
       d.section === 'element-event' &&
-      /\s(display_ad_loaded|impression|play|player_loaded|pause|ended|complete)$/.test(d.key),
+      /\s(display_ad_loaded|impression|play|player_loaded|pause|ended|complete)$/.test(d.key) &&
+      !(d.electron > 0 && d.tauri === 0),
     cls: 'variance',
-    why: 'ad-driven events depend on the ads served',
+    why: "ad-driven counts depend on the ads served and on playback speed (ow-electron's opacity-0 harness window plays the 15 s test video about 2.5 times slower, so fewer complete/impression cycles); an event ow-electron reports and ow-tauri never does stays a bug",
   },
   {
     when: (d) =>
@@ -683,6 +709,13 @@ function compareHostRequests(e, t, out, tolerance, burst) {
       if (normalise(v) !== normalise(other)) push(`header:${n}`, v, other);
     }
     if (stable(a.cookies) !== stable(b.cookies)) push('cookies', a.cookies, b.cookies);
+    if (b.status === null && a.status !== null) {
+      // The lab records every completed request; none means it failed.
+      push('no-response', a.status, null, {
+        why: 'ow-electron got a response, ow-tauri none (failed or never completed)',
+      });
+      continue;
+    }
     if (a.status !== b.status && b.status !== null) {
       push('status', a.status, b.status, {
         revalidated: /\b304\b/.test(a.status ?? '') && /\b200\b/.test(b.status),
