@@ -307,7 +307,7 @@ async function main() {
     quitStyle: opts['quit-style'],
     disableAnalytics: opts['disable-analytics'],
     packages: opts.packages ? opts.packages.split(',') : [],
-    window: windowSize(opts.layouts),
+    window: scenarioConfig.window ?? windowSize(opts.layouts),
     windowTitle: displayName(pkg),
     windowName: opts['window-name'],
     host: opts.host,

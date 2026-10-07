@@ -655,6 +655,32 @@ module.exports = function install(ctx) {
         .catch((e) => record('events.jsonl', { kind: 'cookie-set-failed', error: String(e) }));
       record('events.jsonl', { kind: 'cookie-set', name: details.name });
     },
+    async 'guest-eval'({ code, label }) {
+      // Runs in every ad guest's main frame (harness-own, not in ipc.jsonl).
+      for (const wc of guests()) {
+        const result = await ownExec(wc, code).catch((e) => ({ error: String(e) }));
+        record('events.jsonl', {
+          kind: 'guest-eval',
+          label,
+          webContentsId: wc.id,
+          result: safe(result),
+        });
+      }
+    },
+    async 'hook-guest-frames'({ label }) {
+      // Listens for postMessages arriving in the guest's same-origin child
+      // frames (the ad library frame) and logs them to the guest console
+      // with a __PARITYF__ prefix (console.jsonl). Observation only.
+      for (const wc of guests()) {
+        const result = await ownExec(wc, GUEST_FRAME_HOOK).catch((e) => ({ error: String(e) }));
+        record('events.jsonl', {
+          kind: 'hook-guest-frames',
+          label,
+          webContentsId: wc.id,
+          result: safe(result),
+        });
+      }
+    },
     async 'probe-guests'({ label }) {
       await probeAllGuests(label);
     },
@@ -823,6 +849,34 @@ module.exports = function install(ctx) {
     describeWindow,
   };
 };
+
+// Installed by the 'hook-guest-frames' action: every same-origin frame below
+// the ad guest's top frame gets a capturing 'message' listener (re-checked
+// every second for new frames). Messages are logged as __PARITYF__<json>.
+const GUEST_FRAME_HOOK = `(() => {
+  const summarize = (d) => { try { return typeof d === 'string' ? d.slice(0, 1500) : JSON.stringify(d).slice(0, 1500); } catch (e) { return String(d).slice(0, 200); } };
+  const hook = (w, path) => {
+    try {
+      if (w.__parityFrameHooked) return 0;
+      w.__parityFrameHooked = true;
+      w.addEventListener('message', (e) => {
+        try { console.log('__PARITYF__' + JSON.stringify({ path, href: w.location.href.slice(0, 200), origin: e.origin, fromParent: e.source === w.parent, data: summarize(e.data) })); } catch (err) {}
+      }, true);
+      return 1;
+    } catch (e) { return 0; }
+  };
+  const walk = (w, path) => {
+    let n = 0;
+    for (let i = 0; i < w.frames.length; i++) {
+      const f = w.frames[i];
+      try { void f.location.href; } catch (e) { continue; }
+      n += hook(f, path + '/' + i) + walk(f, path + '/' + i);
+    }
+    return n;
+  };
+  if (!window.__parityFrameTimer) window.__parityFrameTimer = setInterval(() => walk(window, ''), 1000);
+  return walk(window, '');
+})()`;
 
 function safeGet(fn) {
   try {

@@ -383,6 +383,14 @@ const actions = {
     await invoke('harness_probe_guests', { phase: label });
   },
   introspect: unsupported('introspect', 'Electron internals'),
+  'guest-eval': unsupported(
+    'guest-eval',
+    'ad guests are native webviews; no harness eval channel yet',
+  ),
+  'hook-guest-frames': unsupported(
+    'hook-guest-frames',
+    'ad guests are native webviews; no harness eval channel yet',
+  ),
   listeners: async ({ label }) => {
     const out = { label, app: app.eventNames().map((n) => [String(n), app.listenerCount(n)]) };
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -554,6 +562,7 @@ async function startWindowAndActions() {
     layouts: config.layouts.length ? config.layouts.join(',') : 'none',
     mode: config.mode,
     ...(config.elementAttrs ? { attrs: JSON.stringify(config.elementAttrs) } : {}),
+    ...(config.elementSpec ? { spec: JSON.stringify(config.elementSpec) } : {}),
   });
   await mainWindow.loadFile('index.html', { search: query.toString() });
   runActions();

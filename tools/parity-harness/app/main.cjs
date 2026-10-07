@@ -1054,6 +1054,7 @@ async function startWindowAndActions() {
     layouts: config.layouts.length ? config.layouts.join(',') : 'none',
     mode: config.mode,
     ...(config.elementAttrs ? { attrs: JSON.stringify(config.elementAttrs) } : {}),
+    ...(config.elementSpec ? { spec: JSON.stringify(config.elementSpec) } : {}),
   });
   await mainWindow.loadFile(path.join(__dirname, 'index.html'), { search: query.toString() });
   scenario.runActions();
