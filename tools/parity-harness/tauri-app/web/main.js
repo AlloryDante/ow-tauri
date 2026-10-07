@@ -496,6 +496,8 @@ const actions = {
       points: resolved,
       snapshot: Boolean(snapshot),
       click: config.mode === 'test' ? (click ?? null) : null,
+      // Windows: the window copies are kept in the run as hit-<label>-*.bmp.
+      capture: `hit-${String(label).replace(/[^A-Za-z0-9_-]/g, '-')}`,
     }).catch((e) => ({ error: String(e) }));
     record('events.jsonl', { kind: 'hit-probe', label, host: 'tauri', dom, native });
   },

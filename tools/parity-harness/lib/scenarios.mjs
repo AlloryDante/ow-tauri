@@ -860,12 +860,14 @@ export const SCENARIOS = {
 
   audio: {
     describe:
-      'L5: a 400x300 standard slot and a 400x300 rewarded slot; the app calls setAudioMuted(false) on both at 10 s, opts in to the reward at 15 s, and calls setAudioMuted(true) at 45 s. The mute calls each host makes on each guest (ipc.jsonl).',
+      "L5: a 400x300 standard slot and a 400x300 rewarded slot; the app calls setAudioMuted(false) on both at 10 s, opts in to the reward at 15 s, and calls setAudioMuted(true) at 45 s. The mute calls each host makes on each guest (ipc.jsonl), and each guest's mute state read back at 5, 12 and 47 s (hit probes without points; ow-tauri reads it natively on Windows).",
     defaults: { mode: 'test', present: 'transparent', layout: '400x300,400x300', duration: 60 },
     config: {
       elementAttrs: [{}, { adstyle: 'rewarded-ad;' }],
       actions: [
+        { at: 5000, do: 'hit-probe', label: 'mute-initial', points: [] },
         muteAll(10000, false),
+        { at: 12000, do: 'hit-probe', label: 'mute-after-unmute', points: [] },
         {
           at: 15000,
           do: 'page-eval',
@@ -880,6 +882,7 @@ export const SCENARIOS = {
         },
         { at: 30000, do: 'probe-guests', label: 'audio+30s' },
         muteAll(45000, true),
+        { at: 47000, do: 'hit-probe', label: 'mute-after-mute', points: [] },
       ],
     },
   },

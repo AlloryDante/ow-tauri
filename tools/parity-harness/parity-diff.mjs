@@ -1464,6 +1464,14 @@ export function compareAdformats(e, t, out) {
           ambiguous: x.colour === 'other' || y.colour === 'other' || AD_CONTENT_POINTS.has(name),
         });
     }
+    if (a.guestMuted && b.guestMuted && stable(a.guestMuted) !== stable(b.guestMuted))
+      out.push({
+        section: 'adformat-probe',
+        key: label,
+        field: 'guest muted',
+        electron: a.guestMuted,
+        tauri: b.guestMuted,
+      });
     if (
       stable(a.performance.map((p) => p.pointerEvents)) !==
       stable(b.performance.map((p) => p.pointerEvents))

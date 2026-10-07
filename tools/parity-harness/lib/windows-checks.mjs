@@ -1,0 +1,217 @@
+// Windows lab checks (AD-FORMATS-SPEC section 7) from one ow-electron run
+// and one ow-tauri run of the same scenario on the same Windows runner:
+//
+//   L1-W  transparency: the composed ow-tauri window (PrintWindow) shows the
+//         app's own colour where a guest has no content, as ow-electron's
+//         window does (lab-layers: the red container under the ready
+//         reward slot; the interstitial's dim over the app control).
+//   L2    z-order: the performance guest's container is the top child
+//         window once it is mounted, and stays on top after a standard slot
+//         is remounted (lab-layers).
+//   L3-W  pass-through: while the interstitial loads its container has an
+//         empty window region and a click at the app control reaches the
+//         app (one SendInput click, test mode); after its first
+//         display_ad_loaded the region is gone (NULL) and the click is
+//         refused because it would reach the ad (lab-layers).
+//   L5    mute: each guest's mute state read back natively (WebView2
+//         IsMuted) equals ow-electron's isAudioMuted() at the same moments
+//         (audio).
+//
+// Each check returns {id, scenario, pass, detail}. `pass` is null when the
+// run has nothing to judge (for example no display_ad_loaded before the
+// probe).
+
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { colourClass, compositeAt } from './adformat-report.mjs';
+
+function readJsonl(file) {
+  if (!existsSync(file)) return [];
+  return readFileSync(file, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line)];
+      } catch {
+        return [];
+      }
+    });
+}
+
+/** Hit probes of a run by label. */
+export function probesOf(runDir) {
+  const out = {};
+  for (const e of readJsonl(join(runDir, 'events.jsonl'))) {
+    if (e.kind === 'hit-probe') out[e.label] = e;
+  }
+  return out;
+}
+
+/** The labels of the run's performance guests (those mounted pass-through). */
+export function performanceGuests(runDir) {
+  return [
+    ...new Set(
+      readJsonl(join(runDir, 'wc-events.jsonl'))
+        .filter((e) => e.kind === 'passthrough' && e.on === true)
+        .map((e) => e.label),
+    ),
+  ];
+}
+
+/** The top labelled child window in a native order (bottom to top). */
+export function topLabel(probe) {
+  const order = (probe?.native?.order ?? []).filter((o) => o.label && !o.hidden);
+  return order.length ? order[order.length - 1].label : null;
+}
+
+/** Colour class at `point` in a probe (composited window). */
+export function colourAt(probe, point) {
+  const composite = probe ? compositeAt(probe) : null;
+  return composite ? colourClass(composite[point]) : null;
+}
+
+/** The label a native hit test at `point` reached. */
+function nativeHit(probe, point) {
+  return probe?.native?.hits?.find((h) => h.name === point)?.target?.label ?? null;
+}
+
+/**
+ * L1-W, L2, L3-W for a lab-layers pair.
+ * @param {string} electronDir
+ * @param {string} tauriDir
+ */
+export function labLayersChecks(electronDir, tauriDir) {
+  const e = probesOf(electronDir);
+  const t = probesOf(tauriDir);
+  const perf = performanceGuests(tauriDir);
+  const checks = [];
+
+  // L1-W: the ready reward slot is transparent over its red container,
+  // before the interstitial; the app control under the interstitial's dim.
+  for (const [label, point] of [
+    ['early', 'reward-slot'],
+    ['before-perf', 'reward-slot'],
+    ['perf-loaded', 'control'],
+  ]) {
+    const want = colourAt(e[label], point);
+    const got = colourAt(t[label], point);
+    const screen = t[label]?.native?.composite?.screen?.samples?.find((s) => s.name === point);
+    checks.push({
+      id: 'L1-W',
+      scenario: 'lab-layers',
+      probe: `${label} ${point}`,
+      pass: want && got ? want === got : null,
+      detail: {
+        electron: want,
+        tauri: got,
+        tauriScreen: screen ? colourClass(screen.rgba) : null,
+        guestBackgrounds: Object.fromEntries(
+          Object.entries(t[label]?.native?.webviews ?? {})
+            .filter(([l]) => !/^bw-/.test(l))
+            .map(([l, f]) => [l, f.backgroundArgb ?? null]),
+        ),
+      },
+    });
+  }
+
+  // L2: the performance guest is the top child window.
+  for (const label of ['perf-loading', 'perf-loaded', 'after-remount']) {
+    const top = topLabel(t[label]);
+    checks.push({
+      id: 'L2',
+      scenario: 'lab-layers',
+      probe: label,
+      pass: perf.length && t[label] ? perf.includes(top) : null,
+      detail: { performanceGuests: perf, top, order: t[label]?.native?.order ?? null },
+    });
+  }
+
+  // L3-W: empty region and a delivered click while loading; no region and
+  // a refused click after the first display_ad_loaded.
+  const region = (label) =>
+    perf.map((g) => t[label]?.native?.webviews?.[g]?.region?.kind ?? null).find(Boolean) ?? null;
+  const loading = t['perf-loading'];
+  const loaded = t['perf-loaded'];
+  const clicks = readJsonl(join(tauriDir, 'page-events.jsonl')).filter(
+    (p) => p.kind === 'app-click',
+  ).length;
+  checks.push({
+    id: 'L3-W',
+    scenario: 'lab-layers',
+    probe: 'perf-loading',
+    pass: loading
+      ? region('perf-loading') === 'empty' &&
+        /^bw-/.test(nativeHit(loading, 'control') ?? '') &&
+        loading.native?.click?.sent === true &&
+        clicks >= 1
+      : null,
+    detail: {
+      region: region('perf-loading'),
+      hit: nativeHit(loading, 'control'),
+      click: loading?.native?.click ?? null,
+      appClicksReceived: clicks,
+    },
+  });
+  const adLoaded = readJsonl(join(tauriDir, 'wc-events.jsonl')).some(
+    (x) => x.kind === 'passthrough' && x.on === false,
+  );
+  checks.push({
+    id: 'L3-W',
+    scenario: 'lab-layers',
+    probe: 'perf-loaded',
+    pass:
+      loaded && adLoaded
+        ? region('perf-loaded') === 'none' &&
+          perf.includes(nativeHit(loaded, 'control')) &&
+          loaded.native?.click?.sent === false
+        : null,
+    detail: {
+      displayAdLoaded: adLoaded,
+      region: region('perf-loaded'),
+      hit: nativeHit(loaded, 'control'),
+      click: loaded?.native?.click ?? null,
+    },
+  });
+  return checks;
+}
+
+/**
+ * L5 for an audio pair: each guest's mute state per probe.
+ * @param {string} electronDir
+ * @param {string} tauriDir
+ */
+export function audioChecks(electronDir, tauriDir) {
+  const e = probesOf(electronDir);
+  const t = probesOf(tauriDir);
+  const tauriMuted = (p) => {
+    const states = Object.entries(p?.native?.webviews ?? {})
+      .filter(([label]) => !/^bw-/.test(label))
+      .map(([, f]) => f.muted);
+    return states.length && states.every((m) => typeof m === 'boolean') ? states.sort() : null;
+  };
+  return ['mute-initial', 'mute-after-unmute', 'mute-after-mute'].map((label) => {
+    const want = Array.isArray(e[label]?.guestMuted) ? [...e[label].guestMuted].sort() : null;
+    const got = tauriMuted(t[label]);
+    return {
+      id: 'L5',
+      scenario: 'audio',
+      probe: label,
+      pass: want && got ? JSON.stringify(want) === JSON.stringify(got) : null,
+      detail: { electron: want, tauri: got },
+    };
+  });
+}
+
+/**
+ * The Windows checks that apply to `scenario`.
+ * @param {string} scenario
+ * @param {string} electronDir
+ * @param {string} tauriDir
+ */
+export function windowsChecks(scenario, electronDir, tauriDir) {
+  if (scenario === 'lab-layers') return labLayersChecks(electronDir, tauriDir);
+  if (scenario === 'audio') return audioChecks(electronDir, tauriDir);
+  return [];
+}

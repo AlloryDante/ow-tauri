@@ -13,7 +13,8 @@
 //!
 //! On macOS it also answers the lab checks of the ad formats (L1-L3) from
 //! the window's native view tree (`native.rs`): no screen capture, and no
-//! input to an ad guest.
+//! input to an ad guest. On Windows (the CI lab) `native_win.rs` answers
+//! them from the webviews' container windows (L1-W, L2, L3-W, L5).
 //!
 //! The plugin is built with its `lab` feature: `OW_TAURI_LAB_DIR` turns on its
 //! trace and `OW_TAURI_LAB_INVISIBLE=1` makes every window invisible before it
@@ -32,6 +33,17 @@ use tauri_plugin_overwolf::OverwolfExt;
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code, reason = "Objective-C calls of the native lab probes")]
 mod native;
+#[cfg(windows)]
+#[allow(
+    unsafe_code,
+    reason = "Win32 and WebView2 calls of the native lab probes"
+)]
+mod native_win;
+
+#[cfg(target_os = "macos")]
+use native::Point as ProbePoint;
+#[cfg(windows)]
+use native_win::Point as ProbePoint;
 
 /// The run configuration written by `run.mjs` (`PARITY_HARNESS_CONFIG`).
 struct Harness {
@@ -233,11 +245,11 @@ fn window_views<R: Runtime>(
 }
 
 /// Parses `[{name, x, y}]`.
-#[cfg(target_os = "macos")]
-fn points(raw: &[Value]) -> Vec<native::Point> {
+#[cfg(any(target_os = "macos", windows))]
+fn points(raw: &[Value]) -> Vec<ProbePoint> {
     raw.iter()
         .filter_map(|p| {
-            Some(native::Point {
+            Some(ProbePoint {
                 name: p.get("name")?.as_str()?.to_owned(),
                 x: p.get("x")?.as_f64()?,
                 y: p.get("y")?.as_f64()?,
@@ -246,13 +258,21 @@ fn points(raw: &[Value]) -> Vec<native::Point> {
         .collect()
 }
 
-/// Lab checks L1-L3 (macOS): the native view order of the window `window`,
-/// the background state of each webview, which view a click at each point
-/// would reach, then (`snapshot`) each webview's own rendering sampled at
-/// the points, and (`click`, test mode only) one click at the named point
+/// Lab checks L1-L3 (macOS) and L1-W, L2, L3-W, L5 (Windows): the native
+/// order of the window `window`'s webviews, the state of each webview
+/// (macOS: background; Windows: container region, background colour,
+/// mute), which webview a click at each point would reach, then
+/// (`snapshot`) the rendering sampled at the points (macOS: each webview's
+/// own snapshot; Windows: the composed window, saved as
+/// `<capture>-print.bmp` / `<capture>-screen.bmp` when `capture` names a
+/// file stem), and (`click`, test mode only) one click at the named point
 /// into the app's webview `embedder` when, and only when, the hit test
 /// names that webview. Other platforms answer `{unsupported: true}`.
 #[tauri::command]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "a Tauri command takes its arguments by name"
+)]
 async fn harness_native_probe<R: Runtime>(
     app: tauri::AppHandle<R>,
     window: String,
@@ -260,9 +280,11 @@ async fn harness_native_probe<R: Runtime>(
     points: Vec<Value>,
     snapshot: bool,
     click: Option<String>,
+    capture: Option<String>,
 ) -> Result<Value, String> {
     #[cfg(target_os = "macos")]
     {
+        let _ = capture;
         let test_mode = harness()?.config.get("mode").and_then(Value::as_str) == Some("test");
         tauri::async_runtime::spawn_blocking(move || {
             native_probe(
@@ -278,11 +300,89 @@ async fn harness_native_probe<R: Runtime>(
         .await
         .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
     {
-        let _ = (app, window, embedder, points, snapshot, click);
+        let test_mode = harness()?.config.get("mode").and_then(Value::as_str) == Some("test");
+        tauri::async_runtime::spawn_blocking(move || {
+            native_probe_windows(
+                &app,
+                &window,
+                &embedder,
+                &points,
+                snapshot,
+                click.as_deref(),
+                test_mode,
+                capture.as_deref(),
+            )
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        let _ = (app, window, embedder, points, snapshot, click, capture);
         Ok(json!({ "unsupported": true }))
     }
+}
+
+/// The Windows probe (see [`harness_native_probe`]). The webview facts are
+/// read on each webview's thread; the hit tests, the capture and the click
+/// work on window handles from this blocking thread.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments, reason = "mirrors the command's arguments")]
+fn native_probe_windows<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    window: &str,
+    embedder: &str,
+    raw_points: &[Value],
+    snapshot: bool,
+    click: Option<&str>,
+    test_mode: bool,
+    capture: Option<&str>,
+) -> Result<Value, String> {
+    let win = app
+        .get_window(window)
+        .ok_or_else(|| format!("no window {window}"))?;
+    let top = win.hwnd().map_err(|e| e.to_string())?.0 as isize;
+    let webviews = win.webviews();
+    let (tx, rx) = mpsc::channel();
+    for webview in &webviews {
+        let tx = tx.clone();
+        let label = webview.label().to_owned();
+        webview
+            .with_webview(move |pw| {
+                let _ = tx.send(native_win::webview_facts(&label, &pw.controller()));
+            })
+            .map_err(|e| e.to_string())?;
+    }
+    drop(tx);
+    let mut facts = Vec::new();
+    while facts.len() < webviews.len() {
+        facts.push(rx.recv_timeout(PROBE_WAIT).map_err(|e| e.to_string())?);
+    }
+    native_win::keep_on_top(top);
+    let pts = points(raw_points);
+    let mut out = native_win::inspect(top, embedder, &facts, &pts);
+    if let Some(name) = click {
+        out["click"] = match pts.iter().find(|p| p.name == name) {
+            // Synthetic input only in test mode (lab rule).
+            _ if !test_mode => json!({ "sent": false, "refused": "not in test mode" }),
+            None => json!({ "sent": false, "refused": "no such point" }),
+            Some(point) => native_win::click(top, embedder, &facts, point),
+        };
+    }
+    if snapshot {
+        let stem = capture
+            .and_then(|c| run_file(&format!("{c}.bmp"), ".bmp").ok())
+            .map(|p| p.with_extension(""));
+        out["composite"] = native_win::capture(
+            top,
+            facts.iter().find(|f| f.label == embedder),
+            &pts,
+            stem.as_deref(),
+        );
+    }
+    Ok(out)
 }
 
 #[cfg(target_os = "macos")]

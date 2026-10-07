@@ -2,7 +2,7 @@
 // (tauri-app/) in lab mode and turns the plugin's lab trace into the
 // ow-electron capture schema, so analyze.mjs and parity-diff.mjs read both.
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   appendFileSync,
   createWriteStream,
@@ -25,14 +25,15 @@ export function owTauriVersion() {
 /**
  * Environment of a Tauri run: home isolation (the plugin resolves appData
  * from $HOME, Cocoa from CFFIXED_USER_HOME), the lab switches and the
- * harness configuration.
- * @param {{home: string | null, runDir: string, configPath: string, packageJsonPath: string, mode: string}} o
+ * harness configuration. `invisible` (default) turns on the invisible lab
+ * windows; only a CI runner's desktop (`run.mjs --ci-visible`) goes without.
+ * @param {{home: string | null, runDir: string, configPath: string, packageJsonPath: string, mode: string, invisible?: boolean}} o
  */
-export function tauriEnv({ home, runDir, configPath, packageJsonPath, mode }) {
+export function tauriEnv({ home, runDir, configPath, packageJsonPath, mode, invisible = true }) {
   return {
     ...(home ? { HOME: home, CFFIXED_USER_HOME: home } : {}),
     OW_TAURI_LAB_DIR: runDir,
-    OW_TAURI_LAB_INVISIBLE: '1',
+    ...(invisible ? { OW_TAURI_LAB_INVISIBLE: '1' } : {}),
     ...(mode === 'test' ? { OW_TAURI_TEST_AD: '1' } : {}),
     PARITY_HARNESS_CONFIG: configPath,
     PARITY_HARNESS_PACKAGE_JSON: packageJsonPath,
@@ -43,6 +44,15 @@ export function tauriEnv({ home, runDir, configPath, packageJsonPath, mode }) {
 const running = new Set();
 
 function killTree(child, signal) {
+  if (process.platform === 'win32') {
+    // No process groups: end the app and every process it started
+    // (WebView2's browser and renderer processes).
+    spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    return;
+  }
   try {
     // Detached: the child leads its own process group.
     process.kill(-child.pid, signal);
@@ -110,7 +120,10 @@ export function launchTauri({ exe, env, logDir, timeoutMs, monitorFile, onSpawn 
   const child = spawn(exe, [], {
     env: { ...process.env, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
-    detached: true,
+    // Its own process group (killTree); on Windows that would open a
+    // console window, and taskkill /T ends the tree instead.
+    detached: process.platform !== 'win32',
+    windowsHide: true,
   });
   running.add(child);
   onSpawn?.(child);

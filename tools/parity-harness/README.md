@@ -145,7 +145,7 @@ Run `node run.mjs --help` for every option. Prefix long runs with `taskpolicy -b
 
 ## Tauri edition (`--host tauri`)
 
-`tauri-app/` is the same harness app on ow-tauri: a minimal Tauri 2 app with `tauri-plugin-overwolf` (Cargo feature `lab`) whose main webview runs the scenario through the `ow-tauri/electron` facade, mirroring `app/` step by step. `run.mjs --host tauri` builds it once in debug (`tauri-app/build.mjs`: the web assets with rolldown, then `cargo build -j 4` at background priority) and runs one scenario. `--no-build` reuses the last binary. macOS only for now, because the window monitor is.
+`tauri-app/` is the same harness app on ow-tauri: a minimal Tauri 2 app with `tauri-plugin-overwolf` (Cargo feature `lab`) whose main webview runs the scenario through the `ow-tauri/electron` facade, mirroring `app/` step by step. `run.mjs --host tauri` builds it once in debug (`tauri-app/build.mjs`: the web assets with rolldown, then `cargo build -j 4` at background priority) and runs one scenario. `--no-build` reuses the last binary. macOS only, because the window monitor is, except on a CI runner (see the Windows lab below).
 
 ```sh
 taskpolicy -b node run.mjs --host tauri --mode test --present transparent --layout 400x600 --duration 90 --run-id T-A
@@ -159,6 +159,23 @@ taskpolicy -b node run.mjs --host tauri --no-build --scenario messages --run-id 
 - **Native probe.** `hit-probe` asks the lab app's `harness_native_probe` (`tauri-app/src-tauri/src/native.rs`, macOS) for the native z-order of the window's webviews, a native hit test at each point and one snapshot per webview (`WKWebView takeSnapshot`, which needs no screen recording). `lib/adformat-report.mjs` composites the snapshots bottom to top. In test mode it may also send a synthesized click to the app's own control (never to an ad guest); WebKit does not turn such events into DOM events in the invisible window, so the native hit test is the routing proof.
 - **Front app.** `lib/front-monitor.mjs` samples the front app (`lsappinfo front`) every 200 ms on both hosts and writes `front-monitor.jsonl`. A run whose app ever became frontmost is a failure: an invisible app must never take the keyboard.
 - The app identity comes from `local.identity.json` at run time (`PARITY_HARNESS_PACKAGE_JSON`), never from a tracked file.
+
+## Windows lab on CI (`ci/windows-lab.mjs`)
+
+`.github/workflows/windows-lab.yml` runs the lab on a GitHub Windows runner (on pushes to `main` that touch the plugin, `ow-tauri` or the harness, and on demand with a scenario list). One job builds `tauri-app` with the `lab` feature; four shards then run, per scenario, ow-electron and ow-tauri one after the other on the same runner, run `parity-diff.mjs` on the pair and evaluate the Windows checks of `lib/windows-checks.mjs`. The scenarios are the round-2 base runs (`A`, `cmp`, `messages`) and every round-3 ad-format scenario. Captures, window copies and diffs are uploaded as the `windows-lab-captures-<shard>` artifacts; each shard's table is in the job summary.
+
+- **Test ads only.** The driver passes `--mode test` to every run and never `--live-ok`.
+- **Neutral identity.** The harness default (`Example Studio` / `Parity Harness`, formula uid). The driver refuses to run when a `local.identity.json` is present.
+- **Visible on the runner.** `run.mjs --ci-visible` (refused unless `GITHUB_ACTIONS=true`) runs the Tauri app without the invisible lab mode (which on Windows only keeps windows hidden, and a hidden slot does not fill); the runner's desktop is nobody's screen. ow-electron keeps its opacity-0 windows. No window monitor runs there.
+- **Fresh state per run.** Windows reads the app folders from the shell, not from `HOME`, so the driver removes the ow-electron state folder, the app's userData (with the ads data store) and the Tauri app's WebView2 folder before each launch.
+- **Native probe (`tauri-app/src-tauri/src/native_win.rs`).** `hit-probe` reads each webview's container window (the WebView2 controller's parent window): the z-order of the window's child windows, each container's window region (`GetWindowRgn`: `empty` while input passes through, `none` when the guest takes input), the controller's default background colour and the guest's `IsMuted`. A native hit test (`WindowFromPoint`) gives the routing. The composed window is copied with `PrintWindow(PW_RENDERFULLCONTENT)` (and, to compare, the same desktop rectangle), sampled at the points and kept as `hit-<label>-print.bmp` / `-screen.bmp`. In test mode one `SendInput` click goes to the app control, and only when the hit test there names the app's own webview.
+- **Windows checks.** L1-W: the composed window shows the app's colour under a guest with no content, as ow-electron's does (the red container under the ready reward slot). L2: the performance guest's container is the top child window. L3-W: while the interstitial loads, its container's region is empty and the click reaches the app; after its first `display_ad_loaded` the region is gone and the click is refused (it would reach the ad). L5: each guest's mute state read back natively equals ow-electron's `isAudioMuted()` at the same moments (`audio` probes at 5, 12 and 47 s).
+
+```sh
+# On a runner (the workflow's lab step):
+node ci/windows-lab.mjs --shard 1/4 --scenarios all
+node ci/windows-lab.mjs --scenarios lab-layers,audio
+```
 
 ## Comparing the hosts (`parity-diff.mjs`)
 

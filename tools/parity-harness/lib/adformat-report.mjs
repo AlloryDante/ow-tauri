@@ -113,6 +113,12 @@ export function colourClass(rgba) {
  */
 export function compositeAt(probe) {
   const out = {};
+  // Windows: the lab copies the composed window itself (PrintWindow).
+  const composed = probe.native?.composite?.print?.samples;
+  if (composed) {
+    for (const s of composed) out[s.name] = s.rgba;
+    return out;
+  }
   const shots = probe.native?.snapshots ?? probe.snapshots;
   if (!shots) return null;
   if (probe.host !== 'tauri') {
@@ -136,6 +142,24 @@ export function compositeAt(probe) {
     out[point.name] = colour && colour.map((v) => Math.round(v * 1000) / 1000);
   }
   return out;
+}
+
+/**
+ * L5: the ad guests' mute states at a hit probe, sorted (ow-electron:
+ * `webContents.isAudioMuted()` of each guest; ow-tauri on Windows: each
+ * guest webview's `ICoreWebView2_8::IsMuted`), or null when the probe has
+ * no such reading (ow-tauri on macOS).
+ * @param {{host?: string, guestMuted?: boolean[], native?: {webviews?: Record<string, {muted?: boolean | null}>}}} probe
+ * @returns {boolean[] | null}
+ */
+export function guestMuted(probe) {
+  if (probe.host !== 'tauri')
+    return Array.isArray(probe.guestMuted) ? [...probe.guestMuted].sort() : null;
+  const states = Object.entries(probe.native?.webviews ?? {})
+    .filter(([label]) => !/^bw-/.test(label))
+    .map(([, facts]) => facts?.muted);
+  if (!states.length || states.some((m) => typeof m !== 'boolean')) return null;
+  return states.sort();
 }
 
 /**
@@ -306,6 +330,7 @@ export function adformatFacts(runDir) {
       ),
       performance: e.dom?.performance ?? [],
       click: e.native?.click ?? e.click ?? null,
+      guestMuted: guestMuted(e),
     };
   }
   const clicks = {

@@ -52,6 +52,10 @@ const USAGE = `Usage: node run.mjs [options]
                           tauri-app/ once in debug and runs it in lab mode: every
                           window invisible, the window monitor always on
   --no-build              --host tauri: run the binary built last time
+  --ci-visible            GitHub Actions only (GITHUB_ACTIONS=true): the runner's
+                          desktop is nobody's screen, so the Tauri lab windows are
+                          shown there as the app asks (no invisible lab mode) and no
+                          window monitor is required. Lets --host tauri run on Windows
   --mode test|live        test ads (--test-ad) or live ads (default: test)
   --live-ok               required with --mode live: confirms live ads may load
   --layout WxH[,WxH...]   owadview slot sizes (default: ${DEFAULT_LAYOUTS.join(',')})
@@ -126,6 +130,7 @@ function parseCli() {
       'no-wait': { type: 'boolean', default: false },
       host: { type: 'string', default: 'electron' },
       'no-build': { type: 'boolean', default: false },
+      'ci-visible': { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
     },
   });
@@ -159,8 +164,11 @@ function parseCli() {
     for (const option of ['offline', 'features', 'webrequest', 'screencapture']) {
       if (values[option]) fail(`--${option} is not available with --host tauri`);
     }
-    if (process.platform !== 'darwin') fail('--host tauri runs on macOS only (window monitor)');
+    if (process.platform !== 'darwin' && !values['ci-visible'])
+      fail('--host tauri runs on macOS only (window monitor), or with --ci-visible on CI');
   }
+  if (values['ci-visible'] && process.env.GITHUB_ACTIONS !== 'true')
+    fail('--ci-visible is for GitHub Actions runners only (GITHUB_ACTIONS=true)');
   if (values.mode === 'live' && !values['live-ok']) fail('--mode live needs --live-ok');
   if (!['hidden', 'transparent'].includes(values.present))
     fail('--present must be hidden or transparent');
@@ -240,7 +248,14 @@ async function main() {
   // Build before anything is recorded, so a failed build leaves no run.
   const tauriExe = tauri
     ? opts['no-build']
-      ? join(harnessDir, 'tauri-app', 'src-tauri', 'target', 'debug', 'ow-tauri-parity-harness')
+      ? join(
+          harnessDir,
+          'tauri-app',
+          'src-tauri',
+          'target',
+          'debug',
+          `ow-tauri-parity-harness${process.platform === 'win32' ? '.exe' : ''}`,
+        )
       : await buildTauriApp()
     : null;
 
@@ -284,9 +299,10 @@ async function main() {
 
   const netlog = join(runDir, 'netlog.json');
   const scenarioConfig = opts.scenarioDef?.config ?? {};
+  const ciVisible = opts['ci-visible'];
   const wantMonitor = opts['window-monitor'] || scenarioConfig.windowMonitorRequired || tauri;
   const windowMonitor = wantMonitor ? buildWindowMonitor() : null;
-  if ((scenarioConfig.windowMonitorRequired || tauri) && !windowMonitor) {
+  if ((scenarioConfig.windowMonitorRequired || tauri) && !windowMonitor && !ciVisible) {
     console.error('this scenario needs the window monitor (macOS + swiftc); not running it');
     process.exit(3);
   }
@@ -375,10 +391,11 @@ async function main() {
           configPath,
           packageJsonPath: join(appDir, 'package.json'),
           mode: opts.mode,
+          invisible: !ciVisible,
         }),
         logDir: runDir,
         timeoutMs: opts.duration * 1000 + 60_000,
-        monitorFile: join(runDir, 'window-monitor.jsonl'),
+        monitorFile: windowMonitor ? join(runDir, 'window-monitor.jsonl') : undefined,
         onSpawn,
       })
     : await launch({

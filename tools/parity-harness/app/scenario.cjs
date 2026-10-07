@@ -691,6 +691,8 @@ module.exports = function install(ctx) {
         error: String(e),
       }));
       const out = { kind: 'hit-probe', label, host: 'electron', dom: safe(dom) };
+      // L5: what each ad guest's audio is set to right now.
+      out.guestMuted = guests().map((wc) => wc.isAudioMuted());
       if (click) {
         // The page resolved selector points to CSS px.
         const hit = dom?.points?.find((p) => p.name === click);
