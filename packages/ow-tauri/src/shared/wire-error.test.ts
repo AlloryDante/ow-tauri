@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import { OwTauriError, OwTauriUnsupportedError } from './errors.js';
-import { describeThrown, fromWireError, isErrorWire, isPreCommandRejection } from './wire-error.js';
+import {
+  describeThrown,
+  fromWireError,
+  isErrorWire,
+  isPreCommandRejection,
+  v8Stack,
+} from './wire-error.js';
 
 describe('wire errors (A.4, C.8)', () => {
   it('recognises the wire shape', () => {
@@ -61,5 +67,34 @@ describe('wire errors (A.4, C.8)', () => {
     expect(describeThrown({ message: 'm' })).toEqual({ name: 'Error', message: 'm' });
     expect(describeThrown(42)).toEqual({ name: 'Error', message: '42' });
     expect(describeThrown('s')).toEqual({ name: 'Error', message: 's' });
+  });
+});
+
+describe('v8Stack', () => {
+  it('keeps a V8 stack, which starts with the message line', () => {
+    const error = new Error('offline');
+    expect(v8Stack(error)).toBe(error.stack);
+    expect(v8Stack(error).split('\n')[0]).toBe('Error: offline');
+  });
+
+  it('adds the message line to a JavaScriptCore stack (frames only)', () => {
+    const error = new OwTauriError('network', 'offline');
+    for (const frames of [
+      'Re@user-script:11:3:28349\nraw@user-script:11:3:44746',
+      '@tauri://localhost/index.js:1:20',
+      'forEach@[native code]\nglobal code@tauri://localhost/a.js:3:4',
+      'checkForUpdates@\nmain@tauri://localhost/a.js:3:4',
+    ]) {
+      error.stack = frames;
+      expect(v8Stack(error)).toBe(`OwTauriError: offline\n${frames}`);
+    }
+  });
+
+  it('uses the string form without a stack', () => {
+    const error = new TypeError('bad');
+    Reflect.deleteProperty(error, 'stack');
+    expect(v8Stack(error)).toBe('TypeError: bad');
+    error.stack = '';
+    expect(v8Stack(error)).toBe('TypeError: bad');
   });
 });

@@ -121,3 +121,24 @@ function rawText(value: unknown): string {
     return String(value);
   }
 }
+
+/**
+ * `error.stack` in V8's shape: a `<name>: <message>` line, then the frames.
+ * JavaScriptCore (WKWebView) writes only the frames, so text that Electron
+ * code builds from `error.stack` (electron-updater's `Error: <stack>` log
+ * line and `error` event message) would lose the message; this adds the
+ * line when the first line is a frame.
+ *
+ * @param error - the error
+ * @returns the stack with its header line, or `String(error)` without a stack
+ */
+export function v8Stack(error: Error): string {
+  const stack = error.stack;
+  if (typeof stack !== 'string' || stack === '') return String(error);
+  const first = stack.split('\n', 1)[0] ?? '';
+  const isFrame =
+    /^\s+at /.test(first) ||
+    /@.*:\d+:\d+$/.test(first) ||
+    /^[^\s:]*@(\S*|\[native code\])$/.test(first);
+  return isFrame ? `${String(error)}\n${stack}` : stack;
+}

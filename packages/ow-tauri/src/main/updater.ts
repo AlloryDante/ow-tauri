@@ -14,7 +14,7 @@ import type { FacadeKernel } from '../bootstrap/facade-kernel.js';
 import { EventEmitter, emitFromHost } from '../shared/emitter.js';
 import { OwTauriError, OwTauriUnsupportedError } from '../shared/errors.js';
 import type { HostMessage } from '../shared/protocol.js';
-import { fromWireError, isPreCommandRejection } from '../shared/wire-error.js';
+import { fromWireError, isPreCommandRejection, v8Stack } from '../shared/wire-error.js';
 
 /** The configuration `updater_configure` receives (CONTRACT I.1). */
 export interface UpdaterConfig {
@@ -601,8 +601,8 @@ export class AppUpdater extends EventEmitter {
    */
   #dispatchError(error: Error, check = false): void {
     if (check) this.#checkErrorPending = false;
-    this.#logger.error(`Error: ${error.stack ?? error.message}`);
-    const detail = error.stack ?? String(error);
+    this.#logger.error(`Error: ${error.stack ? v8Stack(error) : error.message}`);
+    const detail = v8Stack(error);
     emitFromHost(this, 'error', error, check ? `Cannot check for updates: ${detail}` : detail);
   }
 
