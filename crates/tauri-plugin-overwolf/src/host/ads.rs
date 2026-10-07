@@ -195,6 +195,18 @@ impl<R: Runtime> GuestReports for Reports<R> {
     }
 }
 
+/// `systemInfo.gpus` (D.2): one entry per adapter with only its driver
+/// version (Windows), or one blank entry where the platform lists none
+/// (macOS) [OBS].
+fn gpu_entries(driver_versions: &[String]) -> Vec<Value> {
+    let entry = |v: &str| json!({ "name": "", "model": "", "driverVersion": v, "vendor": "" });
+    if driver_versions.is_empty() {
+        vec![entry("")]
+    } else {
+        driver_versions.iter().map(|v| entry(v)).collect()
+    }
+}
+
 /// The `documentReferrer` the guest shim answers `document.referrer` with
 /// (D.8.3): the shaped document's `Referer`, on platforms whose webview
 /// does not take it from the header; `None` without shaping.
@@ -262,8 +274,13 @@ impl<R: Runtime> Host<R> {
         } else {
             String::new()
         };
+        let versions = if self.options.os_queries {
+            crate::platform::graphics::gpu_driver_versions()
+        } else {
+            Vec::new()
+        };
         let info = json!({
-            "gpus": [{ "name": "", "model": "", "driverVersion": "", "vendor": "" }],
+            "gpus": gpu_entries(&versions),
             "cpu": cpu,
             "displays": displays,
         });
@@ -1498,6 +1515,20 @@ impl<R: Runtime> Host<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression (Windows lab): ow-electron listed both of the runner's
+    /// DXGI adapters with their driver versions; ow-tauri listed one blank
+    /// entry.
+    #[test]
+    fn gpus_are_one_entry_per_adapter_or_one_blank_entry() {
+        let blank = json!({ "name": "", "model": "", "driverVersion": "", "vendor": "" });
+        assert_eq!(gpu_entries(&[]), vec![blank]);
+        let two = gpu_entries(&["10.0.26100.33438".to_owned(), String::new()]);
+        assert_eq!(two.len(), 2);
+        assert_eq!(two[0]["driverVersion"], "10.0.26100.33438");
+        assert_eq!(two[0]["name"], "");
+        assert_eq!(two[1]["driverVersion"], "");
+    }
 
     #[test]
     fn the_shim_answers_document_referrer_only_where_the_webview_does_not() {

@@ -1839,8 +1839,8 @@ Shape observed on macOS [OBS]:
 | Field | Value |
 |---|---|
 | `cpu` | the CPU brand string. macOS `sysctl machdep.cpu.brand_string`; Windows `HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0\ProcessorNameString` [INF]; Linux `/proc/cpuinfo` `model name` [INF] |
-| `gpus` | macOS: exactly one entry with four empty strings, as observed on Apple Silicon [OBS]. Windows and Linux: **Unknown (R2-10, R2-11)**; interim one entry per DXGI adapter / DRM card with `name` = `model` = the adapter description, `vendor` = the PCI vendor name, `driverVersion` = `""` [DEC] |
-| `displays` | one entry per display: `name` (macOS `NSScreen.localizedName`, Windows monitor friendly name), `isMain`, `position` and `resolution` in logical (DIP) pixels, `dpi` = `round(96 x scaleFactor)` |
+| `gpus` | macOS: exactly one entry with four empty strings, as observed on Apple Silicon [OBS]. Windows: one entry per DXGI adapter (`EnumAdapters`, software adapters included) with `name`, `model` and `vendor` empty and `driverVersion` = the user-mode driver version from `CheckInterfaceSupport(IDXGIDevice)` as `a.b.c.d` (`10.0.26100.33438` on a Windows Server 2025 runner with two adapters) [OBS: Windows lab]. Linux: **Unknown (R2-11)**; one blank entry, as on macOS [DEC] |
+| `displays` | one entry per display: `name` (macOS `NSScreen.localizedName`; Windows the monitor friendly name from `DisplayConfigGetDeviceInfo`, e.g. `HyperVMonitor`, not the GDI name `\\.\DISPLAY1` [OBS: Windows lab]), `isMain`, `position` and `resolution` in logical (DIP) pixels, `dpi` = `round(96 x scaleFactor)` |
 
 There are no `os`, `arch` or `scaleFactor` keys [OBS]. Overwolf's privacy
 policy covers this data ("device type, operating system, graphics card")

@@ -3,6 +3,8 @@
 //! and whether a file carries an execute bit (A.2.3.2).
 
 #[cfg(feature = "plugin")]
+pub(crate) mod graphics;
+#[cfg(feature = "plugin")]
 pub(crate) mod machine;
 #[cfg(unix)]
 mod unix;

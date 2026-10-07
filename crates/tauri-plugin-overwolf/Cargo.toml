@@ -121,7 +121,7 @@ windows-sys = { workspace = true, features = ["Win32_System_Registry", "Win32_UI
 # reports, D.7, D.8.3) and the guest window's stacking and input region
 # (B.3.4): the versions Tauri 2.12's wry uses.
 webview2-com = { version = "0.39.1", optional = true }
-windows = { version = "0.62.2", optional = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.62.2", optional = true, features = ["Win32_Devices_Display", "Win32_Foundation", "Win32_Graphics_Dxgi", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Guest mute, the shaped navigations (D.8.3) and the ads data store's

@@ -57,6 +57,12 @@ pub(crate) fn monitors<R: Runtime>(
     // The OS display names (macOS: Tauri reports `Monitor #<model>`).
     let names = crate::platform::webview::screen_names(app);
     crate::screen::apply_os_names(&mut all, &names);
+    // Windows: the monitor's friendly name, not its GDI device name.
+    for m in all.iter_mut().chain(primary.as_mut()) {
+        if let Some(name) = crate::platform::graphics::display_friendly_name(&m.name) {
+            m.name = name;
+        }
+    }
     if let Some(p) = primary.as_mut() {
         crate::screen::apply_os_names(std::slice::from_mut(p), &names);
     }

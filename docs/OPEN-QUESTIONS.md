@@ -45,7 +45,7 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 | [OQ-11](#oq-11-email-hashes-in-the-ad-guest) | Ads | email hashes in the guest | Medium | Answered; open: pending harness (R3-3, after `disableAdsFPD`) | A.2.2, D.5 |
 | [OQ-13](#oq-13-host-to-guest-messages) | Ads | host-to-guest messages | Low to Medium | Answered; open: pending harness (R3-1, minimize) | D.5 |
 | [OQ-17](#oq-17-click-and-navigation-rules) | Ads | click and navigation rules | Low | Decided | D.7 |
-| [OQ-19](#oq-19-systeminfo-contents) | Ads | `systemInfo` contents | Low to Medium | Answered (macOS); open: pending harness (R2-10, R2-11: Windows, Linux) | D.2 |
+| [OQ-19](#oq-19-systeminfo-contents) | Ads | `systemInfo` contents | Low to Medium | Answered (macOS, Windows); open: pending harness (R2-11: Linux) | D.2 |
 | [OQ-20](#oq-20-live-ads-from-a-tauri-host) | Ads | live ads approval | High | Decided (labs); open: Overwolf (production) | ADR 0005 |
 | [OQ-27](#oq-27-viewability) | Ads | viewability model | Medium | Answered; open: pending harness (R3-1, minimize) | B.3.4 |
 | [OQ-28](#oq-28-crash-and-load-error-recovery) | Ads | guest recovery | Low | Answered; open: pending harness (R3-4, report threshold) | D.7, E.2 |
@@ -115,8 +115,10 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
   `HKCU\Software\OverwolfPersist` `MUIDV2`); owner decision;
   https://dev.overwolf.com/ow-electron/developers-console/performance-statistics
   (users and installs are machine-keyed).
-- **Open.** R2-10: the Windows source and whether `MUIDV2` is a separate
-  persisted id; the Linux source.
+- **Open.** The Linux source (R2-11). Windows (R2-10, Windows lab):
+  `MUIDV2` is a separate random v4 per install, and `app.overwolf.muid`
+  answers it; analytics and guests keep the machine-derived `MUID`
+  (CONTRACT E.4).
 
 ### OQ-03: host labelling (`owver`, `owVersion`, extra fields)
 
@@ -294,8 +296,9 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 
 - **Question.** Which `systemInfo` fields does the ad page get, and in which
   format?
-- **Status.** Answered on macOS. Windows and Linux GPU and display details
-  **pending harness** (R2-10, R2-11, which need a Windows and a Linux host).
+- **Status.** Answered on macOS and Windows (Windows lab: one GPU entry per
+  DXGI adapter with only `driverVersion`, display `name` = the monitor
+  friendly name; CONTRACT D.2). Linux **pending harness** (R2-11).
 - **Answer.** `{ gpus: [{ name, model, driverVersion, vendor }], cpu: <brand string>, displays: [{ name, isMain, position, resolution, dpi }] }`,
   no `os`, `arch` or `scaleFactor` (CONTRACT D.2). This replaces the earlier
   privacy-reduced shape; Overwolf's privacy policy covers this data.
