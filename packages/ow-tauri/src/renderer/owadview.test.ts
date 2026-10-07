@@ -516,6 +516,74 @@ describe('lifecycle (B.3.2, B.3.4)', () => {
     ]);
   });
 
+  it('never merges a hide and a show into one update within a frame (AF-16)', async () => {
+    await startRuntime();
+    const el = createAd({ adstyle: 'rewarded-ad;' }, { width: 400, height: 300 });
+    document.body.append(el);
+    await tick();
+    const id = runtime.elementId(el);
+    // Two passes before the queued update runs: hidden, then visible again.
+    el.shown = false;
+    runtime.flush();
+    el.box.x = 40;
+    el.shown = true;
+    runtime.flush();
+    await tick();
+    expect(callsOf('adview_update')).toEqual([
+      { elementId: id, visible: false },
+      {
+        elementId: id,
+        visible: true,
+        rect: { x: 40, y: 20, width: 400, height: 300, devicePixelRatio: 1 },
+      },
+    ]);
+  });
+
+  it('queues a hide and a show behind an in-flight command as two updates (AF-16)', async () => {
+    let release!: () => void;
+    services.impls['adview_mount'] = () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    await startRuntime();
+    const el = createAd({ adstyle: 'rewarded-ad;' }, { width: 400, height: 300 });
+    document.body.append(el);
+    await tick();
+    const id = runtime.elementId(el);
+    // The app hides the reward slot and shows it again while the mount is in flight.
+    el.shown = false;
+    runtime.flush();
+    await tick();
+    el.box.y = 60;
+    runtime.flush();
+    el.shown = true;
+    runtime.flush();
+    await tick();
+    el.box.y = 80;
+    runtime.flush();
+    el.shown = false;
+    runtime.flush();
+    el.shown = false;
+    runtime.flush();
+    await tick();
+    expect(callsOf('adview_update')).toEqual([]);
+    release();
+    await tick();
+    expect(callsOf('adview_update')).toEqual([
+      {
+        elementId: id,
+        visible: false,
+        rect: { x: 10, y: 60, width: 400, height: 300, devicePixelRatio: 1 },
+      },
+      {
+        elementId: id,
+        visible: true,
+        rect: { x: 10, y: 80, width: 400, height: 300, devicePixelRatio: 1 },
+      },
+      { elementId: id, visible: false },
+    ]);
+  });
+
   it('never sends an update made for one mount to another (remount race)', async () => {
     let release!: () => void;
     let first = true;

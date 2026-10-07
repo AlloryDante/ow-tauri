@@ -755,12 +755,21 @@ export class AdviewRuntime implements FacadeOwadview {
 
   /**
    * Queues an `adview_update` for the current mount, merged with one not
-   * sent yet. An update made for a mount that was unmounted or replaced
-   * before it ran is dropped: the new mount carries the geometry of its time.
+   * sent yet. A `visible` change is never merged into a pending update
+   * whose `visible` differs: it is queued as its own update, so a hide and
+   * the show after it both reach the guest (a rewarded slot plays on that
+   * hidden-to-visible transition [OBS]). An update made for a mount that was
+   * unmounted or replaced before it ran is dropped: the new mount carries
+   * the geometry of its time.
    */
   #update(entry: Entry, patch: Record<string, unknown>): void {
     const pending = entry.pendingUpdate;
-    if (pending?.gen === entry.gen) {
+    const flips =
+      pending !== undefined &&
+      'visible' in patch &&
+      'visible' in pending.patch &&
+      pending.patch['visible'] !== patch['visible'];
+    if (pending?.gen === entry.gen && !flips) {
       const { attributes, ...rest } = patch;
       Object.assign(pending.patch, rest);
       if (attributes !== undefined)
