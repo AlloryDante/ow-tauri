@@ -1571,23 +1571,23 @@ fn the_consent_request_leaves_with_the_startup_analytics() {
     assert!(urls().is_empty(), "nothing leaves before main_ready");
     invoke(&app, "ow-main", "main_ready", json!({})).unwrap();
     let ow = app.overwolf();
+    // Both start at main_ready, each on its own task: wait for the startup
+    // window (after cmp-eu-only's answer) and for the analytics request.
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !ow
+    let left = |part: &str| urls().iter().any(|u| u.contains(part));
+    while !(ow
         .test_hidden_consent_windows()
         .contains(&"ow-cmp-startup".to_owned())
+        && left("_app_start"))
     {
-        assert!(Instant::now() < deadline, "no startup window");
+        assert!(
+            Instant::now() < deadline,
+            "no startup window or no startup analytics: {:?}",
+            urls()
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
-    let urls = urls();
-    assert!(
-        urls.iter().any(|u| u.contains("cmp-eu-only")),
-        "cmp-eu-only left: {urls:?}"
-    );
-    assert!(
-        urls.iter().any(|u| u.contains("_app_start")),
-        "with the startup analytics: {urls:?}"
-    );
+    assert!(left("cmp-eu-only"), "cmp-eu-only left: {:?}", urls());
 }
 
 /// Sends `main_ready` and waits for the startup consent window it starts
@@ -2063,7 +2063,8 @@ fn a_minimized_window_hides_its_guests_until_restored() {
 
 /// The host messages a guest gets when its embedder window is minimized:
 /// `window-minimized`, then `window-hidden`, except on Windows, where
-/// ow-electron sends `window-minimized` only (Windows lab, `perf-minimize`).
+/// ow-electron sends `window-minimized` only, after the guest turned hidden
+/// (Windows lab, `perf-minimize`).
 fn minimize_messages() -> Vec<Value> {
     if cfg!(windows) {
         vec![json!("window-minimized")]
@@ -2125,9 +2126,13 @@ fn a_window_animating_into_the_dock_is_minimized_not_hidden() {
     let on_minimize = minimize_messages();
     assert_eq!(messages()[before..], on_minimize);
     // ow-electron (observed): the messages reach the guest before its
-    // document turns hidden.
+    // document turns hidden; on Windows after it.
     let mut expected = on_minimize.clone();
-    expected.push(json!("hidden"));
+    if cfg!(windows) {
+        expected.insert(0, json!("hidden"));
+    } else {
+        expected.push(json!("hidden"));
+    }
     assert_eq!(steps()[steps_before..], expected);
     // The poll then sees it minimized: nothing more.
     ow.test_poll_window(1, false, true);

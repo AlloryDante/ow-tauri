@@ -1383,8 +1383,9 @@ when it is scrolled out of the viewport, and when the embedder window is
 hidden (plus a `window-hidden` message, D.5); a resize signals nothing, and
 the window's position on the screen plays no part (an off-screen window
 still fills test ads) [OBS]. A minimize signals `hidden` plus the
-`window-minimized` and `window-hidden` messages (D.5) [OBS]; on Windows only
-`window-minimized` [OBS: Windows lab]. About 2 s after `hidden` the ad page stops and
+`window-minimized` and `window-hidden` messages (D.5) [OBS]; on Windows the
+guest turns `hidden` first and then gets only `window-minimized`, so a running
+performance ad stops without `performance_ad_dismiss` [OBS: Windows lab]. About 2 s after `hidden` the ad page stops and
 calls `__overwolf__.reload()`; the host reloads the guest 3 to 5 s after
 `hidden`, and the reloaded page waits until it is `visible` again [OBS].
 ow-tauri passes its visibility result to the guest the same way (D.5) and

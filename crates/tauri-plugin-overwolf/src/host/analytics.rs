@@ -353,8 +353,8 @@ impl<R: Runtime> Host<R> {
     pub(crate) fn poll_visibility(self: &Arc<Self>) {
         let ids = self.with_core(|c| c.windows.ids());
         // (id, visible, minimized). macOS reports a minimized window as not
-        // visible; its minimize is not a hide (window-minimized and, except
-        // on Windows, window-hidden come from `ads_window_minimized`).
+        // visible; its minimize is not a hide (the guests' minimize messages
+        // come from `ads_window_minimized`).
         let visible: Vec<(u32, bool, bool)> = ids
             .into_iter()
             .map(|id| {
