@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { diffSnapshots, snapshotDir } from './lib/fs-snapshot.mjs';
+import { watchFront } from './lib/front-monitor.mjs';
 import { displayName, loadIdentity } from './lib/identity.mjs';
 import { launch, makeAppDir, owElectronVersion } from './lib/launch.mjs';
 import { waitForQuietMachine } from './lib/load-guard.mjs';
@@ -55,7 +56,7 @@ const USAGE = `Usage: node run.mjs [options]
   --live-ok               required with --mode live: confirms live ads may load
   --layout WxH[,WxH...]   owadview slot sizes (default: ${DEFAULT_LAYOUTS.join(',')})
   --duration SECONDS      time before the quit flow starts (default: 90, max ${MAX_DURATION_S})
-  --max-live-loads N      live mode: stop all ads after N loads (default: 10)
+  --max-live-loads N      live mode: N loads run; a load beyond N removes every ad (default: 10)
   --present hidden|transparent
                           hidden: windows never shown (default);
                           transparent: shown inactive with opacity 0, ignoring the mouse
@@ -346,8 +347,11 @@ async function main() {
   console.error(
     `run ${runId} (${opts.host}): ${opts.mode} ads, ${opts.layouts.join(' ')}, ${opts.duration}s`,
   );
+  let stopFront = () => null;
   const onSpawn = (child) => {
     writeFileSync(join(runDir, 'app.pid'), `${child.pid}\n`);
+    // The invisible app must never take the keyboard (front-monitor.jsonl).
+    stopFront = watchFront(child.pid, join(runDir, 'front-monitor.jsonl'), { everyMs: 200 });
     if (windowMonitor) {
       // Started with the app so the very first window is covered.
       spawn(windowMonitor, [String(child.pid), join(runDir, 'window-monitor.jsonl'), '25'], {
@@ -386,6 +390,7 @@ async function main() {
         onSpawn,
       });
 
+  const front = stopFront();
   const after = Object.fromEntries(
     Object.entries(watched).map(([k, dir]) => [
       k,
@@ -406,9 +411,16 @@ async function main() {
     writeJson(join(runDir, 'netlog-requests.json'), requests);
     netlogSummary = summarize(requests);
   }
-  const result = { ...meta, finishedAt: new Date().toISOString(), exit, fileDiff, netlogSummary };
+  const result = {
+    ...meta,
+    finishedAt: new Date().toISOString(),
+    exit,
+    front,
+    fileDiff,
+    netlogSummary,
+  };
   writeJson(join(runDir, 'meta.json'), result);
-  console.log(JSON.stringify({ runDir, exit, netlogSummary }, null, 2));
+  console.log(JSON.stringify({ runDir, exit, front, netlogSummary }, null, 2));
 }
 
 /**

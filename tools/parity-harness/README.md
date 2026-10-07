@@ -38,7 +38,7 @@ Each run writes `captures/<run-id>/`. That folder is git-ignored and holds:
 - **Windows are pinned invisible before they exist on screen.** `browser-window-created` runs before the constructor applies its options (the `cmp` scenario calibrates this first and drops its window actions if it fails). The handler sets opacity 0, ignores the mouse and makes the window not focusable. Later calls to `setOpacity`, `setIgnoreMouseEvents` and `setFocusable` are pinned to those values and logged as `pinned-call`. This is what makes it safe to call `openAdPrivacySettingsWindow()` and `openCMPWindow()`, which show their window from JavaScript.
 - **Proof.** `--window-monitor` (macOS) polls the window server for the app's windows and records `everVisible`. Treat a run with `everVisible: true` as a failure. Under `taskpolicy -b` it samples about every 190 ms.
 - **No clicks.** The harness never sends input to a page.
-- **Live ads are opt-in and capped.** `--mode live` needs `--live-ok`. The run removes every `<owadview>` once `--max-live-loads` loads have happened (default 10), and every live load is logged in `live-loads.jsonl`.
+- **Live ads are opt-in and capped.** `--mode live` needs `--live-ok`. `--max-live-loads N` lets N loads run (default 10); a load beyond N removes every `<owadview>` as it starts (so a run logs at most N + 1), and every live load is logged in `live-loads.jsonl`.
 - **Offline probes.** `uid-matrix.mjs` and the muid experiment launch with `--proxy-server=127.0.0.1:9`, so throwaway app identities send no analytics.
 - **Isolated home.** By default each run gets a fresh home: `CFFIXED_USER_HOME` on macOS, `HOME` and `XDG_CONFIG_HOME` on Linux. The real profile, consent and cookies are not touched. Windows has no isolation, so use `--home real` there knowingly. `--use-mock-keychain` keeps Chromium out of the login keychain.
 - **Quiet machine.** Launches wait, for at most 10 minutes, until the 1-minute load average is below 8.
@@ -123,6 +123,16 @@ node run.mjs --scenario house --window-monitor             # only Overwolf hosts
 node run.mjs --scenario adstyle-probe --window-monitor     # which attribute values switch the ad library options
 node run.mjs --scenario send-command-probe --window-monitor  # how sendCommand()/setPageUrl() reach the guest
 
+# Lab checks (both hosts; AD-FORMATS-SPEC section 7). Test ads unless named -live.
+node run.mjs --scenario lab-layers        # L1-L4: transparency, z-order, pass-through, blur (hit probes)
+node run.mjs --scenario audio             # L5: setAudioMuted timeline per guest
+node run.mjs --scenario standard-remove   # L6/L9: remove, re-add and move a standard slot
+node run.mjs --scenario reward-optin      # L7: reward opt-in hidden for 1 frame / 50 ms / 500 ms / 2 s
+node run.mjs --scenario perf-minimize     # L8: minimize and restore under a performance ad
+node run.mjs --scenario owadtestad        # L11: localStorage.owAdTestAd inside the guest
+node run.mjs --scenario tower-plus        # 400x600 + 400x60
+node run.mjs --scenario high-impact-only  # the high-impact zone without the small zone
+
 node analyze.mjs captures/<run-id>        # report.md + report.json
 node lib/adformat-report.mjs captures/<run-id>   # adformats.md + adformats.json: attach params, ad-library options, event/IPC timeline
 node lib/netlog-parse.mjs <netlog.json>   # parse any net log
@@ -145,7 +155,9 @@ taskpolicy -b node run.mjs --host tauri --no-build --scenario messages --run-id 
 - **Lab mode.** The plugin's `lab` feature is off by default and must never ship. With it, `OW_TAURI_LAB_DIR=<run dir>` turns on the trace, and `OW_TAURI_LAB_INVISIBLE=1` makes every window invisible before it can appear: the app runs as an accessory app (no Dock icon, no Cmd-Tab), windows are built hidden and not focusable, then get alpha 0 and click-through at an on-screen position (an ad slot must be on screen to fill), and only then are shown. `ow-main` is never shown. `run.mjs` always sets both. The trace files (see `crates/tauri-plugin-overwolf/src/lab.rs`) use the ow-electron capture shapes, and `lib/tauri-host.mjs` turns the host requests into `netlog-requests.json`, so `analyze.mjs` and `parity-diff.mjs` read both hosts.
 - **Proof of invisibility.** The window monitor runs on every Tauri run and the app is killed the moment it reports a visible window. A run with `everVisible: true` is a failure.
 - **What the lab cannot see.** Headers WebKit adds to ad pages (only the fields the host sets are recorded), HTTP/2 pseudo-header order (reconstructed in the `h2` crate's order), the protocol of a request that never completed, and requests of cross-origin frames. The guest probe's `labResources` lists the requests of the ad page and its same-origin frames (where the fill impression is sent), repeats included, so the live fill count (lab check 6) matches the net log's.
-- **Steps not mirrored.** `crash-guests`, `cookie-set`, `introspect`, `guest-eval`, `hook-guest-frames`, `open-window`, `extra-window` and `screencapture` are recorded as `action-unsupported` and reported as `not-mirrored`.
+- **Steps not mirrored.** `crash-guests`, `cookie-set`, `introspect`, `open-window`, `extra-window` and `screencapture` are recorded as `action-unsupported` and reported as `not-mirrored`. `guest-eval` and `hook-guest-frames` run through the lab command `harness_guest_eval`.
+- **Native probe.** `hit-probe` asks the lab app's `harness_native_probe` (`tauri-app/src-tauri/src/native.rs`, macOS) for the native z-order of the window's webviews, a native hit test at each point and one snapshot per webview (`WKWebView takeSnapshot`, which needs no screen recording). `lib/adformat-report.mjs` composites the snapshots bottom to top. In test mode it may also send a synthesized click to the app's own control (never to an ad guest); WebKit does not turn such events into DOM events in the invisible window, so the native hit test is the routing proof.
+- **Front app.** `lib/front-monitor.mjs` samples the front app (`lsappinfo front`) every 200 ms on both hosts and writes `front-monitor.jsonl`. A run whose app ever became frontmost is a failure: an invisible app must never take the keyboard.
 - The app identity comes from `local.identity.json` at run time (`PARITY_HARNESS_PACKAGE_JSON`), never from a tracked file.
 
 ## Comparing the hosts (`parity-diff.mjs`)
@@ -166,6 +178,8 @@ It compares two captures of the same scenario after normalising volatile values 
 | `variance`            | differs between two ow-electron runs too (ad content, HTTP cache) |
 | `not-mirrored`        | a harness step the Tauri edition cannot run                       |
 | `BUG`                 | anything else                                                     |
+
+Ad-format runs are also compared through `lib/adformat-report.mjs` facts: per element the event names, order, counts, payload keys and removal timings, the DOM state (display, pointer-events, inline style) before and after the first `display_ad_loaded`, the ad library options on the wire (as sets, keys sorted at every depth), each guest's mute sequence, the lab hit probes (page routing, ow-tauri native routing, composited colour class, performance pointer-events, clicks) and the front app. A colour at a point that lands on a served creative (`std-slot`) is variance; the red container, the app control and the bare corner carry the transparency and z-order checks.
 
 The results go to `parity-diff.json` and `parity-diff.md` in the Tauri run. The exit status is 1 while a `BUG` remains.
 

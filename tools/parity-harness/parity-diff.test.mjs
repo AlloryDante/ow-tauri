@@ -3,12 +3,24 @@
 //   node --test parity-diff.test.mjs
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
-import { classify, fillImpressions, labelledUserAgent, normalise } from './parity-diff.mjs';
+import { colourClass, compositeAt, sortKeys } from './lib/adformat-report.mjs';
+import {
+  classify,
+  compareAdformats,
+  consentDuringAttach,
+  fillImpressions,
+  guestVisibility,
+  labelledUserAgent,
+  loadedBefore,
+  matchesOwnSpan,
+  normalise,
+  withoutPointerEvents,
+} from './parity-diff.mjs';
 
 test('normalise replaces host labels, versions and volatile values', () => {
   assert.equal(
@@ -54,7 +66,8 @@ test('only <webview> own properties may be missing on <owadview>', () => {
   assert.equal(classify({ section: 'element-api', field: 'own', webviewOnly: false }).class, 'BUG');
 });
 
-test('the test-mode unit guard is a documented deviation', () => {
+test('a guest unit that differs is a bug in test mode too', () => {
+  // ow-tauri forwards the element's unit in test mode as ow-electron does.
   const d = classify({
     section: 'guest',
     key: 'guest parity_400x600_1 __overwolf__.unit',
@@ -62,15 +75,7 @@ test('the test-mode unit guard is a documented deviation', () => {
     electron: 'parity-unit',
     tauri: 'testAd',
   });
-  assert.equal(d.class, 'intended:deviation');
-  const live = classify({
-    section: 'guest',
-    key: 'guest parity_400x600_1 __overwolf__.unit',
-    field: 'value',
-    electron: 'parity-unit',
-    tauri: '',
-  });
-  assert.equal(live.class, 'BUG');
+  assert.equal(d.class, 'BUG');
 });
 
 test('unknown differences are bugs', () => {
@@ -153,4 +158,365 @@ test('a host request without a response is a bug', () => {
     classify({ section: 'host-request', field: 'protocol', electron: 'h2', tauri: null }).class,
     'not-mirrored',
   );
+});
+
+// ---- ad formats (compareAdformats, lib/adformat-report.mjs) ----
+
+/** Facts of one run with sensible empty defaults. */
+const facts = (over = {}) => ({
+  elements: {},
+  oamOptions: {},
+  mute: [],
+  probes: {},
+  clicks: { pointer: 0, received: 0, sent: 0 },
+  bounds: [],
+  front: false,
+  ...over,
+});
+const element = (over = {}) => ({
+  order: ['display_ad_loaded'],
+  counts: { display_ad_loaded: 1 },
+  payloadKeys: {},
+  removalOrder: [],
+  dom: {},
+  ...over,
+});
+const diffFormats = (e, t) => {
+  const out = [];
+  compareAdformats({ host: 'electron', formats: e }, { host: 'tauri', formats: t }, out);
+  return out.map((d) => ({ ...d, cls: classify(d).class }));
+};
+
+test('the same ad-format facts give no differences', () => {
+  const f = facts({ elements: { a: element() }, oamOptions: { a: ['{"x":1}'] } });
+  assert.deepEqual(diffFormats(f, f), []);
+});
+
+test('extra ad-driven events are variance, a lifecycle event ow-tauri never fires is a bug', () => {
+  const e = facts({ elements: { a: element({ order: ['display_ad_loaded', 'video_ad_ready'] }) } });
+  const t = facts({ elements: { a: element() } });
+  const [d] = diffFormats(t, e);
+  assert.equal(d.field, 'events');
+  assert.equal(d.cls, 'variance');
+  const [missing] = diffFormats(e, t);
+  assert.equal(missing.cls, 'BUG');
+  const destroyed = diffFormats(
+    facts({ elements: { a: element({ order: ['display_ad_loaded', 'destroyed'] }) } }),
+    t,
+  );
+  assert.equal(destroyed[0].cls, 'BUG');
+});
+
+test('removal order and DOM state before the first load are compared', () => {
+  const e = facts({
+    elements: {
+      a: element({
+        removalOrder: ['unmount', 'destroyed'],
+        dom: { before: { display: 'inline-flex', pointerEvents: 'auto' } },
+      }),
+    },
+  });
+  const t = facts({
+    elements: {
+      a: element({
+        removalOrder: ['unmount'],
+        dom: { before: { display: 'block', pointerEvents: 'auto' } },
+      }),
+    },
+  });
+  const out = diffFormats(e, t);
+  assert.deepEqual(out.map((d) => [d.field, d.cls]).sort(), [
+    ['dom-before display', 'BUG'],
+    ['removal', 'BUG'],
+  ]);
+});
+
+test('ad library options on the wire must match as sets per element', () => {
+  const out = diffFormats(
+    facts({ oamOptions: { a: ['{"autoplay":true}'] } }),
+    facts({ oamOptions: { a: ['{"autoplay":true,"customTracking":null}'] } }),
+  );
+  assert.equal(out.length, 1);
+  assert.equal(out[0].section, 'adformat-options');
+  assert.equal(out[0].key, 'a');
+  assert.equal(out[0].cls, 'BUG');
+  // An element one host has no option record for is not compared.
+  assert.deepEqual(
+    diffFormats(
+      facts({ oamOptions: { a: ['{}'], b: ['{"x":1}'] } }),
+      facts({ oamOptions: { a: ['{}'] } }),
+    ),
+    [],
+  );
+});
+
+test('options compare by content at every depth, not by key order', () => {
+  const a = JSON.stringify(sortKeys({ size: { width: 300, height: 250 }, autoplay: true }));
+  const b = JSON.stringify(sortKeys({ autoplay: true, size: { height: 250, width: 300 } }));
+  assert.equal(a, b);
+  assert.match(a, /"height":250/);
+});
+
+test('mute sequences are compared per guest', () => {
+  const out = diffFormats(facts({ mute: [[true, false]] }), facts({ mute: [[true]] }));
+  assert.equal(out[0].section, 'adformat-mute');
+  assert.equal(out[0].cls, 'BUG');
+});
+
+const probe = (points, performance = [{ pointerEvents: 'auto', connected: true }]) => ({
+  points,
+  performance,
+});
+
+test('probe routing and colour: container points are bugs, ad-content points variance', () => {
+  const e = facts({
+    probes: {
+      loaded: probe({
+        'reward-slot': { dom: 'ad-perf', colour: 'dark' },
+        'std-slot': { dom: 'ad-perf', colour: 'light' },
+        corner: { dom: 'ad-perf', colour: 'other' },
+      }),
+    },
+  });
+  const t = facts({
+    probes: {
+      loaded: probe({
+        'reward-slot': { dom: 'ad-perf', native: 'ad', colour: 'red' },
+        'std-slot': { dom: 'ad-perf', native: 'ad', colour: 'dark' },
+        corner: { dom: 'ad-perf', native: 'app', colour: 'dark' },
+      }),
+    },
+  });
+  const got = Object.fromEntries(diffFormats(e, t).map((d) => [`${d.key} ${d.field}`, d.cls]));
+  assert.deepEqual(got, {
+    'loaded reward-slot colour': 'BUG',
+    'loaded std-slot colour': 'variance',
+    'loaded corner native-routing': 'BUG',
+    'loaded corner colour': 'variance',
+  });
+});
+
+test('performance pointer-events must match at every probe', () => {
+  const out = diffFormats(
+    facts({ probes: { early: probe({}, [{ pointerEvents: 'none' }]) } }),
+    facts({ probes: { early: probe({}, [{ pointerEvents: 'auto' }]) } }),
+  );
+  assert.equal(out[0].field, 'performance pointer-events');
+  assert.equal(out[0].cls, 'BUG');
+});
+
+test('a synthesized click WebKit never delivers is not mirrored; a lost real click is a bug', () => {
+  const e = facts({ clicks: { pointer: 2, received: 2, sent: 2 } });
+  const sent = diffFormats(e, facts({ clicks: { pointer: 0, received: 0, sent: 2 } }));
+  assert.equal(sent[0].cls, 'not-mirrored');
+  const lost = diffFormats(e, facts({ clicks: { pointer: 2, received: 1, sent: 2 } }));
+  assert.equal(lost[0].cls, 'BUG');
+});
+
+test('an app that ever became frontmost is a bug on either host', () => {
+  const out = diffFormats(facts(), facts({ front: true }));
+  assert.equal(out[0].section, 'adformat-front');
+  assert.equal(out[0].cls, 'BUG');
+});
+
+test('window_closed status missing from the ow-electron net log is variance', () => {
+  const d = classify({
+    section: 'host-request',
+    key: 'GET https://analyticsnew.overwolf.com/analytics/Counter <label>_window_closed #9',
+    field: 'status',
+    electron: null,
+    tauri: 'HTTP/1.1 200',
+  });
+  assert.equal(d.class, 'variance');
+});
+
+test('a request ow-electron never completed in its net log is variance', () => {
+  const row = (field) => ({
+    section: 'host-request',
+    key: 'GET https://analyticsnew.overwolf.com/analytics/Counter <label>_app_start #2',
+    field,
+    electron: null,
+    tauri: 'x',
+    electronIncomplete: true,
+  });
+  for (const field of ['header-order', 'status', 'protocol']) {
+    assert.equal(classify(row(field)).class, 'variance');
+  }
+  const { electronIncomplete: _, ...complete } = row('header-order');
+  assert.equal(classify(complete).class, 'BUG');
+});
+
+test('a close counter length that is its own run span is variance', () => {
+  const run = (shown, closed) => [
+    { key: 'GET x <label>_app_heartbeat', at: 5 },
+    { key: 'GET x <label>_app_heartbeat', at: shown },
+    { key: 'GET x <label>_window_closed', at: closed },
+  ];
+  assert.equal(matchesOwnSpan(run(70_279, 118_729), 118_729, 48), true);
+  assert.equal(matchesOwnSpan(run(1_331, 62_389), 62_389, 61), true);
+  assert.equal(matchesOwnSpan(run(1_331, 62_389), 62_389, 48), false);
+  assert.equal(matchesOwnSpan([{ key: 'GET x <label>_app_heartbeat', at: 5 }], 900, 1), false);
+  const row = {
+    section: 'host-request',
+    key: 'GET x <label>_window_closed #10',
+    field: 'Extra.length',
+    electron: 48,
+    tauri: 61,
+  };
+  assert.equal(classify({ ...row, ownSpans: true }).class, 'variance');
+  assert.equal(classify(row).class, 'BUG');
+});
+
+test('colour classes and the ow-tauri source-over composite', () => {
+  assert.equal(colourClass([0.92, 0.2, 0.14, 1]), 'red');
+  assert.equal(colourClass([0.1, 0.1, 0.1, 1]), 'dark');
+  assert.equal(colourClass([0.94, 0.94, 0.94, 1]), 'light');
+  assert.equal(colourClass([0, 0, 0, 0]), 'clear');
+  assert.equal(colourClass([0.5, 0.5, 0.9, 1]), 'other');
+  const tauri = compositeAt({
+    host: 'tauri',
+    dom: { points: [{ name: 'p' }] },
+    native: {
+      order: [{ label: 'embedder' }, { label: 'overlay' }],
+      webviews: {},
+      snapshots: {
+        embedder: { samples: [{ name: 'p', rgba: [1, 0, 0, 1] }] },
+        overlay: { samples: [{ name: 'p', rgba: [0, 0, 0, 0.8] }] },
+      },
+    },
+  });
+  assert.equal(colourClass(tauri.p), 'dark');
+  assert.ok(Math.abs(tauri.p[0] - 0.2) < 0.01);
+  const electron = compositeAt({
+    host: 'electron',
+    snapshots: { embedder: { samples: [{ name: 'p', rgba: [0.2, 0, 0, 1] }] } },
+  });
+  assert.deepEqual(electron.p, [0.2, 0, 0, 1]);
+});
+
+test('a structure rect sampled on opposite sides of the high-impact expansion is variance', () => {
+  const d = { section: 'element-structure', key: 'hi', field: 'rect', electron: {}, tauri: {} };
+  assert.equal(classify({ ...d, zoneTiming: true }).class, 'variance');
+  assert.equal(classify({ ...d, zoneTiming: false }).class, 'BUG');
+});
+
+test('a structure sample on opposite sides of the first ad load differs only in pointer-events', () => {
+  const none = [
+    ['id', 'ad0'],
+    ['style', 'pointer-events: none;'],
+  ];
+  const auto = [
+    ['id', 'ad0'],
+    ['style', 'pointer-events: auto;'],
+  ];
+  assert.deepEqual(withoutPointerEvents(none), [['id', 'ad0']]);
+  assert.deepEqual(withoutPointerEvents(auto), withoutPointerEvents(none));
+  assert.deepEqual(withoutPointerEvents([['style', 'color: red; pointer-events: none;']]), [
+    ['style', 'color: red;'],
+  ]);
+  const loaded = [{ cid: 'a', t: 100 }];
+  assert.equal(loadedBefore(loaded, { cid: 'a', t: 99 }), false);
+  assert.equal(loadedBefore(loaded, { cid: 'a', t: 100 }), true);
+  assert.equal(loadedBefore(loaded, { cid: 'b', t: 500 }), false);
+  const d = {
+    section: 'element-structure',
+    key: 'a',
+    field: 'attributes',
+    electron: none,
+    tauri: auto,
+  };
+  assert.equal(classify({ ...d, loadTiming: true }).class, 'variance');
+  assert.equal(classify({ ...d, loadTiming: false }).class, 'BUG');
+});
+
+test('a guest that attached between the two startup consent messages is variance', () => {
+  assert.equal(consentDuringAttach(['consent'], ['consent', 'consent']), true);
+  assert.equal(consentDuringAttach([], ['consent', 'consent', 'eHashes']), false);
+  assert.equal(consentDuringAttach(['eHashes'], ['consent', 'consent', 'eHashes']), true);
+  assert.equal(consentDuringAttach(['consent', 'x'], ['consent', 'y']), false);
+  assert.equal(consentDuringAttach(['consent'], ['consent']), false);
+  // Three leading consents is no startup consent pair.
+  assert.equal(consentDuringAttach(['consent'], ['consent', 'consent', 'consent']), false);
+  const d = { section: 'host-message', key: 'guest g', field: 'sequence' };
+  assert.equal(classify({ ...d, consentDuringAttach: true }).class, 'variance');
+  assert.equal(classify({ ...d, consentDuringAttach: false }).class, 'BUG');
+});
+
+test('guest names follow probe write order; states sent before the guest document are ignored', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'parity-vis-'));
+  const probe = (cid) => JSON.stringify({ overwolf: { containerId: cid } });
+  // guest-2 (webContents 3) was ready and probed first.
+  writeFileSync(join(dir, 'guest-2-dom-ready-0.json'), probe('big'));
+  const later = new Date(Date.now() + 1000);
+  writeFileSync(join(dir, 'guest-1-dom-ready-0.json'), probe('small'));
+  utimesSync(join(dir, 'guest-1-dom-ready-0.json'), later, later);
+  writeFileSync(
+    join(dir, 'events.jsonl'),
+    [3, 4]
+      .map((id) => JSON.stringify({ kind: 'guest-probe', webContentsId: id, label: 'dom-ready-0' }))
+      .join('\n'),
+  );
+  const vis = (id, state, url) =>
+    JSON.stringify({
+      via: 'webContents._sendInternal',
+      type: 'owadview',
+      webContentsId: id,
+      url,
+      args: JSON.stringify(['GUEST_INSTANCE_VISIBILITY_CHANGE', state]),
+    });
+  writeFileSync(
+    join(dir, 'ipc.jsonl'),
+    [
+      vis(3, 'visible', ''),
+      vis(4, 'visible', ''),
+      vis(4, 'hidden', ''),
+      vis(3, 'visible', 'https://ad/'),
+      vis(4, 'hidden', 'https://ad/'),
+      vis(3, 'hidden', 'https://ad/'),
+    ].join('\n'),
+  );
+  assert.deepEqual(guestVisibility(dir), { big: ['visible', 'hidden'], small: ['hidden'] });
+});
+
+test('extra unmute/mute pairs from extra video plays are variance, other mute differences bugs', () => {
+  const played = (n) => ({ a: element({ counts: { play: n } }) });
+  const more = diffFormats(
+    facts({ elements: played(1), mute: [[true, false, true]] }),
+    facts({ elements: played(2), mute: [[true, false, true, false, true]] }),
+  );
+  assert.equal(more[0].cls, 'variance');
+  const samePlays = diffFormats(
+    facts({ elements: played(1), mute: [[true, false, true]] }),
+    facts({ elements: played(1), mute: [[true, false, true, false, true]] }),
+  );
+  assert.equal(samePlays[0].cls, 'BUG');
+  const wrongState = diffFormats(
+    facts({ elements: played(1), mute: [[true, false, true]] }),
+    facts({ elements: played(2), mute: [[true, false]] }),
+  );
+  assert.equal(wrongState[0].cls, 'BUG');
+});
+
+test('a consent message only one host sent before the guest attached is variance', () => {
+  const d = {
+    section: 'host-message',
+    key: 'guest g',
+    field: 'sequence',
+    electron: [],
+    tauri: ['consent', 'consent'],
+  };
+  assert.equal(classify({ ...d, consentBeforeGuest: true }).class, 'variance');
+  assert.equal(classify({ ...d, consentBeforeGuest: false }).class, 'BUG');
+});
+
+test('extra guest loads the ad page asked for after hidden are variance', () => {
+  const d = {
+    section: 'element-event',
+    key: 'slot dom-ready',
+    field: 'count',
+    electron: 1,
+    tauri: 2,
+  };
+  assert.equal(classify({ ...d, hiddenReload: true }).class, 'variance');
+  assert.equal(classify({ ...d, hiddenReload: false }).class, 'BUG');
 });

@@ -218,16 +218,25 @@ let liveStopped = false;
 let mainWindow = null;
 const seenGuests = new Set();
 
+/**
+ * Logs a live ad load (`guest-load`, `guest-reload`: an ad page load that
+ * can request an ad, counted against the cap) or a fill event of one
+ * (`event:*`, logged with `fill: true`, not counted).
+ */
 function countLiveLoad(reason, detail) {
   if (config.mode !== 'live') return;
-  liveLoads += 1;
+  const fill = reason.startsWith('event:');
+  if (!fill) liveLoads += 1;
   record('live-loads.jsonl', {
     n: liveLoads,
+    ...(fill ? { fill } : {}),
     reason,
     detail: safe(detail),
     at: new Date().toISOString(),
   });
-  if (liveLoads >= config.maxLiveLoads && !liveStopped) {
+  // The cap lets N loads run; a load beyond N is removed as it starts
+  // (it is logged and counts against the run's budget).
+  if (liveLoads > config.maxLiveLoads && !liveStopped) {
     liveStopped = true;
     record('events.jsonl', { kind: 'live-cap-reached', liveLoads });
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -242,11 +251,12 @@ function countLiveLoad(reason, detail) {
 
 function handlePageEvent(evt) {
   if (evt.kind !== 'owadview-event') return;
-  // ow-electron's harness counts a guest load when a new ad guest reaches
-  // dom-ready; here the element's first dom-ready event stands for it.
-  if (evt.event === 'dom-ready' && !seenGuests.has(evt.cid)) {
+  // Every ad page load can request an ad: the element's first dom-ready is
+  // its guest load, a later one a reload (both count).
+  if (evt.event === 'dom-ready') {
+    const reload = seenGuests.has(evt.cid);
     seenGuests.add(evt.cid);
-    countLiveLoad('guest-load', { cid: evt.cid });
+    countLiveLoad(reload ? 'guest-reload' : 'guest-load', { cid: evt.cid });
   }
   if (['impression', 'display_ad_loaded'].includes(evt.event)) {
     countLiveLoad(`event:${evt.event}`, { cid: evt.cid });
@@ -297,6 +307,68 @@ function describeWindow(win) {
     url: get(() => win.webContents.getURL()),
     listeners: get(() => win.eventNames().map((n) => [String(n), win.listenerCount(n)])),
   };
+}
+
+/** A guest-eval result: the JSON text the expression returned, parsed. */
+function parseResult(result) {
+  if (typeof result !== 'string') return safe(result);
+  try {
+    return JSON.parse(result);
+  } catch {
+    return result;
+  }
+}
+
+// ../../app/scenario.cjs GUEST_FRAME_HOOK, with the guest's console replaced
+// by a queue the harness drains (Tauri cannot read a guest's console).
+const GUEST_FRAME_HOOK = `JSON.stringify((() => {
+  const top = window;
+  top.__parityFrameLog = top.__parityFrameLog || [];
+  const summarize = (d) => { try { return typeof d === 'string' ? d.slice(0, 1500) : JSON.stringify(d).slice(0, 1500); } catch (e) { return String(d).slice(0, 200); } };
+  const hook = (w, path) => {
+    try {
+      if (w.__parityFrameHooked) return 0;
+      w.__parityFrameHooked = true;
+      w.addEventListener('message', (e) => {
+        try { if (top.__parityFrameLog.length < 5000) top.__parityFrameLog.push('__PARITYF__' + JSON.stringify({ path, href: w.location.href.slice(0, 200), origin: e.origin, fromParent: e.source === w.parent, data: summarize(e.data) })); } catch (err) {}
+      }, true);
+      return 1;
+    } catch (e) { return 0; }
+  };
+  const walk = (w, path) => {
+    let n = 0;
+    for (let i = 0; i < w.frames.length; i++) {
+      const f = w.frames[i];
+      try { void f.location.href; } catch (e) { continue; }
+      n += hook(f, path + '/' + i) + walk(f, path + '/' + i);
+    }
+    return n;
+  };
+  if (!top.__parityFrameTimer) top.__parityFrameTimer = setInterval(() => walk(top, ''), 1000);
+  return walk(top, '');
+})())`;
+
+const FRAME_DRAIN = `JSON.stringify((() => { const l = window.__parityFrameLog || []; window.__parityFrameLog = []; return l; })())`;
+let frameDrain = null;
+
+/** Moves the queued frame messages of every guest into console.jsonl, every second. */
+function startFrameDrain() {
+  if (frameDrain) return;
+  frameDrain = setInterval(async () => {
+    let results = [];
+    try {
+      results = await invoke('harness_guest_eval', { code: FRAME_DRAIN });
+    } catch {
+      return;
+    }
+    for (const { label, result } of results) {
+      const lines = parseResult(result);
+      if (!Array.isArray(lines)) continue;
+      for (const message of lines) {
+        record('console.jsonl', { type: 'owadview', webContentsId: label, level: 0, message });
+      }
+    }
+  }, 1000);
 }
 
 // parity-diff.mjs reads these from actions.jsonl (phase action-unsupported).
@@ -378,19 +450,60 @@ const actions = {
     });
   },
   'crash-guests': unsupported('crash-guests', 'no API to crash a WKWebView content process'),
+  async 'guest-eval'({ code, label }) {
+    // Runs in every ad guest's main frame (harness-own, not in ipc.jsonl).
+    for (const { label: guest, result } of await invoke('harness_guest_eval', {
+      code: `JSON.stringify((() => ${code})())`,
+    })) {
+      record('events.jsonl', {
+        kind: 'guest-eval',
+        label,
+        webContentsId: guest,
+        result: parseResult(result),
+      });
+    }
+  },
+  async 'hook-guest-frames'({ label }) {
+    // As ../../app/scenario.cjs: a capturing 'message' listener in every
+    // same-origin frame of each ad guest. The guests have no IPC, so the
+    // messages are queued in the guest and drained into console.jsonl
+    // (__PARITYF__ lines, the ow-electron harness's shape) every second.
+    for (const { label: guest, result } of await invoke('harness_guest_eval', {
+      code: GUEST_FRAME_HOOK,
+    })) {
+      record('events.jsonl', {
+        kind: 'hook-guest-frames',
+        label,
+        webContentsId: guest,
+        result: parseResult(result),
+      });
+    }
+    startFrameDrain();
+  },
+  async 'hit-probe'({ label, points, click, snapshot }) {
+    // Lab checks L1-L3: what the page hits at each point, which native view
+    // a click there reaches, each webview's own rendering, and (test mode,
+    // only into the app's webview) one click at the named point.
+    const dom = await pageEval(`window.__parityHit(${JSON.stringify(points)})`).catch((e) => ({
+      error: String(e),
+    }));
+    const win = `bw-${mainWindow?.id ?? 1}`;
+    // The page resolved selector points to CSS px; the native probe uses those.
+    const resolved = (dom?.points ?? []).map(({ name, x, y }) => ({ name, x, y }));
+    const native = await invoke('harness_native_probe', {
+      window: win,
+      embedder: win,
+      points: resolved,
+      snapshot: Boolean(snapshot),
+      click: config.mode === 'test' ? (click ?? null) : null,
+    }).catch((e) => ({ error: String(e) }));
+    record('events.jsonl', { kind: 'hit-probe', label, host: 'tauri', dom, native });
+  },
   'cookie-set': unsupported('cookie-set', 'not used by the compared scenarios'),
   async 'probe-guests'({ label }) {
     await invoke('harness_probe_guests', { phase: label });
   },
   introspect: unsupported('introspect', 'Electron internals'),
-  'guest-eval': unsupported(
-    'guest-eval',
-    'ad guests are native webviews; no harness eval channel yet',
-  ),
-  'hook-guest-frames': unsupported(
-    'hook-guest-frames',
-    'ad guests are native webviews; no harness eval channel yet',
-  ),
   listeners: async ({ label }) => {
     const out = { label, app: app.eventNames().map((n) => [String(n), app.listenerCount(n)]) };
     if (mainWindow && !mainWindow.isDestroyed()) {

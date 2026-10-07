@@ -18,13 +18,22 @@
 //
 //   node parity-diff.mjs captures/<electron-run> captures/<tauri-run> [--tolerance-ms 1500] [--burst-ms 250]
 //
+// Ad formats (sections adformat-*): per element the lifecycle order, payload
+// keys, removal and `destroyed`, the DOM state before and after the first
+// display_ad_loaded; the ad library options on the wire; guest mute states;
+// lab hit probes (page routing, ow-tauri native routing, composited colour
+// at each point, app clicks) and whether the app became frontmost
+// (lib/adformat-report.mjs adformatFacts).
+//
 // Writes parity-diff.json and parity-diff.md into the Tauri run and exits 1
 // when a BUG remains.
 
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { argv, exit } from 'node:process';
 import { fileURLToPath } from 'node:url';
+
+import { adformatFacts } from './lib/adformat-report.mjs';
 
 const readJson = (file) => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : null);
 const readJsonl = (file) =>
@@ -208,21 +217,40 @@ function cmpDocuments(runDir) {
 
 /**
  * Names each guest by its element's containerId (from the guest probes):
- * ow-tauri probes carry the guest's label; ow-electron numbers its probes
- * in guest webContents id order.
+ * ow-tauri probes carry the guest's label; newer ow-electron probes carry the
+ * guest's webContents id. Older ow-electron probes are numbered in dom-ready
+ * order, which is not webContents id order when a later guest is ready
+ * first: the harness writes each probe file just before its `guest-probe`
+ * record, so file write order pairs the files with the records' ids. Only
+ * when that pairing is incomplete does webContents id order decide.
  */
 function guestNamer(runDir) {
   const probes = readdirSync(runDir)
     .map((f) => /^guest-(\d+)-dom-ready-0\.json$/.exec(f))
     .filter(Boolean)
-    .map((m) => ({ n: Number(m[1]), probe: readJson(join(runDir, m[0])) }))
+    .map((m) => ({
+      n: Number(m[1]),
+      written: statSync(join(runDir, m[0])).mtimeMs,
+      probe: readJson(join(runDir, m[0])),
+    }))
     .sort((a, b) => a.n - b.n);
   const byLabel = new Map();
+  const byId = new Map();
   const byNumber = [];
   for (const { probe } of probes) {
     const cid = probe?.overwolf?.containerId ?? null;
     if (probe?.label) byLabel.set(probe.label, cid);
+    if (typeof probe?.webContentsId === 'number') byId.set(probe.webContentsId, cid);
     byNumber.push(cid);
+  }
+  const records = readJsonl(join(runDir, 'events.jsonl')).filter(
+    (e) => e.kind === 'guest-probe' && e.label === 'dom-ready-0',
+  );
+  if (!byId.size && records.length === probes.length) {
+    const inWriteOrder = [...probes].sort((a, b) => a.written - b.written || a.n - b.n);
+    records.forEach((r, i) =>
+      byId.set(r.webContentsId, inWriteOrder[i].probe?.overwolf?.containerId ?? null),
+    );
   }
   const ids = [];
   return {
@@ -232,10 +260,39 @@ function guestNamer(runDir) {
     },
     name(id) {
       if (typeof id === 'string') return byLabel.get(id) ?? id;
+      if (byId.has(id)) return byId.get(id);
       const sorted = [...ids].sort((a, b) => a - b);
       return byNumber[sorted.indexOf(id)] ?? `wc${id}`;
     },
   };
+}
+
+/**
+ * ow-tauri: per element cid, the guest reloads the ad page asked for after
+ * the host had told it `hidden` (lab `reload` records).
+ */
+function pageReloads(runDir) {
+  const namer = guestNamer(runDir);
+  const hidden = new Set();
+  const counts = {};
+  const records = [
+    ...readJsonl(join(runDir, 'ipc.jsonl')).filter(
+      (e) => e.via === 'guest-call' && e.function === 'setVisibility',
+    ),
+    ...readJsonl(join(runDir, 'wc-events.jsonl')).filter(
+      (e) => e.kind === 'reload' && e.type === 'owadview',
+    ),
+  ].sort((x, y) => x.t - y.t);
+  for (const r of records) {
+    if (r.function === 'setVisibility') {
+      if (r.args === 'hidden') hidden.add(r.label);
+      else hidden.delete(r.label);
+    } else if (hidden.has(r.label)) {
+      const cid = namer.name(r.label);
+      counts[cid] = (counts[cid] ?? 0) + 1;
+    }
+  }
+  return counts;
 }
 
 /** Host -> guest private messages, per guest. */
@@ -267,8 +324,23 @@ function privateMessages(runDir) {
   }));
 }
 
-/** Visibility the host reported to each guest, repeats collapsed. */
-function guestVisibility(runDir) {
+/** Visibility the host reported to each guest's document, repeats collapsed. */
+/**
+ * Whether a close counter's `length` (seconds) is the run's own visible
+ * span: from the first-visible-window heartbeat (the second
+ * `app_heartbeat`) to the close counter, within 2 s.
+ * @param {{key: string, at: number}[]} requests one capture's host requests
+ * @param {number} closedAt when the close counter started (ms)
+ * @param {number} length the counter's `Extra.length`
+ */
+export function matchesOwnSpan(requests, closedAt, length) {
+  const beats = requests.filter((r) => /_app_heartbeat$/.test(r.key)).sort((x, y) => x.at - y.at);
+  const shown = beats[1]?.at;
+  if (shown === undefined || typeof closedAt !== 'number' || closedAt < shown) return false;
+  return Math.abs((closedAt - shown) / 1000 - length) <= 2;
+}
+
+export function guestVisibility(runDir) {
   const namer = guestNamer(runDir);
   const raw = [];
   for (const e of readJsonl(join(runDir, 'ipc.jsonl'))) {
@@ -277,7 +349,10 @@ function guestVisibility(runDir) {
     } else if (e.via === 'webContents._sendInternal') {
       if (e.type === 'owadview') namer.see(e.webContentsId);
       const m = /^\["GUEST_INSTANCE_VISIBILITY_CHANGE","(\w+)"\]$/.exec(e.args ?? '');
-      if (m) raw.push([e.webContentsId, m[1]]);
+      // A state sent before the guest has a document (url '') never reaches
+      // the ad page; ow-electron sends the current state again once it has
+      // one. Only what the page can observe is compared.
+      if (m && e.url !== '') raw.push([e.webContentsId, m[1]]);
     }
   }
   const seq = {};
@@ -384,13 +459,17 @@ export function loadCapture(runDir) {
     pageVisibility: pageRecords(runDir, 'page-visibility'),
     elementApi: pageRecords(runDir, 'owadview-api'),
     elementStructure: pageRecords(runDir, 'owadview-structure'),
+    hiZone: pageRecords(runDir, 'hi-zone'),
+    adLoaded: pageRecords(runDir, 'owadview-event').filter((e) => e.event === 'display_ad_loaded'),
+    pageReloads: pageReloads(runDir),
     guestCount: guestProbeCount(runDir),
     consentCookies: consentCookies(runDir),
     stateAfter: stateFile(runDir, 'after'),
     stateBefore: stateFile(runDir, 'before'),
-    liveLoads: readJsonl(join(runDir, 'live-loads.jsonl')).length,
+    liveLoads: readJsonl(join(runDir, 'live-loads.jsonl')).filter((l) => !l.fill).length,
     fills: fillImpressions(runDir),
     actions: readJsonl(join(runDir, 'actions.jsonl')),
+    formats: adformatFacts(runDir),
     windowEnd:
       readJsonl(join(runDir, 'window-monitor.jsonl')).find((e) => e.kind === 'end') ?? null,
   };
@@ -418,14 +497,20 @@ const WEBVIEW_OWN = [
  */
 const RULES = [
   {
-    when: (d) => d.section === 'element-event' && d.field === 'count' && d.occludedReload,
+    when: (d) =>
+      d.section === 'element-event' && d.field === 'count' && (d.occludedReload || d.hiddenReload),
     cls: 'variance',
-    why: 'the OS hid the embedder document during the run (window occluded), so the ad page reloaded itself after hidden (CONTRACT D.5); ow-electron does the same when occluded',
+    why: 'the ad page reloaded itself after the host told it hidden (CONTRACT D.5: window occluded, or the slot hidden while the ad was idle); ow-electron does the same, and whether the page asks depends on its ad state and playback speed',
+  },
+  {
+    when: (d) => d.section === 'host-message' && d.field === 'sequence' && d.consentDuringAttach,
+    cls: 'variance',
+    why: "the guest attached between the startup consent's two messages (or after them) on one host, so it got fewer of them; the consent goes to the guests that exist when it is sent (CONTRACT D.5)",
   },
   {
     when: (d) => d.section === 'host-message' && d.field === 'sequence' && d.consentBeforeGuest,
     cls: 'variance',
-    why: 'the startup consent was saved before the guest attached, so it got no consent message and reads the cookies, as a guest attaching after the save does in ow-electron (CONTRACT D.5: sent to existing guests)',
+    why: 'the startup consent was saved before the guest attached on one host, so there it got no consent message and reads the cookies, as a guest attaching after the save does on either host (CONTRACT D.5: sent to existing guests)',
   },
   {
     when: (d) =>
@@ -446,15 +531,6 @@ const RULES = [
     why: "own properties of Electron's <webview> element; <owadview> is not a <webview> (PARITY deviations, CONTRACT B.3.3)",
   },
   {
-    when: (d) =>
-      d.section === 'guest' &&
-      /__overwolf__\.unit$/.test(d.key) &&
-      d.tauri === 'testAd' &&
-      d.electron !== '',
-    cls: 'intended:deviation',
-    why: 'test-mode unit guard [DEC]: a non-empty unit becomes "testAd" in test mode (CONTRACT D.2, PARITY deviations)',
-  },
-  {
     when: (d) => d.section === 'host-request' && d.field === 'header-order' && d.pseudoOnly,
     cls: 'intended:os-gap',
     why: 'HTTP/2 pseudo-header order is best effort (CONTRACT E.1); the h2 crate fixes it',
@@ -466,6 +542,19 @@ const RULES = [
       labelledUserAgent(d.electron, d.tauri),
     cls: 'intended:host-label',
     why: "UA keeps the platform engine, adds Tauri/<tv> and on WKWebView Safari's product tokens (CONTRACT E.1, PARITY user agent)",
+  },
+  {
+    when: (d) =>
+      d.section === 'host-request' &&
+      d.electronIncomplete &&
+      ['header-order', 'status', 'protocol'].includes(d.field),
+    cls: 'variance',
+    why: "ow-electron's netlog holds no completed exchange for this request (no sent headers, no response); ow-tauri's completed",
+  },
+  {
+    when: (d) => d.section === 'host-request' && d.field === 'Extra.length' && d.ownSpans,
+    cls: 'variance',
+    why: "each host reports its own run's visible span (first-visible heartbeat to close); the runs were not equally long (load gate, duration)",
   },
   {
     when: (d) => d.section === 'host-request' && d.field === 'order' && d.cmpFirst,
@@ -516,7 +605,9 @@ const RULES = [
   {
     when: (d) =>
       d.section === 'element-event' &&
-      /\s(display_ad_loaded|impression|play|player_loaded|pause|ended|complete)$/.test(d.key) &&
+      /\s(display_ad_loaded|impression|play|player_loaded|pause|ended|complete|video_ad_ready)$/.test(
+        d.key,
+      ) &&
       !(d.electron > 0 && d.tauri === 0),
     cls: 'variance',
     why: "ad-driven counts depend on the ads served and on playback speed (ow-electron's opacity-0 harness window plays the 15 s test video about 2.5 times slower, so fewer complete/impression cycles); an event ow-electron reports and ow-tauri never does stays a bug",
@@ -552,6 +643,49 @@ const RULES = [
     when: (d) => d.section === 'action' && d.field === 'unsupported',
     cls: 'not-mirrored',
     why: 'the Tauri harness has no equivalent for this Electron-only harness step (README)',
+  },
+  {
+    when: (d) =>
+      d.section === 'host-request' &&
+      d.field === 'status' &&
+      d.electron === null &&
+      /_window_closed/.test(d.key),
+    cls: 'variance',
+    why: "ow-electron's net log ends at quit before the response to the last window_closed counter (sent as the window closes)",
+  },
+  {
+    when: (d) =>
+      d.section === 'adformat-element' &&
+      d.field === 'events' &&
+      d.adDriven &&
+      !(d.missing ?? []).length,
+    cls: 'variance',
+    why: 'extra ad-driven events depend on the ads served and playback speed; an event ow-electron reports and ow-tauri never does stays a bug',
+  },
+  {
+    when: (d) => d.section === 'adformat-probe' && d.field === 'click' && d.tauriSentNotDelivered,
+    cls: 'not-mirrored',
+    why: "WebKit does not turn the lab's synthesized NSEvents into DOM events in the invisible window; the native hit test (field native-routing) is the routing proof, and the owner's rehearsal clicks for real",
+  },
+  {
+    when: (d) => d.section === 'adformat-probe' && d.field === 'colour' && d.ambiguous,
+    cls: 'variance',
+    why: 'the colour samples a pixel of ad or text content (class other, or a point that lands on a served creative) that differs with the ad served and its paint time; transparency, z-order and blur checks use the red container, the app control and the bare corner',
+  },
+  {
+    when: (d) => d.section === 'adformat-mute' && d.playbackCycles,
+    cls: 'variance',
+    why: 'one host played more test videos in the run (playback speed, see the ad-driven counts rule); each play unmutes and mutes the guest once more, the sequences agree otherwise',
+  },
+  {
+    when: (d) => d.section === 'element-structure' && d.zoneTiming,
+    cls: 'variance',
+    why: 'the structure sample fell before the high-impact expansion on one host and after it on the other; the expansion follows the ad served (both rects are checked by the adformat layout samples)',
+  },
+  {
+    when: (d) => d.section === 'element-structure' && d.loadTiming,
+    cls: 'variance',
+    why: 'the structure sample fell before the first display_ad_loaded on one host and after it on the other, and the attributes differ only in the pointer-events the page switches then (the adformat pointer section compares pointer-events before and after that event)',
   },
   {
     when: (d) => d.section === 'guest-count' || d.section === 'host-request-count-variance',
@@ -646,8 +780,19 @@ function compareHostRequests(e, t, out, tolerance, burst) {
     const a = e.hostRequests[i];
     const b = t.hostRequests[j];
     const key = `${normalise(a.key)} #${i}`;
+    // ow-electron's capture holds the request but no response or sent
+    // headers: the request never completed in its netlog.
+    const electronIncomplete = (a.status ?? null) === null && (b.status ?? null) !== null;
     const push = (field, ev, tv, extra = {}) =>
-      out.push({ section: 'host-request', key, field, electron: ev, tauri: tv, ...extra });
+      out.push({
+        section: 'host-request',
+        key,
+        field,
+        electron: ev,
+        tauri: tv,
+        ...(electronIncomplete ? { electronIncomplete } : {}),
+        ...extra,
+      });
     if (stable(a.query.map(([k]) => k)) !== stable(b.query.map(([k]) => k))) {
       push(
         'query-order',
@@ -667,6 +812,9 @@ function compareHostRequests(e, t, out, tolerance, burst) {
             if (Math.abs(v.length - (other.length ?? -99)) > Math.max(2, tolerance / 1000)) {
               push(`Extra.${field}`, v.length, other.length, {
                 why: 'visible period length beyond tolerance',
+                ownSpans:
+                  matchesOwnSpan(e.hostRequests, a.at, v.length) &&
+                  matchesOwnSpan(t.hostRequests, b.at, other.length),
               });
             }
             continue;
@@ -1086,7 +1234,10 @@ function guestProbesByContainer(runDir) {
   for (const f of readdirSync(runDir).sort()) {
     if (!/^guest-\d+-dom-ready-0\.json$/.test(f)) continue;
     const probe = readJson(join(runDir, f));
-    const cid = probe?.overwolf?.containerId;
+    const overwolf = probe?.overwolf;
+    if (!overwolf) continue;
+    // A performance guest has an empty containerId.
+    const cid = overwolf.containerId || (overwolf.performance ? 'performance' : null);
     if (cid && !out.has(cid)) out.set(cid, probe);
   }
   return out;
@@ -1181,6 +1332,173 @@ function compareGuests(e, t, out) {
   }
 }
 
+/** Ad events whose presence depends on the ads served (fills, playback). */
+const AD_DRIVEN = new Set([
+  'display_ad_loaded',
+  'performance_ad_loaded',
+  'video_ad_ready',
+  'high-impact-ad-loaded',
+  'high-impact-ad-removed',
+  'performance_ad_dismiss',
+]);
+
+/**
+ * Probe points that land on a served ad creative once it paints. Their colour
+ * depends on the creative and its paint time, so a difference there is
+ * variance; the red container, app control and bare corner points carry the
+ * transparency, z-order and blur checks.
+ */
+const AD_CONTENT_POINTS = new Set(['std-slot']);
+
+/** Compares the ad-format facts of both runs (lib/adformat-report.mjs). */
+export function compareAdformats(e, t, out) {
+  const ef = e.formats;
+  const tf = t.formats;
+  if (!ef || !tf) return;
+  for (const [key, a] of Object.entries(ef.elements)) {
+    const b = tf.elements[key];
+    if (!b) continue;
+    const push = (field, electron, tauri, extra = {}) =>
+      out.push({ section: 'adformat-element', key, field, electron, tauri, ...extra });
+    const missing = a.order.filter((n) => !b.order.includes(n));
+    const extra = b.order.filter((n) => !a.order.includes(n));
+    if (missing.length || extra.length)
+      push('events', a.order, b.order, {
+        missing,
+        extra,
+        adDriven: [...missing, ...extra].every((n) => AD_DRIVEN.has(n)),
+      });
+    const common = (list, other) => list.filter((n) => other.includes(n));
+    if (stable(common(a.order, b.order)) !== stable(common(b.order, a.order)))
+      push('order', a.order, b.order);
+    if (stable(a.removalOrder) !== stable(b.removalOrder))
+      push('removal', a.removalOrder, b.removalOrder);
+    for (const [name, keys] of Object.entries(a.payloadKeys)) {
+      const other = b.payloadKeys[name];
+      if (other && stable(keys) !== stable(other)) push(`payload-keys ${name}`, keys, other);
+    }
+    for (const phase of ['before', 'after']) {
+      const x = a.dom?.[phase];
+      const y = b.dom?.[phase];
+      if (!x || !y) continue;
+      for (const f of ['display', 'pointerEvents', 'inlineStyle', 'overlay'])
+        if (stable(x[f]) !== stable(y[f])) push(`dom-${phase} ${f}`, x[f], y[f]);
+    }
+  }
+  for (const [key, a] of Object.entries(ef.oamOptions)) {
+    const b = tf.oamOptions[key];
+    // An element one host has no option record for (ow-tauri: no probe
+    // reached the guest before it went away) is not compared.
+    if (!b?.length || !a.length) continue;
+    const missingOptions = a.filter((o) => !b.includes(o));
+    const extraOptions = b.filter((o) => !a.includes(o));
+    if (missingOptions.length || extraOptions.length)
+      out.push({
+        section: 'adformat-options',
+        key,
+        field: 'options',
+        electron: missingOptions,
+        tauri: extraOptions,
+      });
+  }
+  const mutes = (list) => list.map((m) => stable(m)).sort();
+  if (stable(mutes(ef.mute)) !== stable(mutes(tf.mute))) {
+    // Each played video unmutes the guest and mutes it again; a host that
+    // played more videos (playback speed) has more [false, true] pairs.
+    const plays = (f) => Object.values(f.elements).reduce((n, el) => n + (el.counts.play ?? 0), 0);
+    const byLength = (list) =>
+      [...list].sort((x, y) => x.length - y.length || stable(x).localeCompare(stable(y)));
+    const [ea, ta] = [byLength(ef.mute), byLength(tf.mute)];
+    const extraCycles = (x, y) => {
+      const [short, long] = x.length <= y.length ? [x, y] : [y, x];
+      const tail = long.slice(short.length);
+      return (
+        stable(long.slice(0, short.length)) === stable(short) &&
+        tail.length % 2 === 0 &&
+        tail.every((m, i) => m === (i % 2 === 0 ? false : true))
+      );
+    };
+    out.push({
+      section: 'adformat-mute',
+      key: 'guest mute states',
+      field: 'sequence',
+      electron: mutes(ef.mute),
+      tauri: mutes(tf.mute),
+      playbackCycles:
+        plays(ef) !== plays(tf) &&
+        ea.length === ta.length &&
+        ea.every((x, i) => extraCycles(x, ta[i])),
+    });
+  }
+  for (const [label, a] of Object.entries(ef.probes)) {
+    const b = tf.probes[label];
+    if (!b) continue;
+    for (const [name, x] of Object.entries(a.points)) {
+      const y = b.points[name];
+      if (!y) continue;
+      const key = `${label} ${name}`;
+      if (x.dom !== y.dom)
+        out.push({
+          section: 'adformat-probe',
+          key,
+          field: 'page-routing',
+          electron: x.dom,
+          tauri: y.dom,
+        });
+      const route = (dom) => (dom === 'ad-perf' ? 'ad' : dom);
+      if (y.native !== undefined && y.native !== route(y.dom))
+        out.push({
+          section: 'adformat-probe',
+          key,
+          field: 'native-routing',
+          electron: route(y.dom),
+          tauri: y.native,
+        });
+      if (x.colour && y.colour && x.colour !== y.colour)
+        out.push({
+          section: 'adformat-probe',
+          key,
+          field: 'colour',
+          electron: x.colour,
+          tauri: y.colour,
+          ambiguous: x.colour === 'other' || y.colour === 'other' || AD_CONTENT_POINTS.has(name),
+        });
+    }
+    if (
+      stable(a.performance.map((p) => p.pointerEvents)) !==
+      stable(b.performance.map((p) => p.pointerEvents))
+    )
+      out.push({
+        section: 'adformat-probe',
+        key: label,
+        field: 'performance pointer-events',
+        electron: a.performance,
+        tauri: b.performance,
+      });
+  }
+  if (ef.clicks.received !== tf.clicks.received || ef.clicks.sent !== tf.clicks.sent)
+    out.push({
+      section: 'adformat-probe',
+      key: 'app control',
+      field: 'click',
+      electron: ef.clicks,
+      tauri: tf.clicks,
+      tauriSentNotDelivered:
+        t.host === 'tauri' &&
+        ef.clicks.sent === tf.clicks.sent &&
+        tf.clicks.pointer === 0 &&
+        tf.clicks.received === 0,
+    });
+  if (tf.front === true || ef.front === true)
+    out.push({
+      section: 'adformat-front',
+      key: 'frontmost app',
+      field: 'everFront',
+      electron: ef.front,
+      tauri: tf.front,
+    });
+}
+
 /** Whether the OS hid the embedder document during the run. */
 function osHidden(capture) {
   return capture.pageVisibility.some((r) => r.visibilityState === 'hidden');
@@ -1203,6 +1521,14 @@ function compareElementEvents(e, t, out) {
       // the ad page reloads itself after `hidden` (D.5).
       occludedReload:
         b > a && /\s(dom-ready|did-finish-load)$/.test(key) && osHidden(t) && !osHidden(e),
+      // Extra loads the ad page asked for itself (`__overwolf__.reload()`)
+      // after the host told it `hidden` (D.5). Whether the page asks
+      // depends on its ad state (a video still playing does not), which
+      // follows playback speed.
+      hiddenReload:
+        b > a &&
+        /\s(dom-ready|did-finish-load)$/.test(key) &&
+        b - a <= (t.pageReloads?.[key.split(' ')[0]] ?? 0),
     });
   }
   const ea = e.elementApi[0];
@@ -1248,6 +1574,9 @@ function compareElementEvents(e, t, out) {
   const es = e.elementStructure[0];
   const ts = t.elementStructure[0];
   if (es && ts) {
+    // The high-impact zone the page expanded (or not) when the structure
+    // was sampled: its rect follows the served ad's timing.
+    const zone = (c, at) => c.hiZone?.filter((r) => r.t <= at).at(-1)?.action ?? 'restored';
     for (const f of ['attributes', 'shadowChildren', 'rect']) {
       if (stable(es[f]) !== stable(ts[f]))
         out.push({
@@ -1256,9 +1585,58 @@ function compareElementEvents(e, t, out) {
           field: f,
           electron: es[f],
           tauri: ts[f],
+          zoneTiming: f === 'rect' && zone(e, es.t) !== zone(t, ts.t),
+          loadTiming:
+            f === 'attributes' &&
+            loadedBefore(e.adLoaded, es) !== loadedBefore(t.adLoaded, ts) &&
+            stable(withoutPointerEvents(es[f])) === stable(withoutPointerEvents(ts[f])),
         });
     }
   }
+}
+
+/**
+ * Whether two guests' host message sequences differ only in how many of
+ * the startup consent's two `consent` messages lead them: the guest
+ * attached between (or after) those messages on one host. The consent goes
+ * to the guests that exist when it is sent (CONTRACT D.5).
+ * @param {string[]} a message types on one host
+ * @param {string[]} b message types on the other
+ */
+export function consentDuringAttach(a, b) {
+  const lead = (list) => {
+    const n = list.findIndex((x) => x !== 'consent');
+    return n < 0 ? list.length : n;
+  };
+  const [la, lb] = [lead(a), lead(b)];
+  return (
+    la !== lb && la <= 2 && lb <= 2 && JSON.stringify(a.slice(la)) === JSON.stringify(b.slice(lb))
+  );
+}
+
+/**
+ * Whether the element sampled in `sample` had seen its first
+ * display_ad_loaded when the sample was taken.
+ * @param {{cid?: string, t: number}[]} loaded the display_ad_loaded events
+ * @param {{cid?: string, t: number}} sample the structure sample
+ */
+export function loadedBefore(loaded, sample) {
+  return (loaded ?? []).some((e) => e.cid === sample.cid && e.t <= sample.t);
+}
+
+/**
+ * The attribute pairs with pointer-events taken out of `style`: the page
+ * switches pointer-events at the first display_ad_loaded, which the
+ * adformat pointer section compares on its own.
+ * @param {[string, string][] | null | undefined} attributes
+ */
+export function withoutPointerEvents(attributes) {
+  return (attributes ?? [])
+    .map(([k, v]) => [
+      k,
+      k === 'style' ? v.replace(/pointer-events:\s*[a-z-]+;?\s*/g, '').trim() : v,
+    ])
+    .filter(([k, v]) => k !== 'style' || v !== '');
 }
 
 /**
@@ -1266,12 +1644,16 @@ function compareElementEvents(e, t, out) {
  * before its first ad guest was created.
  */
 function consentSavedBeforeGuests(runDir) {
-  const saved = readJsonl(join(runDir, 'state-writes.jsonl')).find((w) =>
-    /"cmp":/.test(w.text ?? ''),
-  );
-  const guest = readJsonl(join(runDir, 'wc-events.jsonl')).find(
-    (w) => w.kind === 'created' && w.type === 'owadview',
-  );
+  // ow-tauri: the state file write; ow-electron: the consent cookie insert.
+  const saved =
+    readJsonl(join(runDir, 'state-writes.jsonl')).find((w) => /"cmp":/.test(w.text ?? '')) ??
+    readJsonl(join(runDir, 'cookie-changes.jsonl')).find(
+      (c) => c.cookie?.name === 'euconsent-v2' && !c.removed,
+    );
+  const guest = [
+    ...readJsonl(join(runDir, 'wc-events.jsonl')),
+    ...readJsonl(join(runDir, 'webcontents.jsonl')),
+  ].find((w) => w.kind === 'created' && w.type === 'owadview');
   return saved !== undefined && guest !== undefined && saved.t < guest.t;
 }
 
@@ -1306,8 +1688,10 @@ function compareMessages(e, t, out) {
     if (stable(at) !== stable(bt)) {
       // The startup consent may be saved before a guest attaches (timing);
       // that guest then reads consent from the cookies only.
-      const first = at.findIndex((x) => x !== 'consent');
-      const withoutConsent = first < 0 ? [] : at.slice(first);
+      const leading = (list) => {
+        const first = list.findIndex((x) => x !== 'consent');
+        return first < 0 ? [] : list.slice(first);
+      };
       out.push({
         section: 'host-message',
         key: `guest ${g}`,
@@ -1315,7 +1699,9 @@ function compareMessages(e, t, out) {
         electron: at,
         tauri: bt,
         consentBeforeGuest:
-          consentSavedBeforeGuests(t.runDir) && stable(withoutConsent) === stable(bt),
+          (consentSavedBeforeGuests(t.runDir) && stable(leading(at)) === stable(bt)) ||
+          (consentSavedBeforeGuests(e.runDir) && stable(leading(bt)) === stable(at)),
+        consentDuringAttach: consentDuringAttach(at, bt),
       });
       continue;
     }
@@ -1397,6 +1783,7 @@ export function diffCaptures(electronDir, tauriDir, { tolerance = 1500, burst = 
   compareMessages(e, t, raw);
   compareVisibility(e, t, raw);
   compareLive(e, t, raw);
+  compareAdformats(e, t, raw);
   const diffs = raw.filter((d) => !d.informational).map(classify);
   const info = raw.filter((d) => d.informational);
   const counts = {};

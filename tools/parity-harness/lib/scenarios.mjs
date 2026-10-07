@@ -44,6 +44,37 @@ const PERF_PROBES = [
   { at: 80000, do: 'probe-guests', label: 'perf+77s' },
 ];
 
+/** The lab's interstitial (L1/L4): darker, with a positive blur. */
+const PERF_LAB = {
+  ...PERF_DOC,
+  id: 'perf-lab',
+  attrs: {
+    performance: '',
+    adstyle: 'background-color: rgba(0, 0, 0, 0.8); background-blur: 3;',
+  },
+};
+/** Lab hit probe (page hit test, native hit test on Tauri, snapshots). */
+const LAB_POINTS = [
+  { name: 'control', selector: '#parity-control' },
+  { name: 'reward-slot', selector: 'owadview[cid="parity_lab_reward"]' },
+  { name: 'std-slot', selector: 'owadview[cid^="parity_lab_std"]' },
+  { name: 'corner', x: 1150, y: 40 },
+];
+const hitProbe = (at, label, extra = {}) => ({
+  at,
+  do: 'hit-probe',
+  label,
+  points: LAB_POINTS,
+  ...extra,
+});
+/** The app calls setAudioMuted(muted) on every element (L5). */
+const muteAll = (at, muted) => ({
+  at,
+  do: 'page-eval',
+  label: `setAudioMuted(${muted})`,
+  code: `document.querySelectorAll('owadview').forEach((el) => el.setAudioMuted(${muted})); 'ok'`,
+});
+
 /** Feature-flag stand-in responses for `--features <preset>` (cmp-required scenario). */
 export const FEATURE_PRESETS = {
   empty: [{ status: 200, body: '{"params":[]}' }],
@@ -705,6 +736,220 @@ export const SCENARIOS = {
       actions: [
         { at: 20000, do: 'probe-guests', label: 'house+20s' },
         { at: 70000, do: 'probe-guests', label: 'house+70s' },
+      ],
+    },
+  },
+
+  // --- Lab checks (AD-FORMATS-SPEC section 7; test mode; no input into ads) ---
+  'lab-layers': {
+    describe:
+      'L1-L4, L10: a ready (unplayed) 400x300 reward slot and a 300x250 standard slot, both over a red container background, an app button at (900, 600), and at 5 s a performance ad with adstyle "background-color: rgba(0, 0, 0, 0.8); background-blur: 3;". Hit probes (page hit test; Tauri also the native hit test and per-webview snapshots) before, while the interstitial loads (plus one test-mode click into the app button, refused unless it routes to the app), after display_ad_loaded, and after a standard slot is remounted under the overlay.',
+    defaults: { mode: 'test', present: 'transparent', layout: 'none', duration: 45 },
+    config: {
+      window: { width: 1200, height: 800 },
+      elementSpec: [
+        {
+          layout: '400x300',
+          cid: 'parity_lab_reward',
+          attrs: { adstyle: 'rewarded-ad;' },
+          containerBackground: 'rgb(255, 0, 0)',
+        },
+        { layout: '300x250', cid: 'parity_lab_std', containerBackground: 'rgb(255, 0, 0)' },
+        { control: { id: 'parity-control', x: 900, y: 600, width: 160, height: 60 } },
+        { at: 5000, ...PERF_LAB },
+      ],
+      actions: [
+        hitProbe(1000, 'early', { snapshot: true }),
+        hitProbe(4000, 'before-perf', { snapshot: true }),
+        hitProbe(5600, 'perf-loading', { snapshot: true, click: 'control' }),
+        hitProbe(16000, 'perf-loaded', { snapshot: true, click: 'control' }),
+        {
+          at: 18000,
+          do: 'page-eval',
+          label: 'remount the standard slot',
+          code: `(() => { const s = document.querySelector('owadview[cid="parity_lab_std"]').parentElement; s.remove(); window.__parityAddAd({ layout: '300x250', cid: 'parity_lab_std2', containerBackground: 'rgb(255, 0, 0)' }); return 'ok'; })()`,
+        },
+        hitProbe(26000, 'after-remount', { snapshot: true }),
+        { at: 27000, do: 'probe-guests', label: 'lab+27s' },
+      ],
+    },
+  },
+
+  'reward-optin': {
+    describe:
+      'L7: four ready rewarded 400x300 slots; the app hides one slot at a time (display:none) for 1 frame, 50 ms, 500 ms and 2 s, 20 s apart, and shows it again. Which hides make the ad play (userPlay, play, impression)? Frame message hook on. App-side DOM changes only.',
+    defaults: {
+      mode: 'test',
+      present: 'transparent',
+      layout: '400x300,400x300,400x300,400x300',
+      duration: 115,
+    },
+    config: {
+      window: { width: 1000, height: 760 },
+      elementAttrs: [0, 1, 2, 3].map(() => ({ adstyle: 'rewarded-ad;' })),
+      actions: [
+        { at: 12000, do: 'hook-guest-frames', label: 'oam' },
+        ...[
+          ['1 frame', 'raf'],
+          ['50 ms', 50],
+          ['500 ms', 500],
+          ['2 s', 2000],
+        ].flatMap(([name, hide], i) => [
+          {
+            at: 20000 + i * 20000,
+            do: 'page-eval',
+            label: `slot ${i} hidden for ${name}`,
+            code: `(() => { const s = document.querySelectorAll('.slot')[${i}]; s.style.display = 'none'; const show = () => { s.style.display = ''; }; ${
+              hide === 'raf'
+                ? 'requestAnimationFrame(() => requestAnimationFrame(show));'
+                : `setTimeout(show, ${hide});`
+            } return 'ok'; })()`,
+          },
+          { at: 24000 + i * 20000, do: 'hook-guest-frames', label: `oam-after-${i}` },
+        ]),
+        { at: 100000, do: 'probe-guests', label: 'optin-end' },
+      ],
+    },
+  },
+
+  'perf-minimize': {
+    describe:
+      'L8: performance ad (docs example) at 3 s; the app window is minimized at 20 s and restored at 26 s (alpha-0 window). Element events (performance_ad_dismiss?), guest state and the host signals around it.',
+    defaults: { mode: 'test', present: 'transparent', layout: 'none', duration: 50 },
+    config: {
+      window: { width: 1200, height: 800 },
+      elementSpec: [{ at: 3000, ...PERF_DOC }],
+      actions: [
+        { at: 15000, do: 'probe-guests', label: 'perf+12s' },
+        { at: 20000, do: 'window', method: 'minimize' },
+        { at: 26000, do: 'window', method: 'restore' },
+        { at: 32000, do: 'probe-guests', label: 'restored+6s' },
+      ],
+    },
+  },
+
+  'standard-remove': {
+    describe:
+      'L6, L9: a 300x250 standard slot removed by the app at 20 s, a new one added at 25 s and that one moved to another container at 35 s (detach + attach). Element events (destroyed?), guest close and the removal timings.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 50 },
+    config: {
+      actions: [
+        { at: 15000, do: 'probe-guests', label: 'std+15s' },
+        {
+          at: 20000,
+          do: 'page-eval',
+          label: 'app removes the standard ad',
+          code: `document.querySelector('owadview').remove(); 'ok'`,
+        },
+        {
+          at: 25000,
+          do: 'page-eval',
+          label: 'app adds a new standard ad',
+          code: `window.__parityAddAd({ layout: '300x250', cid: 'parity_std_again' }); 'ok'`,
+        },
+        {
+          at: 35000,
+          do: 'page-eval',
+          label: 'app moves the new ad to another container',
+          code: `(() => { const ad = document.querySelector('owadview[cid="parity_std_again"]'); const box = document.createElement('div'); box.className = 'slot'; box.style.width = '300px'; box.style.height = '250px'; document.body.appendChild(box); box.appendChild(ad); return 'ok'; })()`,
+        },
+        { at: 42000, do: 'probe-guests', label: 'moved+7s' },
+      ],
+    },
+  },
+
+  audio: {
+    describe:
+      'L5: a 400x300 standard slot and a 400x300 rewarded slot; the app calls setAudioMuted(false) on both at 10 s, opts in to the reward at 15 s, and calls setAudioMuted(true) at 45 s. The mute calls each host makes on each guest (ipc.jsonl).',
+    defaults: { mode: 'test', present: 'transparent', layout: '400x300,400x300', duration: 60 },
+    config: {
+      elementAttrs: [{}, { adstyle: 'rewarded-ad;' }],
+      actions: [
+        muteAll(10000, false),
+        {
+          at: 15000,
+          do: 'page-eval',
+          label: 'reward slot hidden',
+          code: `document.querySelectorAll('.slot')[1].style.display = 'none'; 'ok'`,
+        },
+        {
+          at: 16000,
+          do: 'page-eval',
+          label: 'reward slot shown (opt-in)',
+          code: `document.querySelectorAll('.slot')[1].style.display = ''; 'ok'`,
+        },
+        { at: 30000, do: 'probe-guests', label: 'audio+30s' },
+        muteAll(45000, true),
+      ],
+    },
+  },
+
+  owadtestad: {
+    describe:
+      'L11: sets localStorage.owAdTestAd = "true" in the ad guest origin at 10 s (persistent profile: --home profile:<name>), reloads the slot, and records the ad library options. A later --mode live run on the same profile shows whether the guest switches to test ads.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 40 },
+    config: {
+      actions: [
+        {
+          at: 10000,
+          do: 'guest-eval',
+          label: 'owAdTestAd before',
+          code: `({ origin: location.origin, value: localStorage.getItem('owAdTestAd') })`,
+        },
+        {
+          at: 11000,
+          do: 'guest-eval',
+          label: 'set owAdTestAd',
+          code: `(localStorage.setItem('owAdTestAd', 'true'), { origin: location.origin, value: localStorage.getItem('owAdTestAd') })`,
+        },
+        {
+          at: 12000,
+          do: 'page-eval',
+          label: 'reload the slot',
+          code: `document.querySelector('owadview').reload(); 'ok'`,
+        },
+        { at: 25000, do: 'probe-guests', label: 'testad+25s' },
+      ],
+    },
+  },
+
+  'owadtestad-live': {
+    describe:
+      'L11 (live, 1 load): a 300x250 slot on a profile where owAdTestAd was set (run owadtestad first with the same --home profile:<name>); reads the stored value and the ad library options. Needs --mode live --live-ok --max-live-loads 1.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 40 },
+    config: {
+      actions: [
+        {
+          at: 8000,
+          do: 'guest-eval',
+          label: 'owAdTestAd stored',
+          code: `({ origin: location.origin, value: localStorage.getItem('owAdTestAd') })`,
+        },
+        { at: 20000, do: 'probe-guests', label: 'testad-live+20s' },
+      ],
+    },
+  },
+
+  'tower-plus': {
+    describe:
+      'Live preset: the Tower Plus layout page, a 400x600 and a 400x60 slot (Overwolf ad sizes). Run with --mode live --live-ok --max-live-loads 2.',
+    defaults: { mode: 'test', present: 'transparent', layout: '400x600,400x60', duration: 60 },
+    config: {
+      window: { width: 900, height: 760 },
+      actions: [{ at: 30000, do: 'probe-guests', label: 'tower+30s' }],
+    },
+  },
+
+  'high-impact-only': {
+    describe:
+      'Live preset: the documented high-impact zone without the 400x60 container (one live load). Run with --mode live --live-ok --max-live-loads 1.',
+    defaults: { mode: 'test', present: 'transparent', layout: 'none', duration: 90 },
+    config: {
+      window: { width: 1000, height: 760 },
+      elementSpec: [{ zone: 'high-impact', small: false }],
+      actions: [
+        { at: 15000, do: 'probe-guests', label: 'hi+15s' },
+        { at: 60000, do: 'probe-guests', label: 'hi+60s' },
       ],
     },
   },

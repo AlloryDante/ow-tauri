@@ -7,7 +7,7 @@
 //
 //   node lib/adformat-report.mjs captures/<run-id>
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { argv } from 'node:process';
 
@@ -51,6 +51,290 @@ function parseArgs(raw) {
   } catch {
     return raw;
   }
+}
+
+/** Element lifecycle events whose first-occurrence order both hosts share. */
+export const LIFECYCLE = [
+  'did-attach',
+  'dom-ready',
+  'did-finish-load',
+  'display_ad_loaded',
+  'performance_ad_loaded',
+  'high-impact-ad-loaded',
+  'high-impact-ad-removed',
+  'performance_ad_dismiss',
+  'video_ad_ready',
+  'destroyed',
+];
+
+/** The decoded OAM `options` of an ad library URL, or null. */
+export function oamOptionsOf(url) {
+  if (!/oam\/releases\//.test(url)) return null;
+  return decodeOptions(url)?.options ?? null;
+}
+
+/** An element's key in both hosts' records: its cid, or `performance`. */
+const elementKey = (cid) => cid ?? 'performance';
+
+/** The DOM state of one element as a layout sample describes it. */
+function domState(el) {
+  if (!el) return null;
+  const overlay = (el.children ?? []).find((c) => c.tag === 'div');
+  return {
+    connected: el.connected,
+    display: el.style?.display ?? null,
+    pointerEvents: el.style?.pointerEvents ?? null,
+    inlineStyle: el.inlineStyle ?? null,
+    overlay: overlay
+      ? {
+          position: overlay.style?.position,
+          pointerEvents: overlay.style?.pointerEvents,
+          zIndex: overlay.style?.zIndex,
+        }
+      : null,
+  };
+}
+
+/** Coarse colour class of an RGBA sample (0-1), for cross-engine comparison. */
+export function colourClass(rgba) {
+  if (!Array.isArray(rgba)) return null;
+  const [r, g, b, a] = rgba;
+  if (a < 0.01) return 'clear';
+  if (r > 0.7 && g < 0.4 && b < 0.4) return 'red';
+  if (r < 0.3 && g < 0.3 && b < 0.3) return 'dark';
+  if (r > 0.6 && g > 0.6 && b > 0.6) return 'light';
+  return 'other';
+}
+
+/**
+ * The colour a viewer sees at each probe point. ow-electron captures the
+ * composited window; ow-tauri snapshots each webview, so the snapshots are
+ * composited bottom to top in the native order (source-over).
+ */
+export function compositeAt(probe) {
+  const out = {};
+  const shots = probe.native?.snapshots ?? probe.snapshots;
+  if (!shots) return null;
+  if (probe.host !== 'tauri') {
+    for (const s of shots.embedder?.samples ?? []) out[s.name] = s.rgba;
+    return out;
+  }
+  const order = (probe.native?.order ?? []).map((o) => o.label);
+  for (const point of probe.dom?.points ?? []) {
+    let colour = null;
+    for (const label of order) {
+      if (probe.native?.webviews?.[label]?.hidden) continue;
+      const sample = shots[label]?.samples?.find((x) => x.name === point.name)?.rgba;
+      if (!sample) continue;
+      if (!colour) {
+        colour = sample;
+        continue;
+      }
+      const a = sample[3];
+      colour = [0, 1, 2].map((i) => sample[i] * a + colour[i] * (1 - a)).concat([1]);
+    }
+    out[point.name] = colour && colour.map((v) => Math.round(v * 1000) / 1000);
+  }
+  return out;
+}
+
+/**
+ * A copy of `value` with object keys sorted at every depth, so two option
+ * sets compare by content and not by key order.
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+export function sortKeys(value) {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value && typeof value === 'object')
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((k) => [k, sortKeys(value[k])]),
+    );
+  return value;
+}
+
+/**
+ * Host-independent facts of one run for parity-diff (both hosts write the
+ * same page records; the host traces are normalised here):
+ * - elements: per element key, the lifecycle order, payload keys, removal
+ *   and `destroyed` timings, and the DOM state before and after its first
+ *   `display_ad_loaded`;
+ * - oamOptions: per element key, the ad library option sets on the wire
+ *   (ow-electron net log; ow-tauri guest resource lists);
+ * - mute: each guest's sequence of mute states (L5);
+ * - probes: lab hit probes (page and native routing, clicks, composited
+ *   colour classes) by label (L1-L4);
+ * - clicks: app control pointer and click records;
+ * - bounds: ow-tauri native guest sizes against the element rects (L2);
+ * - front: whether the app ever became the frontmost app.
+ */
+export function adformatFacts(runDir) {
+  const pageEvents = readJsonl(join(runDir, 'page-events.jsonl'));
+  const ipc = readJsonl(join(runDir, 'ipc.jsonl'));
+  const events = readJsonl(join(runDir, 'events.jsonl'));
+  const wcEvents = readJsonl(join(runDir, 'wc-events.jsonl'));
+  const requests = readJson(join(runDir, 'netlog-requests.json')) ?? [];
+
+  const elements = {};
+  const element = (cid) => {
+    const key = elementKey(cid);
+    elements[key] ??= {
+      key,
+      created: [],
+      order: [],
+      counts: {},
+      payloadKeys: {},
+      removedAfter: null,
+      destroyedAfter: null,
+      removalOrder: [],
+      firstLoadAt: null,
+      modalAt: null,
+    };
+    return elements[key];
+  };
+  for (const e of pageEvents) {
+    if (e.kind === 'owadview-created') element(e.cid).created.push(e.at);
+  }
+  for (const e of pageEvents) {
+    if (e.kind !== 'owadview-event' && e.kind !== 'owadview-removed') continue;
+    const el = element(e.cid);
+    const since = e.at - (el.created[0] ?? 0);
+    if (e.kind === 'owadview-removed') {
+      el.removedAfter ??= since;
+      el.removalOrder.push('removed');
+      continue;
+    }
+    el.counts[e.event] = (el.counts[e.event] ?? 0) + 1;
+    if (LIFECYCLE.includes(e.event) && !el.order.includes(e.event)) el.order.push(e.event);
+    const detail = e.info?.detail;
+    if (detail && typeof detail === 'object' && !Array.isArray(detail))
+      el.payloadKeys[e.event] ??= Object.keys(detail).sort();
+    if (e.event === 'destroyed') {
+      el.destroyedAfter ??= since;
+      el.removalOrder.push('destroyed');
+    }
+    if (e.event === 'display_ad_loaded') el.firstLoadAt ??= e.at;
+    if (e.event === 'performance_ad_loaded') el.modalAt ??= e.at;
+  }
+  // DOM state before each element's first display_ad_loaded, and after it
+  // settled: a performance element switches at its first
+  // performance_ad_loaded [OBS], which follows display_ad_loaded within
+  // ~100 ms, so its "after" is sampled after that event (a sample between
+  // the two would only measure when the page happened to sample).
+  const samples = pageEvents.filter((e) => e.kind === 'layout-sample');
+  const find = (sample, key) =>
+    sample.elements?.find((x) =>
+      key === 'performance' ? x.attributes?.some(([n]) => n === 'performance') : x.cid === key,
+    );
+  for (const el of Object.values(elements)) {
+    const at = el.firstLoadAt;
+    const settled = el.modalAt ?? at;
+    const before = samples.filter((s) => (at === null || s.at < at) && find(s, el.key)).at(-1);
+    const after =
+      settled === null
+        ? null
+        : (samples.find((s) => s.at >= settled + 40 && find(s, el.key)) ?? null);
+    el.dom = {
+      before: domState(before && find(before, el.key)),
+      after: domState(after && find(after, el.key)),
+    };
+    el.removalOrder = [...new Set(el.removalOrder)];
+  }
+
+  // Ad library options on the wire.
+  const urls = requests.map((r) => r.url);
+  for (const f of existsSync(runDir) ? readdirSync(runDir) : []) {
+    if (/^guest-\d+-.*\.json$/.test(f))
+      urls.push(...(readJson(join(runDir, f))?.labResources ?? []));
+  }
+  // Per element: ow-tauri only sees the option sets of guests a probe
+  // reached, so parity-diff compares the elements both hosts have evidence of.
+  const oam = {};
+  for (const url of urls) {
+    const options = oamOptionsOf(url);
+    if (options) {
+      const { containerId, ...rest } = options;
+      const key = elementKey(containerId || null);
+      oam[key] ??= new Set();
+      oam[key].add(JSON.stringify(sortKeys(rest)));
+    }
+  }
+
+  // Mute states per guest, in the order the guests were first muted.
+  const mute = new Map();
+  for (const e of ipc) {
+    let guest = null;
+    let muted = null;
+    if (e.via === 'webContents.setAudioMuted' && e.type === 'owadview') {
+      guest = e.webContentsId;
+      muted = Boolean(parseArgs(e.args)?.[0]);
+    } else if (e.via === 'set-muted') {
+      guest = e.label;
+      muted = Boolean(e.muted);
+    }
+    if (guest === null) continue;
+    const list = mute.get(guest) ?? [];
+    if (list.at(-1) !== muted) list.push(muted);
+    mute.set(guest, list);
+  }
+
+  // Lab hit probes.
+  const probes = {};
+  for (const e of events) {
+    if (e.kind !== 'hit-probe') continue;
+    const embedder = (label) => (label && /^bw-/.test(label) ? 'app' : label ? 'ad' : null);
+    const composite = compositeAt(e);
+    probes[e.label] = {
+      points: Object.fromEntries(
+        (e.dom?.points ?? []).map((p) => [
+          p.name,
+          {
+            dom: p.target
+              ? p.target.kind === 'ad' && p.target.performance
+                ? 'ad-perf'
+                : p.target.kind
+              : null,
+            native:
+              e.host === 'tauri'
+                ? embedder(e.native?.hits?.find((h) => h.name === p.name)?.target?.label)
+                : undefined,
+            colour: composite ? colourClass(composite[p.name]) : undefined,
+          },
+        ]),
+      ),
+      performance: e.dom?.performance ?? [],
+      click: e.native?.click ?? e.click ?? null,
+    };
+  }
+  const clicks = {
+    pointer: pageEvents.filter((e) => e.kind === 'app-pointer').length,
+    received: pageEvents.filter((e) => e.kind === 'app-click').length,
+    sent: Object.values(probes).filter((p) => p.click?.sent).length,
+  };
+
+  // ow-tauri: native guest sizes (last bounds of each guest still open).
+  const bounds = {};
+  for (const e of wcEvents) {
+    if (e.type !== 'owadview') continue;
+    if (e.kind === 'bounds') bounds[e.label] = e.bounds.slice(2);
+    if (e.kind === 'closed') delete bounds[e.label];
+  }
+  const front = readJsonl(join(runDir, 'front-monitor.jsonl')).find((e) => e.kind === 'end');
+  return {
+    elements,
+    oamOptions: Object.fromEntries(
+      Object.entries(oam)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([k, v]) => [k, [...v].sort()]),
+    ),
+    mute: [...mute.values()],
+    probes,
+    clicks,
+    bounds: Object.values(bounds),
+    front: front ? front.everFront : null,
+  };
 }
 
 export function adformatReport(runDir) {
@@ -246,6 +530,7 @@ export function adformatReport(runDir) {
     oamOptions,
     timeline,
     adRequests,
+    facts: adformatFacts(runDir),
   };
   return result;
 }

@@ -28,12 +28,19 @@ tauri = { version = "2.12.1", features = ["unstable"] }
 serde_json = "1"
 tauri-plugin-overwolf = { path = "../../../../crates/tauri-plugin-overwolf", features = ["lab"] }
 
+# The native lab probes (src/native.rs); versions as in the plugin.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+block2 = "0.6.2"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSGeometry"] }
+
 [build-dependencies]
 tauri-build = { version = "2.7.1", features = [] }
 
 [lints.rust]
 missing_docs = "deny"
-unsafe_code = "forbid"
+# Only src/native.rs (macOS lab probes) calls Objective-C.
+unsafe_code = "deny"
 rust_2018_idioms = { level = "warn", priority = -1 }
 
 [lints.clippy]

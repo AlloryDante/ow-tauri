@@ -681,6 +681,51 @@ module.exports = function install(ctx) {
         });
       }
     },
+    async 'hit-probe'({ label, points, click, snapshot }) {
+      // Lab checks L1-L3: what the page hits at each point (on ow-electron the
+      // guest is part of the page, so the DOM hit is the input routing), one
+      // test-mode click into the app's own control (never into an ad), and a
+      // capture of the composited window and of each guest.
+      const win = ctx.getMainWindow();
+      const dom = await pageEval(`window.__parityHit(${JSON.stringify(points)})`).catch((e) => ({
+        error: String(e),
+      }));
+      const out = { kind: 'hit-probe', label, host: 'electron', dom: safe(dom) };
+      if (click) {
+        // The page resolved selector points to CSS px.
+        const hit = dom?.points?.find((p) => p.name === click);
+        const point = hit && hit.x >= 0 ? hit : null;
+        if (config.mode !== 'test') out.click = { sent: false, refused: 'not in test mode' };
+        else if (!point || !win || win.isDestroyed())
+          out.click = { sent: false, refused: 'no such point' };
+        else if (hit?.target?.kind !== 'app')
+          out.click = {
+            name: click,
+            sent: false,
+            refused: 'the click would not reach an app control',
+            target: hit?.target ?? null,
+          };
+        else {
+          const at = { x: Math.round(point.x), y: Math.round(point.y), button: 'left' };
+          win.webContents.sendInputEvent({ type: 'mouseDown', clickCount: 1, ...at });
+          win.webContents.sendInputEvent({ type: 'mouseUp', clickCount: 1, ...at });
+          out.click = { name: click, sent: true, target: hit.target };
+        }
+      }
+      if (snapshot && win && !win.isDestroyed()) {
+        out.snapshots = {};
+        const shot = async (key, wc, pts, cssWidth) => {
+          try {
+            out.snapshots[key] = sampleImage(await wc.capturePage(), pts, cssWidth);
+          } catch (e) {
+            out.snapshots[key] = { error: String(e) };
+          }
+        };
+        await shot('embedder', win.webContents, dom?.points ?? [], win.getContentBounds().width);
+        for (const wc of guests()) await shot(`guest-${wc.id}`, wc, []);
+      }
+      record('events.jsonl', out);
+    },
     async 'probe-guests'({ label }) {
       await probeAllGuests(label);
     },
@@ -877,6 +922,50 @@ const GUEST_FRAME_HOOK = `(() => {
   if (!window.__parityFrameTimer) window.__parityFrameTimer = setInterval(() => walk(window, ''), 1000);
   return walk(window, '');
 })()`;
+
+/**
+ * The colour (0-1 rgba, rounded to 0.001) of a NativeImage at each point (CSS
+ * px from the image's top left; `cssWidth` is the captured width in CSS px)
+ * and a 16x16 grid of alpha counts. The shape
+ * matches the Tauri harness's native snapshot samples.
+ */
+function sampleImage(image, points, cssWidth) {
+  const { width, height } = image.getSize();
+  if (!width || !height) return { error: 'empty snapshot' };
+  const bitmap = image.toBitmap();
+  const scale = cssWidth ? width / cssWidth : 1;
+  const round = (v) => Math.round((v / 255) * 1000) / 1000;
+  const rgba = (px, py) => {
+    const col = Math.floor(px);
+    const row = Math.floor(py);
+    if (col < 0 || row < 0 || col >= width || row >= height) return null;
+    const i = (row * width + col) * 4;
+    // BGRA (premultiplied) in Electron's toBitmap.
+    return [bitmap[i + 2], bitmap[i + 1], bitmap[i], bitmap[i + 3]].map(round);
+  };
+  let transparent = 0;
+  let opaque = 0;
+  let total = 0;
+  for (let i = 0; i < 16; i += 1) {
+    for (let j = 0; j < 16; j += 1) {
+      const c = rgba(((i + 0.5) * width) / 16, ((j + 0.5) * height) / 16);
+      if (!c) continue;
+      total += 1;
+      if (c[3] < 0.01) transparent += 1;
+      else if (c[3] > 0.99) opaque += 1;
+    }
+  }
+  return {
+    pixels: [width, height],
+    points: [width / scale, height / scale],
+    samples: points.map((p) => ({
+      name: p.name,
+      local: [p.x, p.y],
+      rgba: rgba(p.x * scale, p.y * scale),
+    })),
+    grid: { total, transparent, opaque },
+  };
+}
 
 function safeGet(fn) {
   try {

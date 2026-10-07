@@ -33,6 +33,8 @@
     'did-fail-load',
     'crashed',
     'render-process-gone',
+    // The host dispatches it when the app removes an attached element.
+    'destroyed',
     // Names no Overwolf page documents today. Listening costs nothing, and the
     // authoritative list of what the host dispatches is ipc.jsonl
     // (GUEST_VIEW_INTERNAL_DISPATCH_EVENT); these only show the page side.
@@ -188,6 +190,8 @@
       parent.className = 'slot';
       parent.style.width = `${width}px`;
       parent.style.height = `${height}px`;
+      // Lab checks: the app's own placeholder behind the slot (L1).
+      if (spec.containerBackground) parent.style.background = spec.containerBackground;
       document.body.appendChild(parent);
     } else if (spec.parent === 'body') {
       parent = document.body;
@@ -284,6 +288,100 @@
     });
   };
 
+  /**
+   * An app control for the pass-through check (L3): a fixed button at
+   * spec.control {id, x, y, width, height}. Each click (from a real or a
+   * lab-injected pointer event; the page itself never clicks) is reported.
+   */
+  const addControl = (spec) => {
+    const c = spec.control;
+    const button = document.createElement('button');
+    button.id = c.id || 'parity-control';
+    button.textContent = 'App control';
+    Object.assign(button.style, {
+      position: 'fixed',
+      left: `${c.x}px`,
+      top: `${c.y}px`,
+      width: `${c.width || 120}px`,
+      height: `${c.height || 40}px`,
+      zIndex: '10',
+    });
+    let clicks = 0;
+    for (const type of ['pointerdown', 'mousedown', 'mouseup']) {
+      button.addEventListener(type, (event) => {
+        report({
+          kind: 'app-pointer',
+          control: button.id,
+          type,
+          at: since(),
+          point: [event.clientX, event.clientY],
+        });
+      });
+    }
+    button.addEventListener('click', (event) => {
+      clicks += 1;
+      report({
+        kind: 'app-click',
+        control: button.id,
+        clicks,
+        at: since(),
+        point: [event.clientX, event.clientY],
+      });
+    });
+    document.body.appendChild(button);
+    report({
+      kind: 'app-control',
+      control: button.id,
+      at: since(),
+      rect: button.getBoundingClientRect().toJSON(),
+    });
+  };
+
+  /**
+   * Lab checks L2/L3: what the page itself would hit at each point
+   * (`document.elementFromPoint`, which honours pointer-events; points as
+   * resolvePoint reads them), as
+   * {kind: 'app', id, tag} or {kind: 'ad', cid, performance, tag}, plus the
+   * pointer-events of every performance element. Read only; no input.
+   */
+  // A point is {name, x, y} in CSS px, or {name, selector, dx?, dy?}: the
+  // centre of the first matching element, moved by dx/dy.
+  const resolvePoint = (p) => {
+    if (!p.selector) return p;
+    const el = document.querySelector(p.selector);
+    if (!el) return { name: p.name, x: -1, y: -1, missing: p.selector };
+    const r = el.getBoundingClientRect();
+    return {
+      name: p.name,
+      x: Math.round(r.left + r.width / 2 + (p.dx || 0)),
+      y: Math.round(r.top + r.height / 2 + (p.dy || 0)),
+    };
+  };
+  window.__parityHit = (points) => ({
+    points: points.map(resolvePoint).map((p) => {
+      if (p.missing) return { ...p, target: null };
+      const el = document.elementFromPoint(p.x, p.y);
+      const ad = el && el.closest('owadview');
+      let target = null;
+      if (ad) {
+        target = {
+          kind: 'ad',
+          cid: ad.getAttribute('cid'),
+          performance: ad.hasAttribute('performance'),
+          tag: el.tagName.toLowerCase(),
+        };
+      } else if (el) {
+        target = { kind: 'app', id: el.id || null, tag: el.tagName.toLowerCase() };
+      }
+      return { name: p.name, x: p.x, y: p.y, target };
+    }),
+    performance: Array.from(document.querySelectorAll('owadview[performance]'), (ad) => ({
+      pointerEvents: getComputedStyle(ad).pointerEvents,
+      connected: ad.isConnected,
+    })),
+    at: since(),
+  });
+
   window.__parityAddAd = addAd;
   window.__parityLayout = sampleLayout;
 
@@ -291,7 +389,12 @@
   const specs = params.get('spec') ? JSON.parse(params.get('spec')) : null;
   if (specs) {
     for (const spec of specs) {
-      const make = () => (spec.zone === 'high-impact' ? addHighImpactZone(spec) : addAd(spec));
+      const make = () =>
+        spec.zone === 'high-impact'
+          ? addHighImpactZone(spec)
+          : spec.control
+            ? addControl(spec)
+            : addAd(spec);
       if (spec.at) setTimeout(make, spec.at);
       else make();
     }

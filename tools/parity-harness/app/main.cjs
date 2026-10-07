@@ -814,6 +814,9 @@ function onGuestDomReady(wc, info) {
     guestCount += 1;
     info.guestIndex = guestCount;
     onGuestLoad(wc);
+  } else {
+    // A reload of the ad page can request an ad as well.
+    countLiveLoad('guest-reload', { webContentsId: wc.id, url: safeUrl(wc) });
   }
   probeGuest(wc, `dom-ready-${info.domReadyCount ?? 0}`);
   info.domReadyCount = (info.domReadyCount ?? 0) + 1;
@@ -902,23 +905,33 @@ function safeUrl(wc) {
 }
 
 // --- 7. Live-ad guard ---------------------------------------------------------
-// In live mode every ad guest load and every reported impression counts as an
-// ad load. When the cap is reached all <owadview> elements are removed.
+// In live mode every ad page load (a new guest or a reload) counts as an ad
+// load; fill events are logged next to them. N loads run; a load beyond the
+// cap removes every <owadview> as it starts.
 let liveLoads = 0;
 let liveStopped = false;
 let mainWindow = null;
 let firstGuestAt = null;
 
+/**
+ * Logs a live ad load (`guest-load`, `guest-reload`: an ad page load that
+ * can request an ad, counted against the cap) or a fill event of one
+ * (`event:*`, logged with `fill: true`, not counted).
+ */
 function countLiveLoad(reason, detail) {
   if (config.mode !== 'live') return;
-  liveLoads += 1;
+  const fill = reason.startsWith('event:');
+  if (!fill) liveLoads += 1;
   record('live-loads.jsonl', {
     n: liveLoads,
+    ...(fill ? { fill } : {}),
     reason,
     detail: safe(detail),
     at: new Date().toISOString(),
   });
-  if (liveLoads >= config.maxLiveLoads && !liveStopped) {
+  // The cap lets N loads run; a load beyond N is removed as it starts
+  // (it is logged and counts against the run's budget).
+  if (liveLoads > config.maxLiveLoads && !liveStopped) {
     liveStopped = true;
     record('events.jsonl', { kind: 'live-cap-reached', liveLoads });
     if (mainWindow && !mainWindow.isDestroyed()) {
