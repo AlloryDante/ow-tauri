@@ -673,16 +673,16 @@ pub struct GuestFacts<'a> {
 /// let c = guest_config(&facts, true);
 /// let keys: Vec<&str> = c.as_object().unwrap().keys().map(String::as_str).collect();
 /// assert_eq!(&keys[..4], ["muid", "uid", "name", "owVersion"]);
-/// assert_eq!(c["unit"], "testAd");
+/// // `unit` is passed through verbatim, in test mode too (observed).
+/// assert_eq!(c["unit"], "u1");
 /// ```
 #[must_use]
 pub fn guest_config(facts: &GuestFacts<'_>, visible: bool) -> Value {
     let a = facts.attributes;
-    let unit = match a.unit.as_deref() {
-        Some(u) if !u.is_empty() && facts.test_ad => "testAd".to_owned(),
-        Some(u) => u.to_owned(),
-        None => String::new(),
-    };
+    // Verbatim in both modes, as ow-electron forwards it (observed: the ad
+    // library gets `forceAdUnit:<unit>`); `testAd` already selects test
+    // demand.
+    let unit = a.unit.clone().unwrap_or_default();
     let mut settings = Map::new();
     settings.insert(
         "disableOptimization".into(),
@@ -1045,6 +1045,18 @@ mod tests {
         assert_eq!(c["consent"], "cmp%3DCQ%26ac%3D2~1");
         assert_eq!(c["consentFull"], "cmp%3DCQ%26ac%3D2~1");
         assert_eq!(c["unit"], "live-unit", "live mode passes the unit through");
+        let test_mode = guest_config(
+            &GuestFacts {
+                test_ad: true,
+                ..facts.clone()
+            },
+            false,
+        );
+        assert_eq!(test_mode["testAd"], true);
+        assert_eq!(
+            test_mode["unit"], "live-unit",
+            "test mode passes the unit through too (no testAd rewrite)"
+        );
         assert_eq!(
             c["settings"],
             json!({"disableOptimization": true, "anonymous": false})
