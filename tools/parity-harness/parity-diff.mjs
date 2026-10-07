@@ -214,6 +214,7 @@ function hostRequests(runDir) {
     return {
       key: `${r.method} ${endpoint} ${name}`,
       at: Date.parse(r.startedAt) - t0,
+      wall: Date.parse(r.startedAt),
       method: r.method,
       endpoint,
       query,
@@ -492,6 +493,7 @@ export function loadCapture(runDir) {
     host: meta.host ?? 'electron',
     overwolf,
     hostRequests: hostRequests(runDir),
+    guestCreation: guestCreationSpans(readJsonl(join(runDir, 'wc-events.jsonl'))),
     adDocuments: adDocuments(runDir),
     cmpDocuments: cmpDocuments(runDir),
     cmpPages: readJsonl(join(runDir, 'cmp-pages.jsonl')),
@@ -600,6 +602,15 @@ const RULES = [
     when: (d) => d.section === 'element-api' && d.field === 'own' && d.webviewOnly,
     cls: 'intended:os-gap',
     why: "own properties of Electron's <webview> element; <owadview> is not a <webview> (PARITY deviations, CONTRACT B.3.3)",
+  },
+  {
+    when: (d) =>
+      d.section === 'host-request' &&
+      d.field === 'timing' &&
+      !d.guestCreation &&
+      d.duringGuestCreation,
+    cls: 'variance',
+    why: "the burst fell due while ow-tauri's main thread was creating ad guest webviews (WebView2 through wry, one at a time) and its requests queued behind that work; ow-tauri's host request tasks wait on main-thread calls then (an ow-tauri limitation, Windows lab). The same requests leave, later",
   },
   {
     when: (d) => d.section === 'host-request' && d.field === 'timing' && d.guestCreation,
@@ -976,6 +987,10 @@ function compareHostRequests(e, t, out, tolerance, burst) {
         electron: `spread ${b.end - b.start} ms`,
         tauri: `spread ${spread} ms`,
         guestCreation: guestCreationSpread(kinds, spread, allowed),
+        duringGuestCreation: within(
+          b.pairs.map(([, j]) => t.hostRequests[j].wall),
+          t.guestCreation ?? [],
+        ),
         why: `requests ow-electron sends together left ${spread} ms apart (allowed ${allowed} ms)`,
       });
     }
@@ -988,6 +1003,55 @@ function compareHostRequests(e, t, out, tolerance, burst) {
  * [OBS: Windows lab].
  */
 export const GUEST_CREATE_MS = 150;
+
+/**
+ * The spans (wall clock, ms) in which ow-tauri's main thread created ad
+ * guest webviews: from a guest's `created` record to the native setup that
+ * follows (`transparent-native`), joined when the next guest follows within
+ * two creations. ow-electron has no such records, so its list is empty.
+ *
+ * @param {{kind?: string, type?: string, wall?: number}[]} events wc-events.jsonl
+ * @returns {{start: number, end: number}[]}
+ */
+export function guestCreationSpans(events) {
+  const marks = events
+    .filter(
+      (e) =>
+        typeof e.wall === 'number' &&
+        e.type === 'owadview' &&
+        (e.kind === 'created' || e.kind === 'transparent-native'),
+    )
+    .sort((x, y) => x.wall - y.wall);
+  const spans = [];
+  let open = null;
+  for (const e of marks) {
+    if (e.kind === 'created') {
+      if (open && e.wall - open.end <= 2 * GUEST_CREATE_MS) open.end = e.wall;
+      else spans.push((open = { start: e.wall, end: e.wall }));
+    } else if (open) {
+      open.end = Math.max(open.end, e.wall);
+    }
+  }
+  return spans;
+}
+
+/**
+ * Whether every time in `walls` falls inside one span (with 100 ms of
+ * slack at its end, the request's own start).
+ *
+ * @param {number[]} walls
+ * @param {{start: number, end: number}[]} spans
+ * @returns {boolean}
+ */
+export function within(walls, spans) {
+  const lo = Math.min(...walls);
+  const hi = Math.max(...walls);
+  return (
+    walls.length > 0 &&
+    walls.every(Number.isFinite) &&
+    spans.some((s) => lo >= s.start - 100 && hi <= s.end + 100)
+  );
+}
 
 /**
  * Whether a burst's spread is the guests' own creation: every request is a

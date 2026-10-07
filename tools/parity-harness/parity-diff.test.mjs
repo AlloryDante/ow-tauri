@@ -16,6 +16,7 @@ import {
   consentDuringAttach,
   fillImpressions,
   GUEST_CREATE_MS,
+  guestCreationSpans,
   guestCreationSpread,
   guestVisibility,
   labelledUserAgent,
@@ -29,6 +30,7 @@ import {
   sentOsClick,
   withoutPackageRuntime,
   withoutPointerEvents,
+  within,
 } from './parity-diff.mjs';
 
 test('normalise replaces host labels, versions and volatile values', () => {
@@ -679,4 +681,34 @@ test("ow-electron's log written only by the package manager is package runtime s
   assert.equal(packageRuntimeLog(owpm.split('\r\n')[0]), false);
   assert.equal(packageRuntimeLog(''), false);
   assert.equal(packageRuntimeLog(null), false);
+});
+
+test('a burst due while ow-tauri created guest webviews is variance', () => {
+  // Windows lab (adstyle-probe): guests created from 3902 to 4999 ms; the
+  // window-shown heartbeat left at 4308 ms and its 400023 at 5006 ms.
+  const ev = (wall, kind, label) => ({ wall, kind, type: 'owadview', label });
+  const spans = guestCreationSpans([
+    ev(3902, 'created', 'g3'),
+    ev(4034, 'created', 'g2'),
+    ev(4162, 'created', 'g1'),
+    ev(4302, 'transparent-native', 'g3'),
+    ev(4302, 'created', 'g4'),
+    ev(4484, 'created', 'g5'),
+    ev(4997, 'transparent-native', 'g5'),
+    ev(4998, 'created', 'g8'),
+    ev(4999, 'transparent-native', 'g8'),
+    ev(9000, 'created', 'later'),
+    { wall: 4000, kind: 'created', type: 'cmp' },
+  ]);
+  assert.deepEqual(spans, [
+    { start: 3902, end: 4999 },
+    { start: 9000, end: 9000 },
+  ]);
+  assert.equal(within([4308, 5006], spans), true);
+  assert.equal(within([4308, 5200], spans), false);
+  assert.equal(within([1665, 1682], spans), false);
+  assert.equal(within([], spans), false);
+  const d = { section: 'host-request', field: 'timing', guestCreation: false };
+  assert.equal(classify({ ...d, duringGuestCreation: true }).class, 'variance');
+  assert.equal(classify({ ...d, duringGuestCreation: false }).class, 'BUG');
 });
