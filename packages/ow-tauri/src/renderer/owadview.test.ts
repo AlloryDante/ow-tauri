@@ -917,10 +917,58 @@ describe('events (B.3.5)', () => {
     );
   });
 
-  it('createAdviewEvent keeps Event members and ignores non-plain data', () => {
+  it('spreads a string payload per character, as Object.assign does [OBS]', async () => {
+    await startRuntime();
+    const el = createAd({ performance: '' });
+    document.body.append(el);
+    await tick();
+    const seen: Event[] = [];
+    el.addEventListener('performance_ad_error', (event) => seen.push(event));
+    const message = 'RangeError: too small';
+    services.emit({
+      elementId: runtime.elementId(el),
+      name: 'performance_ad_error',
+      data: message,
+      source: 'guest',
+    });
+    expect(seen).toHaveLength(1);
+    const event = seen[0] as Event & Record<string, unknown>;
+    const base = new Set(Object.keys(new Event('x')));
+    const own = Object.keys(event).filter((key) => !base.has(key));
+    expect(own).toEqual(Array.from({ length: message.length }, (_v, i) => String(i)));
+    expect(own.map((key) => event[key]).join('')).toBe(message);
+    expect(event.type).toBe('performance_ad_error');
+    expect(Object.hasOwn(event, 'length')).toBe(false);
+  });
+
+  it('createAdviewEvent copies payloads with Object.assign semantics and keeps Event members', () => {
+    // Own names every Event of this engine has (happy-dom defines a few).
+    const base = new Set(Object.keys(new Event('x')));
+    const own = (data: unknown): string[] =>
+      Object.keys(createAdviewEvent('x', data)).filter((key) => !base.has(key));
     expect(createAdviewEvent('x', { type: 'y', n: 1 }).type).toBe('x');
-    expect(Object.keys(createAdviewEvent('x', [1, 2]))).not.toContain('0');
-    expect(Object.keys(createAdviewEvent('x', new Date()))).toEqual(Object.keys(new Event('x')));
+    expect(Object.getOwnPropertyDescriptor(createAdviewEvent('x', { n: 1 }), 'n')).toEqual({
+      value: 1,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+    // Arrays by index, strings per character, primitives and null add nothing.
+    const array = createAdviewEvent('x', ['a', { b: 2 }]) as Event & Record<string, unknown>;
+    expect(own(['a', { b: 2 }])).toEqual(['0', '1']);
+    expect(array['1']).toEqual({ b: 2 });
+    expect(own('ab')).toEqual(['0', '1']);
+    expect(own('')).toEqual([]);
+    for (const value of [null, undefined, 0, 7, true, false]) expect(own(value)).toEqual([]);
+    expect(own(new Date())).toEqual([]);
+    expect(own({ 2: 'b', a: 1, 1: 'a' })).toEqual(['1', '2', 'a']);
+    // Same result as Object.assign onto a plain object, minus the Event's own names.
+    const payload = { size: '300x250', cpm: 0, nested: { a: 1 }, timeStamp: 5 };
+    const expected: Record<string, unknown> = Object.assign({}, payload);
+    delete expected['timeStamp'];
+    const event = createAdviewEvent('x', payload) as Event & Record<string, unknown>;
+    expect(Object.fromEntries(own(payload).map((key) => [key, event[key]]))).toEqual(expected);
+    expect(event.timeStamp).not.toBe(5);
     expect(createAdviewEvent('x', Object.create(null) as object)).toBeInstanceOf(Event);
     expect(parseCustomTracking('[1]')).toEqual([1]);
     expect(parseCustomTracking('"text"')).toBeNull();

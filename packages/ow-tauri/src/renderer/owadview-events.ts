@@ -23,24 +23,27 @@ export const CLICK_NAMES: ReadonlySet<string> = new Set(['ad_clicked', 'ad-click
 /** How long a guest click suppresses the host's own `ad-clicked` (B.3.5). */
 export const CLICK_DEDUPE_MS = 1000;
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const proto: unknown = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
-}
-
 /**
  * Builds the event ow-electron dispatches:
- * `new Event(name, { bubbles: false, cancelable: false })` with the fields of
- * `data` copied as own properties (`detail` stays absent, so it reads as the
- * engine's default). Fields are copied only when `data` is a plain object;
- * names the event already has (`type`, `target`, `isTrusted`, ...) are
- * skipped.
+ * `new Event(name, { bubbles: false, cancelable: false })` with the payload
+ * copied as own properties the way `Object.assign(event, data)` copies it
+ * [OBS]: the own enumerable properties of an object (an array by index), a
+ * string spread into one property per character (`0`, `1`, ...; seen with
+ * `performance_ad_error`), and nothing for `null`, `undefined`, numbers and
+ * booleans. `detail` stays absent, so it reads as the engine's default.
+ * Names the event already has (`type`, `target`, `isTrusted`, ...) are
+ * skipped, where `Object.assign` would throw on the read-only ones.
  *
  * @param name - the event type
  * @param data - the payload
  * @param EventCtor - the realm's `Event` constructor
  * @returns the event
+ *
+ * @example
+ * ```ts
+ * const event = createAdviewEvent('performance_ad_error', 'Error');
+ * event[0]; // 'E'
+ * ```
  */
 export function createAdviewEvent(
   name: string,
@@ -48,16 +51,17 @@ export function createAdviewEvent(
   EventCtor: typeof Event = Event,
 ): Event {
   const event = new EventCtor(name, { bubbles: false, cancelable: false });
-  if (isPlainObject(data)) {
-    for (const key of Object.keys(data)) {
-      if (key in event) continue;
-      Object.defineProperty(event, key, {
-        value: data[key],
-        writable: true,
-        enumerable: true,
-        configurable: true,
-      });
-    }
+  if (data === null || (typeof data !== 'object' && typeof data !== 'string')) return event;
+  // `Object(data)` is what `Object.assign` reads: a string becomes a String object.
+  const source = Object(data) as Record<string, unknown>;
+  for (const key of Object.keys(source)) {
+    if (key in event) continue;
+    Object.defineProperty(event, key, {
+      value: source[key],
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
   }
   return event;
 }
