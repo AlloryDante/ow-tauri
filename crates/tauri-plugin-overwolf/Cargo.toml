@@ -33,6 +33,15 @@ plugin = [
   "dep:sys-locale",
   "dep:log",
   "dep:reqwest",
+  "dep:hyper",
+  "dep:hyper-util",
+  "dep:hyper-tls",
+  "dep:native-tls",
+  "dep:http",
+  "dep:http-body-util",
+  "dep:bytes",
+  "dep:tower-service",
+  "dep:async-compression",
   "dep:objc2",
   "dep:objc2-foundation",
   "dep:block2",
@@ -47,6 +56,11 @@ devtools = ["plugin", "tauri/devtools"]
 # `Overwolf::test_*` methods that drive the window, navigation, page-load and
 # exit-request handlers the mock runtime never fires. Not a stable API.
 test-util = ["plugin"]
+# The parity lab (tools/parity-harness/tauri-app): a trace of host requests,
+# guest lifecycle, cookies and state writes, and invisible windows, both
+# switched on at run time by OW_TAURI_LAB_DIR / OW_TAURI_LAB_INVISIBLE. Never
+# enable it in a shipped app.
+lab = ["plugin"]
 # Lets `build::embed_manifest` compile and link the `OWEINTEGRITY/OWE` PE
 # resource of a signed Windows release build (CONTRACT G.4 c). Enable it on
 # the build-dependency.
@@ -70,13 +84,29 @@ minisign-verify = "0.3.0"
 # Build-script only: compiles the OWEINTEGRITY/OWE resource script.
 embed-resource = { version = "3.0.12", optional = true }
 
-tauri = { workspace = true, optional = true, features = ["unstable"] }
+# `webview-data-url`: the consent settings window opens on a `data:`
+# preloader, as in ow-electron (observed); Tauri refuses `data:` URLs without it.
+tauri = { workspace = true, optional = true, features = ["unstable", "webview-data-url"] }
 tauri-plugin-opener = { workspace = true, optional = true }
 tauri-plugin-dialog = { workspace = true, optional = true }
-# Host analytics and the consent request (CONTRACT E.1).
+# The update client (CONTRACT I).
 reqwest = { workspace = true, optional = true, features = ["gzip", "deflate", "brotli", "zstd"] }
+# Host analytics and the consent request (CONTRACT E.1): a plain hyper client,
+# because reqwest always adds `accept: */*`, which ow-electron does not send.
+# Every crate below is already in the tree through reqwest at these versions;
+# TLS is the same native-tls stack with ALPN (HTTP/2), proxies come from the
+# same system matcher reqwest uses.
+hyper = { version = "1.11.1", optional = true, features = ["client", "http1", "http2"] }
+hyper-util = { version = "0.1.21", optional = true, features = ["client-legacy", "client-proxy", "client-proxy-system", "http1", "http2", "tokio"] }
+hyper-tls = { version = "0.6.0", optional = true, features = ["alpn"] }
+native-tls = { version = "0.2.18", optional = true, features = ["alpn"] }
+http = { version = "1.5.0", optional = true }
+http-body-util = { version = "0.1.5", optional = true }
+bytes = { version = "1.12.1", optional = true }
+tower-service = { version = "0.3.3", optional = true }
+async-compression = { version = "0.4.48", optional = true, features = ["tokio", "gzip", "zlib", "brotli", "zstd"] }
 tauri-plugin-global-shortcut = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["io-util"] }
 uuid = { workspace = true, optional = true }
 sys-locale = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
@@ -95,7 +125,7 @@ windows = { version = "0.62.2", optional = true }
 # Guest mute, the shaped navigations (D.8.3) and the ads data store's
 # cookies for host requests (E.1); wry's versions.
 objc2 = { version = "0.6.5", optional = true }
-objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "NSArray", "NSDate", "NSHTTPCookie", "NSString", "NSURL", "NSURLRequest"] }
+objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "NSArray", "NSDate", "NSGeometry", "NSHTTPCookie", "NSString", "NSURL", "NSURLRequest"] }
 block2 = { version = "0.6.2", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

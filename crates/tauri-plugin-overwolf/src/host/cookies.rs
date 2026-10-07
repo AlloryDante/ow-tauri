@@ -1,19 +1,17 @@
-//! The ads data store's cookies on host requests (CONTRACT E.1, D.6.3,
-//! D.8.1): which stored cookies a request URL gets and in which order, how a
-//! `Set-Cookie` response header is written back, and the request hooks the
-//! analytics dispatcher calls.
+//! Reading the ads data store's cookies (CONTRACT D.6.3, D.8.1): the
+//! consent cookie fallback checks whether the consent page wrote its
+//! cookies, and the analytics dispatcher's request hooks.
 //!
-//! ow-electron's host requests go through Chromium's network stack with the
-//! default session, so they carry that session's cookies for the request
-//! URL and store the cookies the response sets (observed). ow-tauri reads
-//! and writes the ads data store instead:
+//! Host requests themselves carry no cookies and store none: ow-electron's
+//! do not either (observed: Chromium's net log lists every stored cookie as
+//! excluded by the request's credentials mode, and no `Set-Cookie` is
+//! stored). Reading the store:
 //!
 //! - macOS: the default `WKWebsiteDataStore`, read natively (Tauri's
 //!   per-URL getter compares domains exactly, so it misses `.overwolf.com`
-//!   cookies on `analyticsnew.overwolf.com`) and matched with RFC 6265 here;
+//!   cookies on `www.overwolf.com`) and matched with RFC 6265 here;
 //! - Windows: the `EBWebView-ow` environment through any ad guest or consent
 //!   window (`ICoreWebView2CookieManager::GetCookies` matches natively);
-//!   requests made while none is open go without cookies;
 //! - Linux: the default `WebKitGTK` context through any webview
 //!   (`webkit_cookie_manager_get_cookies` matches natively).
 
@@ -21,16 +19,17 @@ use std::cmp::Reverse;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use tauri::webview::cookie::{Cookie, Expiration};
-use tauri::{Manager, Runtime, Webview};
+use tauri::Runtime;
+#[cfg(not(target_os = "macos"))]
+use tauri::{Manager, Webview};
 use url::Url;
 
 use super::Host;
 use crate::analytics::transport::{BoxFuture, RequestHooks};
-use crate::state::log::LogLevel;
+#[cfg(not(target_os = "macos"))]
 use crate::window::{WebviewClass, classify};
 
-/// The longest a host request waits for the store's cookies.
+/// The longest a read of the store's cookies may take.
 const COOKIE_READ_LIMIT: Duration = Duration::from_millis(750);
 
 /// A cookie as a platform store holds it.
@@ -116,23 +115,6 @@ pub(crate) fn matching_cookies<'a>(
     matched
 }
 
-/// The `cookie` header for `url` from every cookie of a store; `None` when
-/// nothing matches.
-#[cfg(test)]
-pub(crate) fn cookie_header(cookies: &[StoredCookie], url: &Url, now_secs: f64) -> Option<String> {
-    format_header(
-        matching_cookies(cookies, url, now_secs)
-            .iter()
-            .map(|c| (c.name.as_str(), c.value.as_str())),
-    )
-}
-
-/// `name=value; name=value`, or `None` for no cookies.
-pub(crate) fn format_header<'a>(pairs: impl Iterator<Item = (&'a str, &'a str)>) -> Option<String> {
-    let parts: Vec<String> = pairs.map(|(n, v)| format!("{n}={v}")).collect();
-    (!parts.is_empty()).then(|| parts.join("; "))
-}
-
 /// The `Domain` value that makes Tauri store a domain cookie for `domain`.
 ///
 /// The platform stores mark a domain cookie with a leading dot
@@ -141,56 +123,6 @@ pub(crate) fn format_header<'a>(pairs: impl Iterator<Item = (&'a str, &'a str)>)
 /// (RFC 6265 5.2.3), so the value carries two: one survives.
 pub(crate) fn domain_cookie_attr(domain: &str) -> String {
     format!("..{}", domain.trim_start_matches('.'))
-}
-
-/// RFC 6265 5.1.4 default path of `url`.
-fn default_path(url: &Url) -> String {
-    let path = url.path();
-    match path.rfind('/') {
-        Some(i) if i > 0 && path.starts_with('/') => path[..i].to_owned(),
-        _ => "/".to_owned(),
-    }
-}
-
-/// A `Set-Cookie` header received from `url`, as a cookie Tauri's
-/// `set_cookie` stores with the scope a browser gives it: a domain cookie
-/// for a `Domain` attribute that covers the host (RFC 6265 5.3 step 6), a
-/// host-only cookie otherwise, the default path when `Path` is absent or
-/// not absolute. A `Domain` outside the host, or without a dot (a
-/// top-level domain), rejects the cookie.
-pub(crate) fn from_set_cookie(header: &str, url: &Url) -> Option<Cookie<'static>> {
-    let parsed = Cookie::parse(header.to_owned()).ok()?;
-    let host = url.host_str()?.to_ascii_lowercase();
-    let mut cookie = Cookie::new(parsed.name().to_owned(), parsed.value().to_owned());
-    match parsed.domain().map(str::to_ascii_lowercase) {
-        Some(d) if !d.is_empty() => {
-            if !d.contains('.') || !domain_matches(&format!(".{d}"), &host) {
-                return None;
-            }
-            cookie.set_domain(domain_cookie_attr(&d));
-        }
-        _ => cookie.set_domain(host),
-    }
-    let path = parsed
-        .path()
-        .filter(|p| p.starts_with('/'))
-        .map_or_else(|| default_path(url), str::to_owned);
-    cookie.set_path(path);
-    if let Some(secure) = parsed.secure() {
-        cookie.set_secure(secure);
-    }
-    if let Some(http_only) = parsed.http_only() {
-        cookie.set_http_only(http_only);
-    }
-    if let Some(same_site) = parsed.same_site() {
-        cookie.set_same_site(same_site);
-    }
-    if let Some(max_age) = parsed.max_age() {
-        cookie.set_max_age(max_age);
-    } else if let Some(Expiration::DateTime(at)) = parsed.expires() {
-        cookie.set_expires(at);
-    }
-    Some(cookie)
 }
 
 /// Now, in Unix seconds (only macOS matches cookies itself).
@@ -206,6 +138,7 @@ impl<R: Runtime> Host<R> {
     /// is open: on Windows an ad guest or consent window (the `EBWebView-ow`
     /// environment); elsewhere those first, else any webview (one default
     /// store).
+    #[cfg(not(target_os = "macos"))]
     fn ads_store_webview(&self) -> Option<Webview<R>> {
         let webviews = self.app.webviews();
         let ads = webviews
@@ -222,14 +155,6 @@ impl<R: Runtime> Host<R> {
         } else {
             ads.or_else(|| webviews.into_values().next())
         }
-    }
-
-    /// The ads data store's `cookie` header for `url`, `None` when it has
-    /// none, is not reachable yet, or does not answer within
-    /// [`COOKIE_READ_LIMIT`].
-    pub(crate) async fn ads_store_cookie_header(self: &Arc<Self>, url: &str) -> Option<String> {
-        let cookies = self.ads_store_cookies(url).await?;
-        format_header(cookies.iter().map(|(n, v)| (n.as_str(), v.as_str())))
     }
 
     /// The ads data store's cookies for `url` as `(name, value)` in header
@@ -283,45 +208,6 @@ impl<R: Runtime> Host<R> {
                 .collect(),
         )
     }
-
-    /// Writes the `Set-Cookie` values of a host response from `url` to the
-    /// ads data store (E.1). Cookies it cannot scope are dropped.
-    pub(crate) async fn ads_store_set_cookies(
-        self: &Arc<Self>,
-        url: &str,
-        set_cookies: Vec<String>,
-    ) {
-        if !self.options.os_queries {
-            return;
-        }
-        let Ok(url) = Url::parse(url) else { return };
-        let cookies: Vec<Cookie<'static>> = set_cookies
-            .iter()
-            .filter_map(|h| from_set_cookie(h, &url))
-            .collect();
-        if cookies.is_empty() {
-            return;
-        }
-        let Some(webview) = self.ads_store_webview() else {
-            self.log(
-                LogLevel::Debug,
-                "response cookies dropped: the ads data store is not open yet",
-            );
-            return;
-        };
-        let written = tauri::async_runtime::spawn_blocking(move || {
-            cookies
-                .into_iter()
-                .filter(|c| webview.set_cookie(c.clone()).is_ok())
-                .count()
-        })
-        .await
-        .unwrap_or(0);
-        self.log(
-            LogLevel::Debug,
-            &format!("{written} response cookies written to the ads data store"),
-        );
-    }
 }
 
 /// The analytics dispatcher's hooks into the host (E.1).
@@ -339,27 +225,6 @@ impl<R: Runtime> RequestHooks for HostRequestHooks<R> {
 
     fn user_agent(&self) -> Option<String> {
         self.0.upgrade().map(|h| h.user_agent())
-    }
-
-    fn cookie_header(&self, url: &str) -> BoxFuture<Option<String>> {
-        let host = self.0.upgrade();
-        let url = url.to_owned();
-        Box::pin(async move {
-            match host {
-                Some(h) => h.ads_store_cookie_header(&url).await,
-                None => None,
-            }
-        })
-    }
-
-    fn store_cookies(&self, url: &str, set_cookies: Vec<String>) -> BoxFuture<()> {
-        let host = self.0.upgrade();
-        let url = url.to_owned();
-        Box::pin(async move {
-            if let Some(h) = host {
-                h.ads_store_set_cookies(&url, set_cookies).await;
-            }
-        })
     }
 }
 
@@ -407,66 +272,27 @@ mod tests {
             expired,
             live,
         ];
-        let url = Url::parse("https://analyticsnew.overwolf.com/analytics/Counter?Name=x").unwrap();
+        let names = |url: &str| {
+            let url = Url::parse(url).unwrap();
+            matching_cookies(&jar, &url, 1_000.0)
+                .iter()
+                .map(|c| c.name.clone())
+                .collect::<Vec<_>>()
+        };
         assert_eq!(
-            cookie_header(&jar, &url, 1_000.0).as_deref(),
-            Some("deep=v-deep; euconsent-v2=v-euconsent-v2; live=v-live")
+            names("https://analyticsnew.overwolf.com/analytics/Counter?Name=x"),
+            ["deep", "euconsent-v2", "live"]
         );
         // Secure cookies stay off plain http.
-        let http = Url::parse("http://analyticsnew.overwolf.com/").unwrap();
-        assert_eq!(
-            cookie_header(&jar, &http, 1_000.0).as_deref(),
-            Some("live=v-live")
-        );
-        let none = Url::parse("https://example.org/").unwrap();
-        assert_eq!(cookie_header(&jar, &none, 1_000.0), None);
+        assert_eq!(names("http://analyticsnew.overwolf.com/"), ["live"]);
+        assert!(names("https://example.org/").is_empty());
     }
 
     #[test]
     fn two_dots_reach_the_store_as_one() {
-        let c = Cookie::build(("a", "b"))
+        let c = tauri::webview::cookie::Cookie::build(("a", "b"))
             .domain(domain_cookie_attr(".overwolf.com"))
             .build();
         assert_eq!(c.domain(), Some(".overwolf.com"));
-    }
-
-    #[test]
-    fn set_cookie_is_scoped_like_a_browser() {
-        let url =
-            Url::parse("https://tracking.overwolf.com/tracking/InsertStats?Stats=true").unwrap();
-        let c = from_set_cookie(
-            "sid=1; Domain=.Overwolf.com; Path=/; Secure; HttpOnly; Max-Age=60; SameSite=None",
-            &url,
-        )
-        .unwrap();
-        assert_eq!((c.name(), c.value()), ("sid", "1"));
-        assert_eq!(c.domain(), Some(".overwolf.com"));
-        assert_eq!(c.path(), Some("/"));
-        assert_eq!(c.secure(), Some(true));
-        assert_eq!(c.http_only(), Some(true));
-        assert_eq!(
-            c.max_age()
-                .map(tauri::webview::cookie::time::Duration::whole_seconds),
-            Some(60)
-        );
-        // Host-only, default path.
-        let c = from_set_cookie("h=2", &url).unwrap();
-        assert_eq!(c.domain(), Some("tracking.overwolf.com"));
-        assert_eq!(c.path(), Some("/tracking"));
-        // Foreign or top-level domains are rejected.
-        assert!(from_set_cookie("x=1; Domain=example.com", &url).is_none());
-        assert!(from_set_cookie("x=1; Domain=com", &url).is_none());
-        // A relative path falls back to the default path.
-        let c = from_set_cookie("p=1; Path=rel", &url).unwrap();
-        assert_eq!(c.path(), Some("/tracking"));
-    }
-
-    #[test]
-    fn header_formatting() {
-        assert_eq!(format_header(std::iter::empty()), None);
-        assert_eq!(
-            format_header([("a", "1"), ("b", "2")].into_iter()).as_deref(),
-            Some("a=1; b=2")
-        );
     }
 }
