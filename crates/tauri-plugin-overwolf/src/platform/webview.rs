@@ -223,10 +223,13 @@ pub(crate) fn set_input_passthrough<R: Runtime>(
 }
 
 /// The guest's first navigation to `url` with the document headers of
-/// D.8.3: `WKWebView.load(URLRequest)` on macOS and
-/// `webkit_web_view_load_request` on Linux; on Windows a plain navigation
-/// whose headers the request handler sets. Returns `false` when the
-/// platform call could not be posted (the caller navigates plainly).
+/// D.8.3: `WKWebView.load(URLRequest)` on macOS,
+/// `webkit_web_view_load_request` on Linux and
+/// `NavigateWithWebResourceRequest` on Windows, so the page's
+/// `document.referrer` is the `Referer` as in ow-electron (on Windows a plain
+/// navigation whose request handler set the headers left it empty: Windows
+/// lab). Returns `false` when the platform call could not be posted (the
+/// caller navigates plainly).
 pub(crate) fn load_shaped<R: Runtime>(
     webview: &Webview<R>,
     url: &url::Url,
@@ -254,6 +257,21 @@ pub(crate) fn load_shaped<R: Runtime>(
                         headers.replace("Origin", &origin);
                     }
                     pw.inner().load_request(&request);
+                }
+            })
+            .is_ok();
+    }
+    #[cfg(windows)]
+    if let Some(s) = shaping {
+        let target = url.clone();
+        let headers = document_header_fields(Some(s)).join("\r\n");
+        let fallback = webview.clone();
+        return webview
+            .with_webview(move |pw| {
+                if windows_impl::navigate_with_headers(&pw.controller(), target.as_str(), &headers)
+                    .is_err()
+                {
+                    let _ = fallback.navigate(target);
                 }
             })
             .is_ok();
@@ -1313,8 +1331,9 @@ mod windows_impl {
         COREWEBVIEW2_PROCESS_FAILED_REASON_TERMINATED, COREWEBVIEW2_WEB_ERROR_STATUS,
         COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED, COREWEBVIEW2_WEB_RESOURCE_CONTEXT,
         COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
-        COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL, ICoreWebView2_8, ICoreWebView2_22,
-        ICoreWebView2Controller, ICoreWebView2ProcessFailedEventArgs2,
+        COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL, ICoreWebView2_2, ICoreWebView2_8,
+        ICoreWebView2_22, ICoreWebView2Controller, ICoreWebView2Environment2,
+        ICoreWebView2ProcessFailedEventArgs2,
     };
     use webview2_com::{
         NavigationCompletedEventHandler, ProcessFailedEventHandler,
@@ -1332,6 +1351,28 @@ mod windows_impl {
         GuestReports, HookTarget, RequestShape, Shaping, request_shape, webview2_net_error,
     };
     use crate::ads::GoneReason;
+
+    /// Navigates the controller's webview to `url` with `headers` (CRLF
+    /// separated `Name: value` lines) on the request, so the document's
+    /// `Referer` also becomes its `document.referrer`.
+    pub(super) fn navigate_with_headers(
+        controller: &ICoreWebView2Controller,
+        url: &str,
+        headers: &str,
+    ) -> windows::core::Result<()> {
+        // SAFETY: COM calls on the webview's own thread.
+        unsafe {
+            let core = controller.CoreWebView2()?.cast::<ICoreWebView2_2>()?;
+            let environment = core.Environment()?.cast::<ICoreWebView2Environment2>()?;
+            let request = environment.CreateWebResourceRequest(
+                &HSTRING::from(url),
+                &HSTRING::from("GET"),
+                None::<&windows::Win32::System::Com::IStream>,
+                &HSTRING::from(headers),
+            )?;
+            core.NavigateWithWebResourceRequest(&request)
+        }
+    }
 
     /// `ShowWindow(SW_SHOWNOACTIVATE)`: shown in place, neither activated
     /// nor focused. `IsWindowVisible` (Tauri's `is_visible`) reads it at once.
