@@ -179,6 +179,7 @@ impl<R: Runtime> Host<R> {
                 &self.info.manifest.product_name,
                 &self.info.manifest.version,
                 &label,
+                crate::platform::safari_version(),
             );
         }
         self.analytics.ua_ready.notify_waiters();

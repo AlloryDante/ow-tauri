@@ -5,13 +5,14 @@
 //!
 //! - [`HostLabel`]: the `<label>` / `<owVersion>` rule of CONTRACT section 0;
 //! - [`compose_user_agent`]: `<UA>` (E.1);
+//! - [`safari_ua_version`]: Safari's `Version/` token (E.1);
 //! - [`Reporter`]: builds every host request ([`HostRequest`]) with the
 //!   header order and encoding ow-electron uses (observed);
 //! - [`window_analytics_name`]: the `name` field of `<label>_window_closed`;
 //! - [`session::Session`]: which events a session sends, and when (E.2, E.3).
 //!
-//! The plugin sends the requests through a [`Transport`] (`reqwest` by
-//! default; tests capture them).
+//! The plugin sends the requests through a [`Transport`] (a `hyper`
+//! client by default; tests capture them).
 //!
 //! ```
 //! use tauri_plugin_overwolf::analytics::HostLabel;
@@ -165,17 +166,27 @@ impl HostLabel {
 /// With a ` Chrome/<x>` token (WebView2), `<PNNS>/<ver> ` goes immediately
 /// before `Chrome/` and ` <Label>/<v>` immediately after the Chrome token,
 /// where Electron places its tokens. Otherwise (`WebKit`) both are appended.
-/// The engine part is never changed.
+///
+/// The WKWebView default carries no browser product tokens, and ad stacks
+/// rate such a user agent as an unknown browser and serve it no demand. When
+/// the default has an `AppleWebKit/<w>` token but no `Safari/` token and
+/// `safari_version` is known, Safari's own tokens are added the way Electron
+/// keeps Chromium's: `<PNNS>/<ver> Version/<safari> <Label>/<v> Safari/<w>`.
+/// The engine part is never changed: a `WebKit` user agent stays `WebKit`.
 ///
 /// ```
 /// use tauri_plugin_overwolf::analytics::{compose_user_agent, HostLabel};
 /// let label = HostLabel::new("tauri", "2.12.1");
 /// assert_eq!(
-///     compose_user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0", "My App", "1.0.0", &label),
+///     compose_user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0", "My App", "1.0.0", &label, None),
 ///     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) MyApp/1.0.0 Chrome/141.0.0.0 Tauri/2.12.1 Safari/537.36 Edg/141.0.0.0"
 /// );
 /// assert_eq!(
-///     compose_user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)", "My App", "1.0.0", &label),
+///     compose_user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)", "My App", "1.0.0", &label, Some("26.5")),
+///     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) MyApp/1.0.0 Version/26.5 Tauri/2.12.1 Safari/605.1.15"
+/// );
+/// assert_eq!(
+///     compose_user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)", "My App", "1.0.0", &label, None),
 ///     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) MyApp/1.0.0 Tauri/2.12.1"
 /// );
 /// ```
@@ -185,6 +196,7 @@ pub fn compose_user_agent(
     product_name: &str,
     version: &str,
     label: &HostLabel,
+    safari_version: Option<&str>,
 ) -> String {
     let ua = default_ua.trim();
     let app = format!("{}/{version}", product_name.replace(' ', ""));
@@ -202,9 +214,39 @@ pub fn compose_user_agent(
         )
     } else if ua.is_empty() {
         format!("{app} {host}")
+    } else if let (Some(webkit), Some(safari), false) = (
+        token_version(ua, "AppleWebKit/"),
+        safari_version.map(str::trim).filter(|v| !v.is_empty()),
+        ua.contains(" Safari/"),
+    ) {
+        format!("{ua} {app} Version/{safari} {host} Safari/{webkit}")
     } else {
         format!("{ua} {app} {host}")
     }
+}
+
+/// The version of the first `<name><version>` token of `ua`.
+fn token_version<'a>(ua: &'a str, name: &str) -> Option<&'a str> {
+    let rest = &ua[ua.find(name)? + name.len()..];
+    let version = rest.split([' ', ';', ')']).next()?;
+    (!version.is_empty()).then_some(version)
+}
+
+/// Safari's `Version/` token value from its bundle version: major and
+/// minor only, as Safari sends it (`26.5.2` -> `26.5`).
+///
+/// ```
+/// use tauri_plugin_overwolf::analytics::safari_ua_version;
+/// assert_eq!(safari_ua_version("26.5.2").as_deref(), Some("26.5"));
+/// assert_eq!(safari_ua_version("18").as_deref(), Some("18.0"));
+/// assert_eq!(safari_ua_version("x"), None);
+/// ```
+#[must_use]
+pub fn safari_ua_version(bundle_version: &str) -> Option<String> {
+    let mut parts = bundle_version.trim().split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = parts.next().map_or(Some(0), |m| m.parse().ok())?;
+    Some(format!("{major}.{minor}"))
 }
 
 /// The app locale in Chromium's `accept-language` form (`en-US`), from a
@@ -247,7 +289,9 @@ pub struct HostRequest {
     pub method: Method,
     /// The full URL, query included.
     pub url: String,
-    /// Headers in wire order. `content-length` is left to the HTTP stack.
+    /// Headers in wire order, `content-length` included when there is a
+    /// body (first, as ow-electron sends it, observed). The transport adds
+    /// nothing.
     pub headers: Vec<(&'static str, String)>,
     /// The body (`POST` only).
     pub body: Option<Vec<u8>>,
@@ -262,9 +306,10 @@ pub struct HostResponse {
     pub status: u16,
     /// The decoded body.
     pub body: Vec<u8>,
-    /// Every `Set-Cookie` header value, in response order. The plugin writes
-    /// them to the ads data store, as Chromium's network stack does for
-    /// ow-electron (CONTRACT E.1).
+    /// Every `Set-Cookie` header value, in response order. Only reported:
+    /// host requests neither send nor store cookies, as ow-electron's do
+    /// not (observed: every cookie excluded by the request's credentials
+    /// mode).
     pub set_cookies: Vec<String>,
 }
 
@@ -380,6 +425,7 @@ impl Reporter {
     /// # let r = Reporter { label: HostLabel::new("tauri", "2.12.1"), app_version: "1.0.0".into(), uid: "u".into(), cuid: "c".into(), os: "darwin".into(), os_version: "25.5.0".into(), app_name: "My App".into(), muid: "m".into(), muid_v2: "m".into(), user_agent: "UA".into(), locale: "en-US".into() };
     /// let req = r.insert_stats(kind::GUEST_CRASH, Some("killed"));
     /// assert_eq!(req.url, "https://tracking.overwolf.com/tracking/InsertStats?Stats=true&owver=tauri-2_12_1");
+    /// assert_eq!(req.headers[0], ("content-length", "56".to_owned()));
     /// assert_eq!(req.body.unwrap(), br#"{"Kind":400024,"Extra":"killed.1_0_0.u.darwin.My App.c"}"#);
     /// ```
     #[must_use]
@@ -405,11 +451,15 @@ impl Reporter {
             "{INSERT_STATS_URL}?Stats=true&owver={}",
             form_encode(&self.label.insert_stats_owver())
         );
+        let body = Value::Object(body).to_string().into_bytes();
         HostRequest {
             method: Method::Post,
             url,
-            headers: self.common_headers(vec![("content-type", "application/json".to_owned())]),
-            body: Some(Value::Object(body).to_string().into_bytes()),
+            headers: self.common_headers(vec![
+                ("content-length", body.len().to_string()),
+                ("content-type", "application/json".to_owned()),
+            ]),
+            body: Some(body),
             timeout: Some(REQUEST_TIMEOUT),
         }
     }

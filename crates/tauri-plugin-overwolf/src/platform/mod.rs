@@ -67,6 +67,44 @@ pub(crate) fn macos_major_version() -> Option<u32> {
     parse_major_version(buf.get(..len)?)
 }
 
+/// Safari's `Version/` token for `<UA>` (E.1): the installed Safari's
+/// `CFBundleShortVersionString`, major and minor only, read once. `None` off
+/// macOS (WebView2 and WebKitGTK bring their own browser tokens) or when no
+/// Safari bundle can be read.
+#[cfg(feature = "plugin")]
+pub(crate) fn safari_version() -> Option<&'static str> {
+    #[cfg(target_os = "macos")]
+    {
+        static VERSION: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        VERSION
+            .get_or_init(|| {
+                [
+                    "/Applications/Safari.app/Contents/Info.plist",
+                    "/System/Cryptexes/App/System/Applications/Safari.app/Contents/Info.plist",
+                ]
+                .iter()
+                .find_map(|path| {
+                    let text = std::fs::read_to_string(path).ok()?;
+                    let short = plist_string(&text, "CFBundleShortVersionString")?;
+                    crate::analytics::safari_ua_version(short)
+                })
+            })
+            .as_deref()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+/// The `<string>` value of `key` in an XML property list.
+#[cfg(any(test, all(target_os = "macos", feature = "plugin")))]
+fn plist_string<'a>(xml: &'a str, key: &str) -> Option<&'a str> {
+    let after_key = &xml[xml.find(&format!("<key>{key}</key>"))? + key.len() + 11..];
+    let open = after_key.trim_start().strip_prefix("<string>")?;
+    Some(open[..open.find("</string>")?].trim())
+}
+
 /// The major version from `"14.5"` style text (a trailing NUL is ignored).
 #[cfg(any(test, all(target_os = "macos", feature = "plugin")))]
 fn parse_major_version(bytes: &[u8]) -> Option<u32> {
@@ -143,6 +181,24 @@ mod tests {
     #[cfg(all(target_os = "macos", feature = "plugin"))]
     fn macos_version_is_read() {
         assert!(macos_major_version().is_some_and(|v| v >= 11));
+    }
+
+    #[test]
+    fn plist_strings_are_read() {
+        let xml = "<dict>\n\t<key>CFBundleName</key>\n\t<string>Safari</string>\n\t<key>CFBundleShortVersionString</key>\n\t<string>26.5.2</string>\n</dict>";
+        assert_eq!(
+            plist_string(xml, "CFBundleShortVersionString"),
+            Some("26.5.2")
+        );
+        assert_eq!(plist_string(xml, "CFBundleName"), Some("Safari"));
+        assert_eq!(plist_string(xml, "Missing"), None);
+    }
+
+    #[test]
+    #[cfg(all(target_os = "macos", feature = "plugin"))]
+    fn safari_version_is_read() {
+        let v = safari_version().expect("Safari ships with macOS");
+        assert!(v.split('.').count() == 2, "{v}");
     }
 
     #[test]

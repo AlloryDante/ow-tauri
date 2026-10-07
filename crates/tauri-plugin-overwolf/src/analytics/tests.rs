@@ -17,7 +17,7 @@ const CHROME_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWe
 const ELECTRON_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) ParityHarness/1.0.0 Chrome/148.0.7778.280 Electron/42.11.4 Safari/537.36";
 
 fn reporter(label: HostLabel, cuid: &str) -> Reporter {
-    let ua = compose_user_agent(CHROME_UA, "Parity Harness", "1.0.0", &label);
+    let ua = compose_user_agent(CHROME_UA, "Parity Harness", "1.0.0", &label, None);
     Reporter {
         label,
         app_version: "1.0.0".into(),
@@ -95,7 +95,11 @@ fn insert_stats_bytes() {
         req.url,
         "https://tracking.overwolf.com/tracking/InsertStats?Stats=true&owver=42_11_4"
     );
-    let mut headers = vec![("content-type", "application/json".to_owned())];
+    // content-length leads, as on ow-electron's wire (E.1, observed).
+    let mut headers = vec![
+        ("content-length", "135".to_owned()),
+        ("content-type", "application/json".to_owned()),
+    ];
     headers.extend(get_headers(ELECTRON_UA));
     assert_eq!(req.headers, headers);
     let body = format!(r#"{{"Kind":400022,"Extra":"1_0_0.{UID}.darwin.Parity Harness.{UID}"}}"#);
@@ -242,12 +246,39 @@ fn window_names_match_observations() {
 fn user_agent_forms() {
     let label = HostLabel::new("tauri", "2.12.1");
     assert_eq!(
-        compose_user_agent("", "A B", "1", &label),
+        compose_user_agent("", "A B", "1", &label, Some("26.5")),
         "AB/1 Tauri/2.12.1"
     );
     assert_eq!(
-        compose_user_agent("X Chrome/1", "A", "2", &label),
+        compose_user_agent("X Chrome/1", "A", "2", &label, Some("26.5")),
         "X A/2 Chrome/1 Tauri/2.12.1"
     );
     assert_eq!(HostLabel::new("x_y", "1").ua_token(), "X_y/1");
+}
+
+/// The WKWebView default has no browser tokens; ad stacks rate it as an
+/// unknown browser and fill nothing (live run TC-live2). Safari's tokens
+/// are added; a `WebKit` user agent that has them (WebKitGTK) keeps its own.
+#[test]
+fn a_bare_webkit_user_agent_gets_safari_tokens() {
+    let label = HostLabel::new("tauri", "2.12.1");
+    let wk =
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)";
+    assert_eq!(
+        compose_user_agent(wk, "Palm Tracker", "1.0.0", &label, Some("26.5")),
+        format!("{wk} PalmTracker/1.0.0 Version/26.5 Tauri/2.12.1 Safari/605.1.15")
+    );
+    let gtk = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
+    assert_eq!(
+        compose_user_agent(gtk, "A", "1", &label, Some("26.5")),
+        format!("{gtk} A/1 Tauri/2.12.1")
+    );
+    assert_eq!(
+        compose_user_agent(wk, "A", "1", &label, Some(" ")),
+        format!("{wk} A/1 Tauri/2.12.1")
+    );
+    // The engine is never faked.
+    let ua = compose_user_agent(wk, "A", "1", &label, Some("26.5"));
+    assert!(!ua.contains("Chrome/"));
+    assert!(ua.contains("AppleWebKit/605.1.15"));
 }
