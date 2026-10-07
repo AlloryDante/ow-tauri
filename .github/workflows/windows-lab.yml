@@ -64,7 +64,10 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-lab-harness-exe
-          path: tools/parity-harness/tauri-app/src-tauri/target/debug/ow-tauri-parity-harness.exe
+          # The PDB lets a hang's stack dump (lib/tauri-host.mjs) name functions.
+          path: |
+            tools/parity-harness/tauri-app/src-tauri/target/debug/ow-tauri-parity-harness.exe
+            tools/parity-harness/tauri-app/src-tauri/target/debug/ow_tauri_parity_harness.pdb
           if-no-files-found: error
           retention-days: 7
 

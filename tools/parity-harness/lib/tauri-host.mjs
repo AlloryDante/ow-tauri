@@ -76,6 +76,35 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   });
 }
 
+/** The console debugger of the Windows SDK, when the machine has it. */
+export function windowsDebugger(env = process.env, exists = existsSync) {
+  const roots = [env['ProgramFiles(x86)'], env.ProgramFiles].filter(Boolean);
+  for (const root of roots) {
+    const cdb = join(root, 'Windows Kits', '10', 'Debuggers', 'x64', 'cdb.exe');
+    if (exists(cdb)) return cdb;
+  }
+  return null;
+}
+
+/**
+ * Windows: before a timed-out app is killed, writes the call stack of each
+ * of its threads to `file` (the SDK's cdb, attached non-invasively), so a
+ * hang can be read from the run. Does nothing elsewhere or without cdb.
+ */
+function dumpStacks(pid, exe, file) {
+  if (process.platform !== 'win32') return;
+  const cdb = windowsDebugger();
+  if (!cdb) return;
+  const symbols = `${dirname(exe)};srv*${join(process.env.RUNNER_TEMP ?? dirname(exe), 'symbols')}*https://msdl.microsoft.com/download/symbols`;
+  const r = spawnSync(cdb, ['-pv', '-p', String(pid), '-y', symbols, '-c', '~*kn 60; qd'], {
+    encoding: 'utf8',
+    timeout: 240_000,
+    maxBuffer: 32 * 1024 * 1024,
+    windowsHide: true,
+  });
+  writeFileSync(file, `${r.stdout ?? ''}\n${r.stderr ?? ''}${r.error ? `\n${r.error}` : ''}`);
+}
+
 /**
  * Safety net: polls the window monitor's file and calls `onVisible` the
  * first time it reports a visible window of the app.
@@ -144,6 +173,7 @@ export function launchTauri({ exe, env, logDir, timeoutMs, monitorFile, onSpawn 
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
+      dumpStacks(child.pid, exe, join(logDir, 'hang-stacks.txt'));
       killTree(child, 'SIGTERM');
       setTimeout(() => killTree(child, 'SIGKILL'), 10_000).unref();
     }, timeoutMs);

@@ -7,6 +7,7 @@ import { after, test } from 'node:test';
 
 import { classCounts, durationOf, LAB_SCENARIOS, shard, stateDirs } from './ci/windows-lab.mjs';
 import { adformatFacts, compositeAt, guestMuted } from './lib/adformat-report.mjs';
+import { windowsDebugger } from './lib/tauri-host.mjs';
 import { audioChecks, labLayersChecks, topLabel, windowsChecks } from './lib/windows-checks.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'windows-lab-test-'));
@@ -260,4 +261,16 @@ test('a Windows probe with a mute reading reaches the ad-format facts', () => {
     ],
   });
   assert.deepEqual(adformatFacts(dir).probes['mute-initial'].guestMuted, [true]);
+});
+
+test('a hang is dumped with the Windows SDK debugger when the runner has it', () => {
+  const want = join('C:\\K', 'Windows Kits', '10', 'Debuggers', 'x64', 'cdb.exe');
+  assert.equal(
+    windowsDebugger({ 'ProgramFiles(x86)': 'C:\\K' }, (p) => p === want),
+    want,
+  );
+  assert.equal(
+    windowsDebugger({}, () => true),
+    null,
+  );
 });
