@@ -21,7 +21,10 @@
  * attribute-backed properties (`customTracking`, `pageUrl`, ...), the
  * methods `setPageUrl`, `sendCommand`, `setAudioMuted` and `reload` on the
  * element's prototype, and an open shadow root with a `<style>` and an
- * `<iframe>` placeholder [OBS].
+ * `<iframe>` placeholder [OBS]. A performance element gets no shadow root:
+ * it gets the inline style `pointer-events: none;` and one light-DOM
+ * overlay `div`, and turns `pointer-events: auto` at its first
+ * `display_ad_loaded` [OBS].
  *
  * @packageDocumentation
  */
@@ -46,8 +49,23 @@ import {
 /** The local name of the element. */
 export const TAG = 'owadview';
 
-/** The default style: zero specificity, so any app rule wins (B.3.1 item 1). */
-export const DEFAULT_STYLE = ':where(owadview) { display: block; width: 100%; height: 100%; }';
+/**
+ * The default style: zero specificity, so any app rule wins (B.3.1 item 1).
+ * A performance element is a 0x0 block whose overlay `div` (a flex box) is
+ * fixed over the viewport, as on ow-electron [OBS]; it never takes room in
+ * the page.
+ */
+export const DEFAULT_STYLE =
+  ':where(owadview) { display: block; width: 100%; height: 100%; }' +
+  ' :where(owadview[performance]) { width: 0; height: 0; }' +
+  ' :where(owadview[performance]) > :where(div) { display: flex; }';
+
+/**
+ * Inline style of the light-DOM `div` a performance element holds after
+ * attach, character for character as ow-electron writes it (B.3.4) [OBS].
+ */
+export const PERFORMANCE_OVERLAY_STYLE =
+  'position: fixed; top: 0px; left: 0px; width: 100vw; height: 100vh; background: transparent; z-index: 999999;';
 
 /** Style of the shadow root's placeholder iframe (B.3.4, "Shadow root"). */
 export const SHADOW_STYLE =
@@ -176,6 +194,10 @@ interface Entry {
   dead: boolean;
   /** The runtime removes (or removed) the element itself after `shutdown`: no `destroyed` follows. */
   hostRemoved: boolean;
+  /** The light-DOM overlay `div` of a performance element. */
+  overlay: HTMLElement | undefined;
+  /** A performance mount took its first `display_ad_loaded`: the overlay takes input. */
+  modal: boolean;
   /** Mount generation: incremented by every mount and unmount. */
   gen: number;
   tracked: boolean;
@@ -495,6 +517,8 @@ export class AdviewRuntime implements FacadeOwadview {
         used: false,
         dead: false,
         hostRemoved: false,
+        overlay: undefined,
+        modal: false,
         gen: 0,
         tracked: false,
         mounted: false,
@@ -650,6 +674,12 @@ export class AdviewRuntime implements FacadeOwadview {
     entry.rect = this.#rect(entry.el, current.performance);
     entry.visible = visible;
     entry.pendingUpdate = undefined;
+    entry.modal = false;
+    if (current.performance) this.#addOverlay(entry);
+    else {
+      this.#removeOverlay(entry);
+      this.#attachShadow(entry);
+    }
     this.#live.set(id, entry);
     const request = { elementId: id, attributes: current, rect: entry.rect, visible };
     this.#enqueue(entry, async () => {
@@ -837,8 +867,33 @@ export class AdviewRuntime implements FacadeOwadview {
   }
 
   /**
+   * The DOM a performance element has after attach on ow-electron (B.3.4)
+   * [OBS]: no shadow root, the inline style `pointer-events: none;` (clicks
+   * reach the app while the ad loads) and one light-DOM `div` with
+   * {@link PERFORMANCE_OVERLAY_STYLE}, which inherits `pointer-events`.
+   */
+  #addOverlay(entry: Entry): void {
+    const { el } = entry;
+    el.style.setProperty('pointer-events', 'none');
+    if (entry.overlay?.parentNode === el) return;
+    const div = this.#env.document.createElement('div');
+    div.setAttribute('style', PERFORMANCE_OVERLAY_STYLE);
+    el.append(div);
+    entry.overlay = div;
+  }
+
+  /** Drops the performance DOM of an element that is no longer a performance ad. */
+  #removeOverlay(entry: Entry): void {
+    const { overlay } = entry;
+    if (!overlay) return;
+    entry.overlay = undefined;
+    if (overlay.parentNode === entry.el) overlay.remove();
+    entry.el.style.removeProperty('pointer-events');
+  }
+
+  /**
    * Defines the members ow-electron's element has after attach (B.3.3), once
-   * per element, and the open shadow root (B.3.4). The element's own
+   * per element. The element's own
    * properties are `cid`, `slotsize`, `pageUrl`, `performance`, `unit`,
    * `adstyle` and `customTracking`, in ow-electron's order [OBS], each backed
    * by its attribute (`performance` is a boolean) [DEC]. A value an app
@@ -876,7 +931,6 @@ export class AdviewRuntime implements FacadeOwadview {
     if (base !== null && ![...this.#prototypes.values()].includes(base)) {
       Object.setPrototypeOf(el, this.#methodsPrototype(base));
     }
-    this.#attachShadow(entry);
   }
 
   /**
@@ -935,6 +989,10 @@ export class AdviewRuntime implements FacadeOwadview {
     });
   }
 
+  /**
+   * The open shadow root of an element that is not a performance ad
+   * (B.3.4): a `<style>` and a placeholder `<iframe>` [OBS].
+   */
   #attachShadow(entry: Entry): void {
     const el = entry.el;
     if (el.shadowRoot || this.#noShadow) return;
@@ -975,6 +1033,11 @@ export class AdviewRuntime implements FacadeOwadview {
     if (source === 'host' && name === 'ad-clicked' && now - entry.lastGuestClick < CLICK_DEDUPE_MS)
       return;
     if (source !== 'host' && CLICK_NAMES.has(name)) entry.lastGuestClick = now;
+    // The overlay turns modal before the app hears of the load [OBS].
+    if (name === 'display_ad_loaded' && entry.attributes?.performance === true && !entry.modal) {
+      entry.modal = true;
+      entry.el.style.setProperty('pointer-events', 'auto');
+    }
     const EventCtor = (this.#env.window as Window & { Event?: typeof Event }).Event ?? Event;
     entry.el.dispatchEvent(createAdviewEvent(name, data, EventCtor));
     const twin = SPELLING_TWINS[name];

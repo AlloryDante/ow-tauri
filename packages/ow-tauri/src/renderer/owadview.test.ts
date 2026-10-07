@@ -9,6 +9,7 @@ import { createAdviewEvent } from './owadview-events.js';
 import {
   AdviewRuntime,
   DEFAULT_STYLE,
+  PERFORMANCE_OVERLAY_STYLE,
   SHADOW_STYLE,
   VISIBILITY_POLL_MS,
   adviewRuntimeOf,
@@ -948,6 +949,88 @@ describe('performance ads (B.3.4)', () => {
     samplePerformanceAd(seen);
     await tick();
     expect(callsOf('adview_mount')).toHaveLength(2);
+  });
+});
+
+describe('performance DOM shape (B.3.4) [OBS]', () => {
+  it('gives a performance element no shadow root, an inline style and one overlay div', async () => {
+    await startRuntime();
+    const el = samplePerformanceAd([]);
+    expect(el.getAttribute('style')).toBeNull();
+    await tick();
+    expect(el.shadowRoot).toBeNull();
+    expect(el.getAttribute('style')).toBe('pointer-events: none;');
+    expect(el.children).toHaveLength(1);
+    const div = el.firstElementChild as HTMLElement;
+    expect(div.localName).toBe('div');
+    expect([...div.attributes].map((a) => [a.name, a.value])).toEqual([
+      ['style', PERFORMANCE_OVERLAY_STYLE],
+    ]);
+    expect(PERFORMANCE_OVERLAY_STYLE).toBe(
+      'position: fixed; top: 0px; left: 0px; width: 100vw; height: 100vh; background: transparent; z-index: 999999;',
+    );
+    // A remount (an attribute change) keeps exactly one div.
+    el.setAttribute('unit', 'u1');
+    await tick();
+    expect(names()).toEqual(['adview_mount', 'adview_unmount', 'adview_mount']);
+    expect(el.children).toHaveLength(1);
+    expect(el.shadowRoot).toBeNull();
+  });
+
+  it('is a 0x0 box with a flex overlay; other elements keep the block default', async () => {
+    await startRuntime();
+    const el = samplePerformanceAd([]);
+    const standard = document.createElement('owadview');
+    document.body.append(standard);
+    await tick();
+    const style = getComputedStyle(el);
+    expect([style.display, style.width, style.height]).toEqual(['block', '0px', '0px']);
+    const overlay = el.firstElementChild;
+    expect(overlay).not.toBeNull();
+    if (overlay) expect(getComputedStyle(overlay).display).toBe('flex');
+    expect(getComputedStyle(standard).width).not.toBe('0px');
+    expect(DEFAULT_STYLE).toContain(':where(owadview[performance]) { width: 0; height: 0; }');
+  });
+
+  it('switches to pointer-events auto at the first display_ad_loaded, before dispatch', async () => {
+    await startRuntime();
+    const el = samplePerformanceAd([]);
+    await tick();
+    const id = runtime.elementId(el);
+    const atDispatch: (string | null)[] = [];
+    el.addEventListener('display_ad_loaded', () => atDispatch.push(el.getAttribute('style')));
+    services.emit({ elementId: id, name: 'impression', source: 'guest' });
+    expect(el.getAttribute('style')).toBe('pointer-events: none;');
+    services.emit({ elementId: id, name: 'display_ad_loaded', data: {}, source: 'guest' });
+    services.emit({ elementId: id, name: 'display_ad_loaded', data: {}, source: 'guest' });
+    expect(atDispatch).toEqual(['pointer-events: auto;', 'pointer-events: auto;']);
+    // The div's own style is unchanged; it inherits the element's value.
+    expect((el.firstElementChild as HTMLElement).getAttribute('style')).toBe(
+      PERFORMANCE_OVERLAY_STYLE,
+    );
+  });
+
+  it('leaves the style of a standard element alone', async () => {
+    await startRuntime();
+    const el = createAd();
+    document.body.append(el);
+    await tick();
+    services.emit({ elementId: runtime.elementId(el), name: 'display_ad_loaded' });
+    expect(el.getAttribute('style')).toBeNull();
+    expect(el.children).toHaveLength(0);
+    expect(el.shadowRoot).not.toBeNull();
+  });
+
+  it('drops the overlay when the element stops being a performance ad', async () => {
+    await startRuntime();
+    const el = samplePerformanceAd([]);
+    el.box = { x: 0, y: 0, width: 300, height: 250 };
+    await tick();
+    el.removeAttribute('performance');
+    await tick();
+    expect(el.children).toHaveLength(0);
+    expect(el.style.getPropertyValue('pointer-events')).toBe('');
+    expect(el.shadowRoot).not.toBeNull();
   });
 });
 
