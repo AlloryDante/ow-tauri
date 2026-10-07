@@ -100,6 +100,13 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
+    crate::lab::record("state-writes.jsonl", || {
+        serde_json::json!({
+            "path": path.to_string_lossy(),
+            "ok": result.is_ok(),
+            "text": String::from_utf8_lossy(bytes),
+        })
+    });
     result
 }
 

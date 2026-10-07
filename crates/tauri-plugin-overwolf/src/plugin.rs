@@ -293,10 +293,41 @@ fn setup<R: Runtime>(
         register_companions(app);
     }
     if host.options.main_webview {
-        host.create_main_webview(None)?;
+        create_main_webview_later(app);
     }
     host.spawn_ticker();
+    crate::lab::start(app);
     Ok(())
+}
+
+/// Creates `ow-main` from the event loop. Tauri holds its plugin-store lock
+/// while plugins set up, and building a webview takes that lock again, so
+/// creating it in `setup` would deadlock the app before it starts. The
+/// request is posted from another thread (`run_on_main_thread` on the main
+/// thread runs at once). An app that cannot create its main webview exits
+/// with code 1, as a failed setup ends the app.
+fn create_main_webview_later<R: Runtime>(app: &AppHandle<R>) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let handle = app.clone();
+        let posted = app.run_on_main_thread(move || {
+            let Some(host) = host_of(&handle) else { return };
+            if let Err(err) = host.create_main_webview(None) {
+                host.log(
+                    LogLevel::Error,
+                    &format!("creating the main webview failed: {err}"),
+                );
+                handle.exit(1);
+            }
+        });
+        if let (Err(err), Some(host)) = (posted, host_of(&app)) {
+            host.log(
+                LogLevel::Error,
+                &format!("creating the main webview failed: {err}"),
+            );
+            app.exit(1);
+        }
+    });
 }
 
 /// Registers the opener, dialog and global-shortcut plugins the app has not
@@ -416,7 +447,9 @@ pub(crate) fn window_event<R: Runtime>(host: &Arc<Host<R>>, label: &str, event: 
 }
 
 fn on_navigation<R: Runtime>(webview: &Webview<R>, url: &Url) -> bool {
-    host_of(webview).is_none_or(|host| navigation(&host, webview.label(), url))
+    let allowed = host_of(webview).is_none_or(|host| navigation(&host, webview.label(), url));
+    crate::lab::navigation(webview.label(), url, allowed);
+    allowed
 }
 
 /// The navigation policy of the webview `label` (A.2.3.1, A.6).
@@ -431,6 +464,7 @@ pub(crate) fn navigation<R: Runtime>(host: &Arc<Host<R>>, label: &str, url: &Url
 }
 
 fn on_page_load<R: Runtime>(webview: &Webview<R>, payload: &PageLoadPayload<'_>) {
+    crate::lab::page_load(webview, payload.event(), payload.url());
     if let Some(host) = host_of(webview) {
         page_load(&host, webview.label(), payload.event(), payload.url());
     }

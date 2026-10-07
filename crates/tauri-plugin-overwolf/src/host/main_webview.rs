@@ -33,7 +33,7 @@ fn monitor_info(m: &tauri::Monitor) -> MonitorInfo {
     }
 }
 
-/// Current monitors as Tauri reports them.
+/// Current monitors as Tauri reports them, with the OS display names.
 /// Empty when `os_queries` is off.
 pub(crate) fn monitors<R: Runtime>(
     app: &AppHandle<R>,
@@ -42,18 +42,24 @@ pub(crate) fn monitors<R: Runtime>(
     if !os_queries {
         return (Vec::new(), None);
     }
-    let all = app
+    let mut all: Vec<MonitorInfo> = app
         .available_monitors()
         .unwrap_or_default()
         .iter()
         .map(monitor_info)
         .collect();
-    let primary = app
+    let mut primary = app
         .primary_monitor()
         .ok()
         .flatten()
         .as_ref()
         .map(monitor_info);
+    // The OS display names (macOS: Tauri reports `Monitor #<model>`).
+    let names = crate::platform::webview::screen_names(app);
+    crate::screen::apply_os_names(&mut all, &names);
+    if let Some(p) = primary.as_mut() {
+        crate::screen::apply_os_names(std::slice::from_mut(p), &names);
+    }
     (all, primary)
 }
 
@@ -147,7 +153,7 @@ impl<R: Runtime> Host<R> {
                 }
                 NewWindowResponse::Deny
             });
-        if keeps_timers {
+        if keeps_timers || crate::lab::invisible() {
             builder = builder.visible(false);
         } else {
             // Technically visible: 1 x 1, transparent, at the origin (A.6).

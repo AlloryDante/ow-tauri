@@ -1176,6 +1176,95 @@ fn guest_visibility_follows_the_window_and_the_element() {
     )
     .unwrap();
     assert_eq!(state("visibilityState"), "visible");
+    // A closing window hides its guests' documents before they go
+    // (regression: they were destroyed while still visible).
+    ow.test_ads_window_closing(1);
+    assert_eq!(state("visibilityState"), "hidden");
+}
+
+/// Host requests as the analytics transport received them.
+#[derive(Default)]
+struct Requests(Mutex<Vec<tauri_plugin_overwolf::analytics::HostRequest>>);
+
+impl tauri_plugin_overwolf::analytics::Transport for Requests {
+    fn send(
+        &self,
+        request: tauri_plugin_overwolf::analytics::HostRequest,
+    ) -> tauri_plugin_overwolf::analytics::BoxFuture<
+        Result<tauri_plugin_overwolf::analytics::HostResponse, String>,
+    > {
+        self.0.lock().unwrap().push(request);
+        Box::pin(async {
+            Ok(tauri_plugin_overwolf::analytics::HostResponse {
+                status: 200,
+                ..Default::default()
+            })
+        })
+    }
+}
+
+#[test]
+fn a_shown_window_counts_before_a_guest_that_attaches_after_it() {
+    let requests = Arc::new(Requests::default());
+    let mut context = ow_tauri_acl_tests::context();
+    context.config_mut().plugins.0.insert(
+        "overwolf".into(),
+        json!({ "state": { "appDataDir": temp_dir("shown-before-attach") } }),
+    );
+    let app = mock_builder()
+        .plugin(
+            Builder::new()
+                .manifest_json(ow_tauri_acl_tests::manifest())
+                .companion_plugins(false)
+                .main_webview(false)
+                .skip_os_queries()
+                .skip_updater_os_steps()
+                .analytics_transport(Arc::clone(&requests) as _)
+                .argv(vec!["acl-fixture".into()])
+                .build(),
+        )
+        .build(context)
+        .unwrap();
+    main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
+    invoke(&app, "ow-main", "main_ready", json!({})).unwrap();
+    // The window is shown (the mock reports every window visible) and a
+    // guest attaches before any visibility poll ran.
+    invoke(&app, "bw-1", "adview_mount", mount_body("e1")).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let names = loop {
+        let names: Vec<String> = requests
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                if r.url.contains("hasVisibleWindow%22%3Atrue") {
+                    "visible-heartbeat".to_owned()
+                } else if r.url.contains("InsertStats") {
+                    let body = String::from_utf8_lossy(r.body.as_deref().unwrap_or_default());
+                    if body.contains("400025") {
+                        "400025"
+                    } else {
+                        "stats"
+                    }
+                    .to_owned()
+                } else {
+                    "other".to_owned()
+                }
+            })
+            .collect();
+        if names.iter().any(|n| n == "400025") || Instant::now() > deadline {
+            break names;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let heartbeat = names.iter().position(|n| n == "visible-heartbeat");
+    let attach = names.iter().position(|n| n == "400025");
+    assert!(
+        heartbeat.is_some() && attach.is_some() && heartbeat < attach,
+        "the first-visible-window heartbeat precedes 400025: {names:?}"
+    );
 }
 
 #[test]
@@ -1240,14 +1329,16 @@ fn a_custom_cmp_url_may_load_in_the_settings_window_only() {
     main_and_window(&app);
     subscribe_all(&app, &["bw-1"]);
     let ow = app.overwolf();
-    // The mock runtime cannot build the window (its preloader is a data:
-    // URL); the navigation policy is set before the window is built.
-    let _ = invoke(
+    // The window opens on a data: preloader (regression: Tauri refused
+    // data: URLs, so every settings window failed to open).
+    invoke(
         &app,
         "ow-main",
         "open_cmp_window",
         json!({ "options": { "cmpURL": "https://cmp.example.test/privacy/settings.html" } }),
-    );
+    )
+    .expect("the settings window opens");
+    assert!(app.get_webview_window("ow-cmp").is_some());
     let custom = tauri::Url::parse("https://cmp.example.test/privacy/settings.html?tab=x").unwrap();
     let other = tauri::Url::parse("https://other.example.test/").unwrap();
     assert!(ow.test_navigation("ow-cmp", &custom));
@@ -1790,4 +1881,51 @@ fn updater_disabled_returns_null() {
     main_and_window(&app);
     let r = invoke(&app, "ow-main", "updater_check", json!({})).unwrap();
     assert_eq!(r, Value::Null);
+}
+
+/// Regression: the plugin built `ow-main` inside its own setup, while Tauri
+/// holds the plugin-store lock that building a webview takes again, so every
+/// app with the main webview on hung before it started (found by the Tauri
+/// edition of the parity harness). The app must build, and `ow-main` must
+/// appear once setup is over.
+#[test]
+fn main_webview_is_created_after_setup_without_deadlock() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut context = ow_tauri_acl_tests::context();
+        context.config_mut().plugins.0.insert(
+            "overwolf".into(),
+            json!({ "state": { "appDataDir": temp_dir("main-webview") } }),
+        );
+        let app = mock_builder()
+            .plugin(
+                Builder::new()
+                    .manifest_json(ow_tauri_acl_tests::manifest())
+                    .companion_plugins(false)
+                    .skip_os_queries()
+                    .skip_updater_os_steps()
+                    .argv(vec!["acl-fixture".into()])
+                    .build(),
+            )
+            .build(context);
+        let Ok(app) = app else {
+            let _ = tx.send((false, false));
+            return;
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut created = false;
+        while Instant::now() < deadline {
+            if app.get_webview_window("ow-main").is_some() {
+                created = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let _ = tx.send((true, created));
+    });
+    let (built, created) = rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("building the app deadlocked");
+    assert!(built, "the app failed to build");
+    assert!(created, "ow-main was never created");
 }

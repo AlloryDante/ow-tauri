@@ -316,6 +316,22 @@ impl<R: Runtime> Overwolf<R> {
         }
     }
 
+    /// Lab mode (feature `lab`, `OW_TAURI_LAB_DIR` set): writes what every
+    /// live ad guest's page sees now to `guest-<n>-<phase>.json` in the
+    /// trace directory. Does nothing when the trace is off. For the parity
+    /// harness only.
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// app.overwolf().lab_probe_guests("end");
+    /// # }
+    /// ```
+    #[cfg(feature = "lab")]
+    pub fn lab_probe_guests(&self, phase: &str) {
+        crate::lab::probe_guests(&self.0.app, phase);
+    }
+
     /// Starts the graceful quit sequence (A.6), as `app.quit()` does.
     ///
     /// ```no_run
@@ -435,6 +451,12 @@ impl<R: Runtime> Overwolf<R> {
         } else {
             self.0.ads_window_hidden(id);
         }
+    }
+
+    /// As if the window `id` were about to be destroyed: its guests'
+    /// documents become hidden first (D.5).
+    pub fn test_ads_window_closing(&self, id: u32) {
+        self.0.ads_window_closing(id);
     }
 
     /// The install-at-exit step of the update client (I.4) without the

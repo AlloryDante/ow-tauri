@@ -20,6 +20,9 @@
 //! - `test-util`: `Builder::skip_os_queries` and hidden hooks that drive the
 //!   plugin's event handlers on Tauri's mock runtime, which fires none. Not a
 //!   stable API.
+//! - `lab`: the parity lab's trace and invisible windows, switched on by
+//!   `OW_TAURI_LAB_DIR` and `OW_TAURI_LAB_INVISIBLE` (the harness README in
+//!   `tools/parity-harness`). Never enable it in a shipped app.
 //!
 //! The documented modules are the public API. Modules hidden from the docs
 //! are internal building blocks, public only for their tests.
@@ -71,6 +74,7 @@ pub mod updater;
 #[doc(hidden)]
 pub mod window;
 
+mod lab;
 mod platform;
 
 #[cfg(feature = "plugin")]

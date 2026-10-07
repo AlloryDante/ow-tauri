@@ -291,6 +291,11 @@ impl<R: Runtime> Host<R> {
             .skip_taskbar(true)
             .build()
             .map_err(Error::from)?;
+        crate::lab::after_build(&window, false);
+        crate::lab::record(
+            "wc-events.jsonl",
+            || serde_json::json!({ "kind": "created", "label": label, "type": "cmp", "url": window.url().map(|u| u.to_string()).unwrap_or_default() }),
+        );
         self.install_consent_hooks(&window);
         Ok(())
     }
@@ -498,6 +503,21 @@ impl<R: Runtime> Host<R> {
         true
     }
 
+    /// The hidden default-consent window of the first settings call of a
+    /// launch (D.6.4).
+    fn open_default_consent_once(self: &Arc<Self>) {
+        if !self.with_core(|c| std::mem::replace(&mut c.consent.default_opened, true))
+            && let Err(err) =
+                self.open_hidden_window(CMP_DEFAULT_LABEL, &default_consent_url(), None)
+        {
+            self.log(
+                LogLevel::Warn,
+                &format!("the default-consent window failed: {err}"),
+            );
+            self.with_core(|c| c.consent.hidden.remove(CMP_DEFAULT_LABEL));
+        }
+    }
+
     /// `open_ad_privacy_settings_window` / `open_cmp_window` (D.6.4).
     pub(crate) fn open_cmp_window(
         self: &Arc<Self>,
@@ -520,20 +540,13 @@ impl<R: Runtime> Host<R> {
         let custom = (!is_overwolf_url(&base_url)).then(|| base_url.origin().ascii_serialization());
         self.with_core(|c| c.consent.settings_origin = custom);
         if let Some(w) = self.app.get_webview_window(CMP_SETTINGS_LABEL) {
-            let _ = w.unminimize();
-            let _ = w.set_focus();
+            if crate::lab::may_focus() {
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
             return Ok(());
         }
-        if !self.with_core(|c| std::mem::replace(&mut c.consent.default_opened, true))
-            && let Err(err) =
-                self.open_hidden_window(CMP_DEFAULT_LABEL, &default_consent_url(), None)
-        {
-            self.log(
-                LogLevel::Warn,
-                &format!("the default-consent window failed: {err}"),
-            );
-            self.with_core(|c| c.consent.hidden.remove(CMP_DEFAULT_LABEL));
-        }
+        self.open_default_consent_once();
         let (ow_version, app_version) = self.consent_facts_owned();
         let facts = ConsentFacts {
             uid: &self.info.identity.uid,
@@ -573,8 +586,9 @@ impl<R: Runtime> Host<R> {
             )
             .resizable(false)
             .maximizable(false)
-            .minimizable(true)
-            .visible(true);
+            .minimizable(true);
+        // Lab windows are built hidden and shown invisible (feature `lab`).
+        builder = crate::lab::window_builder(builder, true);
         if let Some(color) = parse_color(&background) {
             builder = builder.background_color(color);
         }
@@ -598,6 +612,11 @@ impl<R: Runtime> Host<R> {
             builder = builder.parent(&parent).map_err(Error::from)?;
         }
         let window = builder.build().map_err(Error::from)?;
+        crate::lab::after_build(&window, true);
+        crate::lab::record(
+            "wc-events.jsonl",
+            || serde_json::json!({ "kind": "created", "label": CMP_SETTINGS_LABEL, "type": "cmp", "url": page.as_str() }),
+        );
         let _ = window.navigate(page);
         Ok(())
     }
