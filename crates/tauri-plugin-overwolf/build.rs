@@ -62,8 +62,46 @@ fn stage_scripts() -> Result<(), String> {
     Ok(())
 }
 
+/// The application manifest of this crate's own test executables on
+/// Windows (MSVC): a dependency on Common Controls v6, as `tauri-build`
+/// embeds in an app. Tauri's dialog code imports `TaskDialogIndirect`,
+/// which only that version exports, so without the manifest the loader
+/// refuses the unit-test executable (`STATUS_ENTRYPOINT_NOT_FOUND`) before
+/// any test runs.
+const TEST_MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*" />
+    </dependentAssembly>
+  </dependency>
+</assembly>
+"#;
+
+/// Embeds [`TEST_MANIFEST`] in the executables cargo links for this package
+/// (its unit tests and doctests; it has no binaries or examples). Link
+/// arguments of a library's build script never reach the crates that depend
+/// on it, so an app's executable keeps the manifest its own build embeds.
+fn embed_test_manifest() -> Result<(), String> {
+    let windows_msvc = std::env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").is_ok_and(|env| env == "msvc");
+    if !windows_msvc || std::env::var_os("CARGO_FEATURE_PLUGIN").is_none() {
+        return Ok(());
+    }
+    let Ok(out_dir) = std::env::var("OUT_DIR") else {
+        return Ok(());
+    };
+    let manifest = Path::new(&out_dir).join("test-app.manifest");
+    std::fs::write(&manifest, TEST_MANIFEST)
+        .map_err(|e| format!("writing {}: {e}", manifest.display()))?;
+    println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+    println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
+    Ok(())
+}
+
 fn main() -> Result<(), String> {
     stage_scripts()?;
+    embed_test_manifest()?;
     tauri_plugin::Builder::new(COMMANDS).build();
     Ok(())
 }
