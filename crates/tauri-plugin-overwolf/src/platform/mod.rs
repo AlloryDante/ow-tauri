@@ -67,10 +67,22 @@ pub(crate) fn macos_major_version() -> Option<u32> {
     parse_major_version(buf.get(..len)?)
 }
 
+/// Where the installed Safari bundle lives: `/Applications/Safari.app` (on
+/// macOS 13 and newer a link into the Safari cryptex), then the cryptex path
+/// itself.
+#[cfg(all(target_os = "macos", feature = "plugin"))]
+const SAFARI_BUNDLES: [&str; 2] = [
+    "/Applications/Safari.app",
+    "/System/Cryptexes/App/System/Applications/Safari.app",
+];
+
 /// Safari's `Version/` token for `<UA>` (E.1): the installed Safari's
 /// `CFBundleShortVersionString`, major and minor only, read once. `None` off
 /// macOS (WebView2 and WebKitGTK bring their own browser tokens) or when no
 /// Safari bundle can be read.
+///
+/// The bundle's `Info.plist` is read through `NSBundle`, which accepts both
+/// property list encodings (XML and binary); system bundles ship either.
 #[cfg(feature = "plugin")]
 pub(crate) fn safari_version() -> Option<&'static str> {
     #[cfg(target_os = "macos")]
@@ -78,15 +90,9 @@ pub(crate) fn safari_version() -> Option<&'static str> {
         static VERSION: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
         VERSION
             .get_or_init(|| {
-                [
-                    "/Applications/Safari.app/Contents/Info.plist",
-                    "/System/Cryptexes/App/System/Applications/Safari.app/Contents/Info.plist",
-                ]
-                .iter()
-                .find_map(|path| {
-                    let text = std::fs::read_to_string(path).ok()?;
-                    let short = plist_string(&text, "CFBundleShortVersionString")?;
-                    crate::analytics::safari_ua_version(short)
+                SAFARI_BUNDLES.iter().find_map(|path| {
+                    let short = bundle_short_version(path)?;
+                    crate::analytics::safari_ua_version(&short)
                 })
             })
             .as_deref()
@@ -97,12 +103,15 @@ pub(crate) fn safari_version() -> Option<&'static str> {
     }
 }
 
-/// The `<string>` value of `key` in an XML property list.
-#[cfg(any(test, all(target_os = "macos", feature = "plugin")))]
-fn plist_string<'a>(xml: &'a str, key: &str) -> Option<&'a str> {
-    let after_key = &xml[xml.find(&format!("<key>{key}</key>"))? + key.len() + 11..];
-    let open = after_key.trim_start().strip_prefix("<string>")?;
-    Some(open[..open.find("</string>")?].trim())
+/// The `CFBundleShortVersionString` of the bundle at `path`, in whichever
+/// encoding its `Info.plist` uses.
+#[cfg(all(target_os = "macos", feature = "plugin"))]
+fn bundle_short_version(path: &str) -> Option<String> {
+    use objc2_foundation::{NSBundle, NSString};
+    let bundle = NSBundle::bundleWithPath(&NSString::from_str(path))?;
+    let value =
+        bundle.objectForInfoDictionaryKey(&NSString::from_str("CFBundleShortVersionString"))?;
+    Some(value.downcast::<NSString>().ok()?.to_string())
 }
 
 /// The major version from `"14.5"` style text (a trailing NUL is ignored).
@@ -184,21 +193,54 @@ mod tests {
     }
 
     #[test]
-    fn plist_strings_are_read() {
-        let xml = "<dict>\n\t<key>CFBundleName</key>\n\t<string>Safari</string>\n\t<key>CFBundleShortVersionString</key>\n\t<string>26.5.2</string>\n</dict>";
-        assert_eq!(
-            plist_string(xml, "CFBundleShortVersionString"),
-            Some("26.5.2")
-        );
-        assert_eq!(plist_string(xml, "CFBundleName"), Some("Safari"));
-        assert_eq!(plist_string(xml, "Missing"), None);
+    #[cfg(all(target_os = "macos", feature = "plugin"))]
+    fn safari_version_is_read() {
+        // Safari is part of every macOS install, but a stripped-down image
+        // (some CI runners) can lack the bundle. Where an `Info.plist` is on
+        // disk, its version must be read, whatever its encoding.
+        let on_disk: Vec<_> = SAFARI_BUNDLES
+            .iter()
+            .map(|path| std::path::Path::new(path).join("Contents/Info.plist"))
+            .filter(|plist| plist.is_file())
+            .collect();
+        match safari_version() {
+            Some(v) => assert_eq!(v.split('.').count(), 2, "{v}"),
+            None => assert!(
+                on_disk.is_empty(),
+                "Safari's Info.plist exists but its version was not read: {:?}",
+                on_disk
+                    .iter()
+                    .map(|plist| (plist, std::fs::read(plist).map(|b| b.len())))
+                    .collect::<Vec<_>>()
+            ),
+        }
     }
 
     #[test]
     #[cfg(all(target_os = "macos", feature = "plugin"))]
-    fn safari_version_is_read() {
-        let v = safari_version().expect("Safari ships with macOS");
-        assert!(v.split('.').count() == 2, "{v}");
+    fn bundle_versions_are_read_from_binary_plists() {
+        let dir = std::env::temp_dir().join(format!("ow-tauri-bundle-{}", std::process::id()));
+        let contents = dir.join("Test.app/Contents");
+        std::fs::create_dir_all(&contents).expect("temp bundle");
+        let xml = contents.join("Info.plist");
+        std::fs::write(
+            &xml,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>test.ow-tauri.bundle</string><key>CFBundleShortVersionString</key><string>18.6.1</string></dict></plist>\n",
+        )
+        .expect("Info.plist");
+        let converted = std::process::Command::new("/usr/bin/plutil")
+            .args(["-convert", "binary1"])
+            .arg(&xml)
+            .status()
+            .expect("plutil");
+        assert!(converted.success());
+        assert_eq!(
+            std::fs::read(&xml).expect("binary plist").get(..8),
+            Some(&b"bplist00"[..])
+        );
+        let version = bundle_short_version(&dir.join("Test.app").to_string_lossy());
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(version.as_deref(), Some("18.6.1"));
     }
 
     #[test]

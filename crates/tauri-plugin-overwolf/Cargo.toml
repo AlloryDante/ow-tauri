@@ -123,9 +123,10 @@ windows = { version = "0.62.2", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Guest mute, the shaped navigations (D.8.3) and the ads data store's
-# cookies for host requests (E.1); wry's versions.
+# cookies for host requests (E.1); wry's versions. `NSBundle`: Safari's
+# version for the user agent, from its Info.plist in either encoding.
 objc2 = { version = "0.6.5", optional = true }
-objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "NSArray", "NSDate", "NSGeometry", "NSHTTPCookie", "NSString", "NSURL", "NSURLRequest"] }
+objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "NSArray", "NSBundle", "NSDate", "NSGeometry", "NSHTTPCookie", "NSString", "NSURL", "NSURLRequest"] }
 block2 = { version = "0.6.2", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
