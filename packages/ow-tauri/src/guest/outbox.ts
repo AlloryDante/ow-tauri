@@ -16,6 +16,61 @@ export const RETRY_MS = 250;
 /** Largest JSON encoding of `data` sent as is (D.4, A.2.6). */
 export const MAX_DATA_BYTES = 16 * 1024;
 
+/**
+ * Tauri's IPC endpoint where the webview cannot serve a custom scheme
+ * (Windows: `http://ipc.localhost/<command>`).
+ */
+const HTTP_IPC = /^https?:\/\/ipc\.localhost\//i;
+
+/** The URL a `fetch(input)` call requests, when it can be read. */
+function requestUrl(input: unknown): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.href;
+  if (typeof input === 'object' && input !== null) {
+    const url: unknown = Reflect.get(input, 'url');
+    if (typeof url === 'string') return url;
+  }
+  return '';
+}
+
+/**
+ * Runs `send` (one Tauri `invoke`) while `win.fetch` refuses requests to
+ * Tauri's HTTP IPC endpoint, so Tauri sends the call through the webview's
+ * `postMessage` channel instead (its own fallback for a failed IPC fetch,
+ * kept for the rest of the page's life). On Windows the ad guests' remote
+ * pages reach that endpoint without an `Origin` header, which Tauri
+ * requires, so every guest call was answered `missing Origin header` and
+ * the host never heard from its guests [OBS: Windows lab, `ipc-probe`].
+ * Every other request, and every platform whose IPC uses a custom scheme
+ * (macOS: `ipc://`), goes to the page's own `fetch` untouched.
+ *
+ * Tauri's `invoke` calls `fetch` synchronously, and the page's `fetch` is
+ * back before `send` returns, so page code never sees the replacement.
+ *
+ * @param win - the guest window
+ * @param send - the call to make
+ * @returns what `send` returned
+ */
+export function withPostMessageIpc<T>(win: Window, send: () => T): T {
+  let original: unknown;
+  try {
+    original = Reflect.get(win, 'fetch');
+  } catch {
+    return send();
+  }
+  if (typeof original !== 'function') return send();
+  const refuse = (input: unknown, init?: unknown): unknown =>
+    HTTP_IPC.test(requestUrl(input))
+      ? Promise.reject(new TypeError('Failed to fetch'))
+      : Reflect.apply(original, win, [input, init]);
+  if (!Reflect.set(win, 'fetch', refuse)) return send();
+  try {
+    return send();
+  } finally {
+    Reflect.set(win, 'fetch', original);
+  }
+}
+
 /** `invoke(cmd, args)` as captured from `__TAURI_INTERNALS__`. */
 export type Invoke = (command: string, args: Record<string, unknown>) => unknown;
 
@@ -150,7 +205,7 @@ export class Outbox {
 
   #send(invoke: Invoke, args: Record<string, unknown>): void {
     try {
-      const result = invoke(this.#command, args);
+      const result = withPostMessageIpc(this.#win, () => invoke(this.#command, args));
       if (result instanceof Promise) result.catch(() => undefined);
     } catch {
       // The host refused it (limits, validation); nothing to retry.
