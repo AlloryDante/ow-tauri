@@ -181,6 +181,26 @@ enum Next {
 /// does (`shutdown` only).
 pub(crate) const MINIMIZE_HIDES_FIRST: bool = cfg!(windows);
 
+/// Whether a minimize also hides the guest webviews natively until the
+/// restore (Windows). A minimized ow-electron window has an empty client
+/// area there, so its guests stop rendering and the ad library measures an
+/// empty rect (its own log, `stop CB`) [OBS: Windows lab, `perf-minimize`];
+/// a WebView2 controller keeps rendering a page in a minimized window until
+/// it is made invisible. Not on macOS, where a minimized window's web
+/// content already turns hidden [OBS].
+pub(crate) const MINIMIZE_HIDES_NATIVELY: bool = cfg!(windows);
+
+/// The native visibility a minimize or restore gives a guest webview, or
+/// `None` to leave it: hidden on minimize; on restore shown again unless
+/// the app hid the element meanwhile (`visible`).
+pub(crate) fn native_visibility_on_minimize(minimized: bool, visible: bool) -> Option<bool> {
+    if minimized {
+        Some(false)
+    } else {
+        visible.then_some(true)
+    }
+}
+
 /// Platform reports for guests and consent windows, routed to the host.
 pub(super) struct Reports<R: Runtime>(pub(super) Weak<Host<R>>);
 
@@ -800,14 +820,20 @@ impl<R: Runtime> Host<R> {
             });
         }
         if let Some(visible) = update.visible {
-            let changed = self.with_core(|c| {
-                c.ads.guests.get_mut(&label).is_some_and(|g| {
+            let (changed, minimized) = self.with_core(|c| {
+                c.ads.guests.get_mut(&label).map_or((false, false), |g| {
                     let changed = g.visible != visible;
                     g.visible = visible;
-                    changed
+                    (changed, g.embedder_minimized)
                 })
             });
-            if changed && let Some(wv) = &webview {
+            // While minimized on Windows the webview stays hidden; the
+            // restore shows it (MINIMIZE_HIDES_NATIVELY).
+            let held = visible && minimized && MINIMIZE_HIDES_NATIVELY;
+            if changed
+                && !held
+                && let Some(wv) = &webview
+            {
                 let _ = if visible { wv.show() } else { wv.hide() };
             }
             self.sync_visibility(&label, false);
@@ -1461,18 +1487,25 @@ impl<R: Runtime> Host<R> {
     /// gets a `window-minimized` and a `window-hidden` message, in that
     /// order, and then its document turns `hidden`; on Windows its document
     /// turns `hidden` first and it gets `window-minimized` only (see
-    /// [`MINIMIZE_HIDES_FIRST`]). No `window-hidden` when the window was
-    /// already hidden. Nothing is sent on restore beyond the visibility
-    /// (D.5).
+    /// [`MINIMIZE_HIDES_FIRST`]) and its webview is hidden natively until
+    /// the restore ([`MINIMIZE_HIDES_NATIVELY`]). No `window-hidden` when
+    /// the window was already hidden. Nothing is sent on restore beyond the
+    /// visibility (D.5).
     pub(crate) fn ads_window_minimized(self: &Arc<Self>, id: u32, minimized: bool) {
         for l in self.guests_of_window(id) {
-            let (changed, already_hidden) = self.with_core(|c| {
-                c.ads.guests.get_mut(&l).map_or((false, false), |g| {
+            let (changed, already_hidden, visible) = self.with_core(|c| {
+                c.ads.guests.get_mut(&l).map_or((false, false, false), |g| {
                     let changed =
                         std::mem::replace(&mut g.embedder_minimized, minimized) != minimized;
-                    (changed, g.embedder_hidden)
+                    (changed, g.embedder_hidden, g.visible)
                 })
             });
+            if changed
+                && MINIMIZE_HIDES_NATIVELY
+                && let Some(show) = native_visibility_on_minimize(minimized, visible)
+            {
+                self.set_guest_native_visibility(&l, show);
+            }
             if changed && minimized && MINIMIZE_HIDES_FIRST {
                 self.sync_visibility(&l, false);
                 self.guest_deliver(&l, crate::ads::WINDOW_MINIMIZED, None);
@@ -1486,6 +1519,22 @@ impl<R: Runtime> Host<R> {
             }
             self.sync_visibility(&l, false);
         }
+    }
+
+    /// Shows or hides guest `label` natively, from a helper thread: this
+    /// runs inside window event callbacks, and the webview call is posted
+    /// to the main thread from there rather than made inside the callback.
+    fn set_guest_native_visibility(self: &Arc<Self>, label: &str, show: bool) {
+        let Some(webview) = self.app.get_webview(label) else {
+            return;
+        };
+        crate::lab::record(
+            "wc-events.jsonl",
+            || json!({ "kind": "native-visibility", "label": label, "type": "owadview", "visible": show }),
+        );
+        std::thread::spawn(move || {
+            let _ = if show { webview.show() } else { webview.hide() };
+        });
     }
 
     /// The embedder window `id` gained or lost focus (D.3 `hasWindowFocus`).
@@ -1531,6 +1580,16 @@ impl<R: Runtime> Host<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_minimize_hides_the_guest_webview_and_the_restore_shows_it_unless_the_app_hid_it() {
+        let on = native_visibility_on_minimize;
+        assert_eq!(on(true, true), Some(false));
+        assert_eq!(on(true, false), Some(false));
+        assert_eq!(on(false, true), Some(true));
+        assert_eq!(on(false, false), None);
+        assert_eq!(MINIMIZE_HIDES_NATIVELY, cfg!(windows));
+    }
 
     /// Regression (Windows lab): ow-electron listed both of the runner's
     /// DXGI adapters with their driver versions; ow-tauri listed one blank

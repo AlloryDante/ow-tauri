@@ -1385,7 +1385,11 @@ the window's position on the screen plays no part (an off-screen window
 still fills test ads) [OBS]. A minimize signals `hidden` plus the
 `window-minimized` and `window-hidden` messages (D.5) [OBS]; on Windows the
 guest turns `hidden` first and then gets only `window-minimized`, so a running
-performance ad stops without `performance_ad_dismiss` [OBS: Windows lab]. About 2 s after `hidden` the ad page stops and
+performance ad stops without `performance_ad_dismiss` [OBS: Windows lab].
+There a minimized window has an empty client area, so the guests stop
+rendering; ow-tauri hides each guest webview natively on a Windows minimize
+and shows it again on restore unless the app hid the element meanwhile
+[DEC]. About 2 s after `hidden` the ad page stops and
 calls `__overwolf__.reload()`; the host reloads the guest 3 to 5 s after
 `hidden`, and the reloaded page waits until it is `visible` again [OBS].
 ow-tauri passes its visibility result to the guest the same way (D.5) and
@@ -2226,8 +2230,14 @@ is on by default and exists only to switch shaping off while debugging.
 
 Notes:
 
-- **Windows:** a lab check confirms that WebView2 sends the changed `Origin`
-  and `Referer` values on the wire [INF]. WebView2 takes `document.referrer`
+- **Windows:** WebView2 sends the changed `Referer` and `Origin` of the
+  document, the `Origin` of subresources and the ad library's `x-ow-*` headers
+  on the wire, with the same values as ow-electron [OBS: Windows lab, each
+  guest request recorded as sent through the DevTools protocol]. **Gap:**
+  WebView2 lets the host change a request once, not each redirect hop; after
+  a cross-origin redirect Chromium sends `Origin: null` on the following hops
+  (cookie-sync pixels, about 1 to 2 % of a guest's requests), where
+  ow-electron sets `https://www.overwolf.com` again [OBS: Windows lab]. WebView2 takes `document.referrer`
   from the navigation's initiator, not from the `Referer` header, so a host
   navigation leaves it empty even with the header set [OBS: Windows lab].
   The plugin passes the referrer to the guest shim (configuration key
