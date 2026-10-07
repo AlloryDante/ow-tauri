@@ -471,6 +471,15 @@ impl<R: Runtime> Overwolf<R> {
         }
     }
 
+    /// What a guest's mount does once its webview exists: the visibility
+    /// poll, then the guest's `400025` (E.2 #5, #6). Lets a test attach
+    /// guests from several threads at once; the mock runtime cannot create
+    /// webviews from several threads at once.
+    pub fn test_ads_guest_attached(&self) {
+        self.0.poll_visibility();
+        self.0.analytics_guest_attached();
+    }
+
     /// As if the window `id` were about to be destroyed: its guests'
     /// documents become hidden first (D.5).
     pub fn test_ads_window_closing(&self, id: u32) {

@@ -1590,6 +1590,23 @@ fn the_consent_request_leaves_with_the_startup_analytics() {
     );
 }
 
+/// Sends `main_ready` and waits for the startup consent window it starts
+/// (D.6.1). Tauri's mock runtime keeps its windows in a `RefCell`, so a
+/// test that then creates webviews from several threads must not race the
+/// consent window's creation.
+fn main_ready_and_consent(app: &App<MockRuntime>) {
+    invoke(app, "ow-main", "main_ready", json!({})).unwrap();
+    let ow = app.overwolf();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !ow
+        .test_hidden_consent_windows()
+        .contains(&"ow-cmp-startup".to_owned())
+    {
+        assert!(Instant::now() < deadline, "no startup window");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// Regression (lab diff, `sizes` with seven slots): guests attaching at
 /// once on several threads. One poll started the window's visible period;
 /// the others saw it visible and sent their 400025 before the first had
@@ -1618,26 +1635,22 @@ fn guests_attaching_at_once_all_count_after_the_shown_window() {
         .unwrap();
     main_and_window(&app);
     subscribe_all(&app, &["bw-1"]);
-    invoke(&app, "ow-main", "main_ready", json!({})).unwrap();
+    main_ready_and_consent(&app);
+    // The attach step of eight mounts at once (the mock runtime cannot
+    // create their webviews from several threads at once).
     let start = Arc::new(std::sync::Barrier::new(8));
-    let mounts: Vec<_> = (0..8)
-        .map(|i| {
-            let webview = app.get_webview("bw-1").unwrap();
+    let attaches: Vec<_> = (0..8)
+        .map(|_| {
+            let handle = app.handle().clone();
             let start = Arc::clone(&start);
             std::thread::spawn(move || {
                 start.wait();
-                invoke_webview(
-                    webview,
-                    origin(),
-                    "adview_mount",
-                    mount_body(&format!("e{i}")),
-                )
-                .unwrap();
+                handle.overwolf().test_ads_guest_attached();
             })
         })
         .collect();
-    for m in mounts {
-        m.join().unwrap();
+    for a in attaches {
+        a.join().unwrap();
     }
     let deadline = Instant::now() + Duration::from_secs(5);
     let names = loop {
@@ -1679,7 +1692,7 @@ fn a_shown_window_counts_before_a_guest_that_attaches_after_it() {
         .unwrap();
     main_and_window(&app);
     subscribe_all(&app, &["bw-1"]);
-    invoke(&app, "ow-main", "main_ready", json!({})).unwrap();
+    main_ready_and_consent(&app);
     // The window is shown (the mock reports every window visible) and a
     // guest attaches before any visibility poll ran.
     invoke(&app, "bw-1", "adview_mount", mount_body("e1")).unwrap();
