@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // Parity harness CLI: runs a hidden ow-electron app that shows <owadview> ads
-// and records what ow-electron does. See README.md.
+// and records what ow-electron does. See README.md. With --host tauri it runs
+// the same scenario on ow-tauri (tauri-app/, plugin lab mode) instead.
 //
 //   node run.mjs --mode test --layout 400x600,728x90 --duration 90
 //   node run.mjs --mode live --live-ok --duration 90 --max-live-loads 10
+//   node run.mjs --host tauri --scenario messages
 //
 // Output: captures/<run-id>/ (git-ignored).
 
@@ -21,6 +23,8 @@ import { waitForQuietMachine } from './lib/load-guard.mjs';
 import { parseNetlog, summarize } from './lib/netlog-parse.mjs';
 import { appDataDir, isolationEnv } from './lib/paths.mjs';
 import { FEATURE_PRESETS, SCENARIOS } from './lib/scenarios.mjs';
+import { launchTauri, owTauriVersion, tauriEnv, writeLabRequests } from './lib/tauri-host.mjs';
+import { buildTauriApp } from './tauri-app/build.mjs';
 import { electronUid } from './lib/uid.mjs';
 
 const harnessDir = dirname(fileURLToPath(import.meta.url));
@@ -43,6 +47,10 @@ const DEFAULTS = {
 
 const USAGE = `Usage: node run.mjs [options]
 
+  --host electron|tauri   the host under test (default: electron). tauri builds
+                          tauri-app/ once in debug and runs it in lab mode: every
+                          window invisible, the window monitor always on
+  --no-build              --host tauri: run the binary built last time
   --mode test|live        test ads (--test-ad) or live ads (default: test)
   --live-ok               required with --mode live: confirms live ads may load
   --layout WxH[,WxH...]   owadview slot sizes (default: ${DEFAULT_LAYOUTS.join(',')})
@@ -115,6 +123,8 @@ function parseCli() {
       identity: { type: 'string' },
       'run-id': { type: 'string' },
       'no-wait': { type: 'boolean', default: false },
+      host: { type: 'string', default: 'electron' },
+      'no-build': { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
     },
   });
@@ -142,6 +152,14 @@ function parseCli() {
     if (values[key] === undefined) values[key] = value;
   }
   if (!['test', 'live'].includes(values.mode)) fail(`--mode must be test or live`);
+  if (!['electron', 'tauri'].includes(values.host)) fail('--host must be electron or tauri');
+  if (values.host === 'tauri') {
+    // Electron switches and hooks with no Tauri counterpart.
+    for (const option of ['offline', 'features', 'webrequest', 'screencapture']) {
+      if (values[option]) fail(`--${option} is not available with --host tauri`);
+    }
+    if (process.platform !== 'darwin') fail('--host tauri runs on macOS only (window monitor)');
+  }
   if (values.mode === 'live' && !values['live-ok']) fail('--mode live needs --live-ok');
   if (!['hidden', 'transparent'].includes(values.present))
     fail('--present must be hidden or transparent');
@@ -192,7 +210,7 @@ function windowSize(layouts) {
   return { width, height: height + rowHeight + 16 };
 }
 
-function resolveHome(option, runDir) {
+function resolveHome(option, runDir, host) {
   if (option === 'real') return { home: homedir(), env: {} };
   const home =
     option === 'isolated'
@@ -201,7 +219,8 @@ function resolveHome(option, runDir) {
         ? join(harnessDir, 'captures', 'profiles', option.slice('profile:'.length))
         : null;
   if (!home) throw new Error(`bad --home ${option}`);
-  const env = isolationEnv(home);
+  // The plugin resolves appData from $HOME (dirs); Cocoa reads CFFIXED_USER_HOME.
+  const env = host === 'tauri' ? { HOME: home, CFFIXED_USER_HOME: home } : isolationEnv(home);
   if (!env)
     throw new Error(`home isolation is not available on ${process.platform}; use --home real`);
   mkdirSync(home, { recursive: true });
@@ -215,7 +234,14 @@ async function main() {
   const runId = opts['run-id'] ?? `${stamp}-${opts.mode}`;
   const runDir = resolve(harnessDir, 'captures', runId);
   mkdirSync(runDir, { recursive: true });
-  const { home, env: homeEnv } = resolveHome(opts.home, runDir);
+  const tauri = opts.host === 'tauri';
+  const { home, env: homeEnv } = resolveHome(opts.home, runDir, opts.host);
+  // Build before anything is recorded, so a failed build leaves no run.
+  const tauriExe = tauri
+    ? opts['no-build']
+      ? join(harnessDir, 'tauri-app', 'src-tauri', 'target', 'debug', 'ow-tauri-parity-harness')
+      : await buildTauriApp()
+    : null;
 
   const pkg = {
     name: identity.name,
@@ -233,7 +259,12 @@ async function main() {
       : {}),
   };
   const appDir = join(runDir, 'app');
-  makeAppDir(appDir, pkg);
+  if (tauri) {
+    mkdirSync(appDir, { recursive: true });
+    writeJson(join(appDir, 'package.json'), pkg);
+  } else {
+    makeAppDir(appDir, pkg);
+  }
 
   const authorName = typeof pkg.author === 'object' ? pkg.author.name : pkg.author;
   const expectedUid =
@@ -252,9 +283,9 @@ async function main() {
 
   const netlog = join(runDir, 'netlog.json');
   const scenarioConfig = opts.scenarioDef?.config ?? {};
-  const wantMonitor = opts['window-monitor'] || scenarioConfig.windowMonitorRequired;
+  const wantMonitor = opts['window-monitor'] || scenarioConfig.windowMonitorRequired || tauri;
   const windowMonitor = wantMonitor ? buildWindowMonitor() : null;
-  if (scenarioConfig.windowMonitorRequired && !windowMonitor) {
+  if ((scenarioConfig.windowMonitorRequired || tauri) && !windowMonitor) {
     console.error('this scenario needs the window monitor (macOS + swiftc); not running it');
     process.exit(3);
   }
@@ -279,23 +310,27 @@ async function main() {
     window: windowSize(opts.layouts),
     windowTitle: displayName(pkg),
     windowName: opts['window-name'],
+    host: opts.host,
   };
   const configPath = join(runDir, 'config.json');
   writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
-  const switches = [
-    `--log-net-log=${netlog}`,
-    '--net-log-capture-mode=Everything',
-    '--use-mock-keychain',
-    ...(opts.mode === 'test' ? ['--test-ad'] : []),
-    ...(opts.offline ? ['--proxy-server=127.0.0.1:9'] : []),
-    ...(opts.offline && opts['offline-allow']
-      ? [`--proxy-bypass-list=${opts['offline-allow'].split(',').join(';')}`]
-      : []),
-  ];
+  const switches = tauri
+    ? []
+    : [
+        `--log-net-log=${netlog}`,
+        '--net-log-capture-mode=Everything',
+        '--use-mock-keychain',
+        ...(opts.mode === 'test' ? ['--test-ad'] : []),
+        ...(opts.offline ? ['--proxy-server=127.0.0.1:9'] : []),
+        ...(opts.offline && opts['offline-allow']
+          ? [`--proxy-bypass-list=${opts['offline-allow'].split(',').join(';')}`]
+          : []),
+      ];
   const meta = {
     runId,
     startedAt: new Date().toISOString(),
-    owElectron: owElectronVersion(),
+    host: opts.host,
+    ...(tauri ? { owTauri: owTauriVersion(), exe: tauriExe } : { owElectron: owElectronVersion() }),
     platform: process.platform,
     arch: process.arch,
     identitySource: identity.source,
@@ -308,30 +343,48 @@ async function main() {
   writeJson(join(runDir, 'meta.json'), meta);
 
   if (!opts['no-wait']) await waitForQuietMachine();
-  console.error(`run ${runId}: ${opts.mode} ads, ${opts.layouts.join(' ')}, ${opts.duration}s`);
-  const exit = await launch({
-    appDir,
-    switches,
-    env: { ...homeEnv, PARITY_HARNESS_CONFIG: configPath },
-    logDir: runDir,
-    timeoutMs: opts.duration * 1000 + 60_000,
-    onSpawn: (child) => {
-      writeFileSync(join(runDir, 'app.pid'), `${child.pid}\n`);
-      if (windowMonitor) {
-        // Started with the app so the very first window is covered.
-        spawn(windowMonitor, [String(child.pid), join(runDir, 'window-monitor.jsonl'), '25'], {
-          stdio: 'ignore',
-        }).unref();
-      }
-      if (opts.caffeinate && process.platform === 'darwin') {
-        // Idle-sleep assertion that ends with the app (-w).
-        spawn('/usr/bin/caffeinate', ['-i', '-w', String(child.pid)], {
-          stdio: 'ignore',
-          detached: true,
-        }).unref();
-      }
-    },
-  });
+  console.error(
+    `run ${runId} (${opts.host}): ${opts.mode} ads, ${opts.layouts.join(' ')}, ${opts.duration}s`,
+  );
+  const onSpawn = (child) => {
+    writeFileSync(join(runDir, 'app.pid'), `${child.pid}\n`);
+    if (windowMonitor) {
+      // Started with the app so the very first window is covered.
+      spawn(windowMonitor, [String(child.pid), join(runDir, 'window-monitor.jsonl'), '25'], {
+        stdio: 'ignore',
+      }).unref();
+    }
+    if (opts.caffeinate && process.platform === 'darwin') {
+      // Idle-sleep assertion that ends with the app (-w).
+      spawn('/usr/bin/caffeinate', ['-i', '-w', String(child.pid)], {
+        stdio: 'ignore',
+        detached: true,
+      }).unref();
+    }
+  };
+  const exit = tauri
+    ? await launchTauri({
+        exe: tauriExe,
+        env: tauriEnv({
+          home: opts.home === 'real' ? null : home,
+          runDir,
+          configPath,
+          packageJsonPath: join(appDir, 'package.json'),
+          mode: opts.mode,
+        }),
+        logDir: runDir,
+        timeoutMs: opts.duration * 1000 + 60_000,
+        monitorFile: join(runDir, 'window-monitor.jsonl'),
+        onSpawn,
+      })
+    : await launch({
+        appDir,
+        switches,
+        env: { ...homeEnv, PARITY_HARNESS_CONFIG: configPath },
+        logDir: runDir,
+        timeoutMs: opts.duration * 1000 + 60_000,
+        onSpawn,
+      });
 
   const after = Object.fromEntries(
     Object.entries(watched).map(([k, dir]) => [
@@ -345,7 +398,10 @@ async function main() {
   if (opts.home !== 'real') snapshotDir(home, join(runDir, 'files', 'home-listing'));
 
   let netlogSummary = null;
-  if (existsSync(netlog)) {
+  if (tauri) {
+    // The plugin's lab trace stands in for the net log.
+    netlogSummary = summarize(writeLabRequests(runDir));
+  } else if (existsSync(netlog)) {
     const requests = parseNetlog(readFileSync(netlog, 'utf8'));
     writeJson(join(runDir, 'netlog-requests.json'), requests);
     netlogSummary = summarize(requests);

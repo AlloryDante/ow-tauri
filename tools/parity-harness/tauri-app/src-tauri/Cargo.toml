@@ -1,0 +1,46 @@
+# The Tauri edition of the parity harness app: a thin shell around
+# tauri-plugin-overwolf built with the `lab` feature. The harness logic runs
+# in the plugin's hidden main webview (`web/main.js`), as ow-electron runs
+# `app/main.cjs`. Built and launched by `node run.mjs --host tauri`.
+#
+# A standalone Cargo workspace with its own Cargo.lock; versions match the
+# root `[workspace.dependencies]`. Never published, never bundled.
+[workspace]
+
+[package]
+name = "ow-tauri-parity-harness"
+description = "Tauri edition of the ow-tauri parity harness app (lab mode)."
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+authors = ["ow-tauri contributors"]
+publish = false
+
+[[bin]]
+name = "ow-tauri-parity-harness"
+path = "src/main.rs"
+test = false
+doctest = false
+
+[dependencies]
+tauri = { version = "2.12.1", features = ["unstable"] }
+serde_json = "1"
+tauri-plugin-overwolf = { path = "../../../../crates/tauri-plugin-overwolf", features = ["lab"] }
+
+[build-dependencies]
+tauri-build = { version = "2.7.1", features = [] }
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Tauri commands take their arguments (and the app handle) by value.
+needless_pass_by_value = "allow"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+print_stdout = "warn"

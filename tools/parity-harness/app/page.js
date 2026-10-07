@@ -35,6 +35,11 @@
   ];
 
   const report = (payload) => console.log('__PARITY__' + JSON.stringify(payload));
+  // The OS hides the document of an occluded window (both engines); ad
+  // pages then reload themselves, so record every change.
+  document.addEventListener('visibilitychange', () =>
+    report({ kind: 'page-visibility', visibilityState: document.visibilityState }),
+  );
 
   const describeEvent = (event) => {
     const own = {};

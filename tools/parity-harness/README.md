@@ -114,6 +114,42 @@ node muid-probe.mjs --experiment          # macOS: stand-in ioreg on PATH, check
 
 Run `node run.mjs --help` for every option. Prefix long runs with `taskpolicy -b` on macOS, or `nice` on Linux, to keep the machine responsive.
 
+## Tauri edition (`--host tauri`)
+
+`tauri-app/` is the same harness app on ow-tauri: a minimal Tauri 2 app with `tauri-plugin-overwolf` (Cargo feature `lab`) whose main webview runs the scenario through the `ow-tauri/electron` facade, mirroring `app/` step by step. `run.mjs --host tauri` builds it once in debug (`tauri-app/build.mjs`: the web assets with rolldown, then `cargo build -j 4` at background priority) and runs one scenario. `--no-build` reuses the last binary. macOS only for now, because the window monitor is.
+
+```sh
+taskpolicy -b node run.mjs --host tauri --mode test --present transparent --layout 400x600 --duration 90 --run-id T-A
+taskpolicy -b node run.mjs --host tauri --no-build --scenario messages --run-id T-messages
+```
+
+- **Lab mode.** The plugin's `lab` feature is off by default and must never ship. With it, `OW_TAURI_LAB_DIR=<run dir>` turns on the trace, and `OW_TAURI_LAB_INVISIBLE=1` makes every window invisible before it can appear: the app runs as an accessory app (no Dock icon, no Cmd-Tab), windows are built hidden and not focusable, then get alpha 0 and click-through at an on-screen position (an ad slot must be on screen to fill), and only then are shown. `ow-main` is never shown. `run.mjs` always sets both. The trace files (see `crates/tauri-plugin-overwolf/src/lab.rs`) use the ow-electron capture shapes, and `lib/tauri-host.mjs` turns the host requests into `netlog-requests.json`, so `analyze.mjs` and `parity-diff.mjs` read both hosts.
+- **Proof of invisibility.** The window monitor runs on every Tauri run and the app is killed the moment it reports a visible window. A run with `everVisible: true` is a failure.
+- **What the lab cannot see.** Headers WebKit adds to ad pages (only the fields the host sets are recorded), HTTP/2 pseudo-header order (reconstructed in the `h2` crate's order), the protocol of a request that never completed, and requests of cross-origin frames. The guest probe's `labResources` lists the requests of the ad page and its same-origin frames (where the fill impression is sent), repeats included, so the live fill count (lab check 6) matches the net log's.
+- **Steps not mirrored.** `crash-guests`, `cookie-set`, `introspect`, `open-window`, `extra-window` and `screencapture` are recorded as `action-unsupported` and reported as `not-mirrored`.
+- The app identity comes from `local.identity.json` at run time (`PARITY_HARNESS_PACKAGE_JSON`), never from a tracked file.
+
+## Comparing the hosts (`parity-diff.mjs`)
+
+```sh
+node parity-diff.mjs captures/<ow-electron run> captures/<ow-tauri run> [--tolerance-ms 1500] [--burst-ms 250]
+node --test parity-diff.test.mjs
+```
+
+It compares two captures of the same scenario after normalising volatile values (timestamps, session ids, consent strings, cache-busters, the host label) and lists every observable difference: host requests (set, order, query and `Extra` fields, body, header order and values, cookies, status, protocol), requests sent together, ad document headers, consent pages and cookies, the state file, each guest's `__overwolf__` and page state, element events and API, host-to-guest messages and the visibility sequence. Each difference is classified:
+
+| Class | Meaning |
+| --- | --- |
+| `intended:host-label` | the labelling rule (`tauri_*`, `tauri-<tv>`, `Tauri/<tv>`) |
+| `intended:os-gap` | a documented platform gap (WebKit, macOS) |
+| `intended:optimised` | documented "optimised, same outcome" |
+| `intended:deviation` | a documented ow-tauri decision (PARITY deviations) |
+| `variance` | differs between two ow-electron runs too (ad content, HTTP cache) |
+| `not-mirrored` | a harness step the Tauri edition cannot run |
+| `BUG` | anything else |
+
+The results go to `parity-diff.json` and `parity-diff.md` in the Tauri run. The exit status is 1 while a `BUG` remains.
+
 ## Notes and pitfalls
 
 - `<owadview>` guests are webContents of type `owadview`, and `app.on('web-contents-created')` does not report them. The harness finds them by polling `webContents.getAllWebContents()`.

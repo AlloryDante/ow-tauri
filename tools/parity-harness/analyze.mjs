@@ -102,6 +102,28 @@ function ipcSummary(entries) {
     groups.set(key, g);
   };
   for (const e of entries) {
+    // ow-tauri lab trace (plugin `lab` feature): the same messages, named
+    // like ow-electron's.
+    if (e.via === 'private-message') {
+      add(
+        `host->owadview private message ${e.message?.type ?? '?'}`,
+        e.t,
+        JSON.stringify(e.message?.data ?? null).slice(0, 160),
+      );
+      continue;
+    }
+    if (e.via === 'element-event') {
+      add(`host->embedder element event ${e.name}`, e.t, null);
+      continue;
+    }
+    if (e.via === 'guest-call') {
+      add(`host->owadview ${e.function} ${JSON.stringify(e.args).slice(0, 40)}`, e.t, null);
+      continue;
+    }
+    if (e.via === 'adview_event') {
+      add(`page->host owadview ${e.channel}`, e.t, JSON.stringify(e.data ?? null).slice(0, 160));
+      continue;
+    }
     if (e.dir === 'page->host' && e.channel) {
       add(`page->host ${e.type ?? '?'} ${e.channel}`, e.t, e.args?.slice(0, 160));
     } else if (e.dir === 'host->page' && e.via === 'webContents._sendInternal') {
@@ -117,7 +139,7 @@ function ipcSummary(entries) {
       } else {
         add(`host->${e.type} ${channel} ${rest.slice(0, 40)}`, e.t, null);
       }
-    } else if (e.dir === 'host->page' && e.via.startsWith('webContents.') && e.type !== 'window') {
+    } else if (e.dir === 'host->page' && e.via?.startsWith('webContents.') && e.type !== 'window') {
       add(`host->${e.type} ${e.via}`, e.t, e.args?.slice(0, 160));
     }
   }
@@ -161,7 +183,9 @@ function main() {
     }));
   const report = {
     runId: meta.runId,
+    host: meta.host ?? 'electron',
     owElectron: meta.owElectron,
+    owTauri: meta.owTauri,
     mode: meta.options?.mode,
     present: meta.options?.present,
     uid: overwolf?.snapshots?.[0]?.members?.uid?.value ?? null,
@@ -198,7 +222,7 @@ function main() {
   const lines = [
     `# Run ${report.runId}`,
     '',
-    `ow-electron ${report.owElectron}, ${report.mode} ads, ${report.present} window, uid \`${report.uid}\`, phase ${report.phasePercent}`,
+    `${report.host === 'tauri' ? `ow-tauri ${report.owTauri}` : `ow-electron ${report.owElectron}`}, ${report.mode} ads, ${report.present} window, uid \`${report.uid}\`, phase ${report.phasePercent}`,
     '',
     '## Host analytics (main process, in order)',
     '',

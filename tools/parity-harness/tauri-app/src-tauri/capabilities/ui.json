@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "ui",
+  "description": "The harness page's BrowserWindow webviews (bw-*): the renderer permission set, as an app grants it.",
+  "local": true,
+  "webviews": ["bw-*"],
+  "permissions": ["overwolf:renderer"]
+}

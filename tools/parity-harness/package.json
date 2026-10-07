@@ -13,7 +13,9 @@
     "run": "node run.mjs",
     "uid-matrix": "node uid-matrix.mjs",
     "muid-probe": "node muid-probe.mjs",
-    "parse-netlog": "node lib/netlog-parse.mjs"
+    "parse-netlog": "node lib/netlog-parse.mjs",
+    "test": "node --test parity-diff.test.mjs",
+    "parity-diff": "node parity-diff.mjs"
   },
   "dependencies": {
     "@overwolf/ow-cli": "0.1.10",
