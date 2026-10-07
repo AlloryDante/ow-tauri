@@ -30,8 +30,13 @@
 //! - `OW_TAURI_LAB_INVISIBLE=1` makes every window the plugin builds
 //!   invisible before it can appear: built hidden, not focusable and off the
 //!   taskbar; then, on macOS, alpha 0 and click-through; then shown when the
-//!   app asked for a visible window. The plugin never focuses a window in
-//!   this mode. On other platforms the windows stay hidden.
+//!   app asked for a visible window. The plugin never focuses a window and
+//!   never builds a full-screen one in this mode. On other platforms the
+//!   windows stay hidden. Native dialogs, the file manager
+//!   (`shell.openPath`, `showItemInFolder`) and the system browser do not
+//!   open either: the command answers as if the user dismissed the dialog at
+//!   once (or as if the OS opened the item) and records the request in
+//!   `blocked.jsonl`.
 //!
 //! Without the feature every function here is an empty inline function.
 
@@ -80,6 +85,29 @@ pub(crate) fn next_id() -> u64 {
 #[must_use]
 pub(crate) fn invisible() -> bool {
     imp::invisible()
+}
+
+/// Lab windows are invisible, so nothing else may appear either: returns
+/// `true` (and records `{ kind, detail }` in `blocked.jsonl`) when an OS
+/// surface the app asked for (a file or message dialog, the file manager,
+/// the system browser) must not open. The caller then answers as the OS
+/// would when the user dismisses it at once. Always `false` outside the lab.
+#[cfg_attr(
+    not(any(feature = "plugin", test)),
+    expect(dead_code, reason = "only plugin commands open OS surfaces")
+)]
+#[must_use]
+pub(crate) fn block_os_surface(kind: &str, detail: impl FnOnce() -> Value) -> bool {
+    if !invisible() {
+        return false;
+    }
+    record("blocked.jsonl", || {
+        let mut entry = serde_json::Map::new();
+        entry.insert("kind".into(), Value::from(kind));
+        entry.insert("detail".into(), detail());
+        Value::Object(entry)
+    });
+    true
 }
 
 /// Whether the plugin may focus a window (always, unless lab windows are
@@ -630,13 +658,20 @@ mod window_guard {
     use tauri::{Manager, Runtime, WebviewWindow, WebviewWindowBuilder};
 
     /// Sets the builder's visibility. Lab windows are always built hidden,
-    /// not focusable and off the taskbar; [`after_build`] shows them.
+    /// not focusable, off the taskbar and never full screen; [`after_build`]
+    /// shows them.
     pub(crate) fn window_builder<R: Runtime, M: Manager<R>>(
         builder: WebviewWindowBuilder<'_, R, M>,
         visible: bool,
     ) -> WebviewWindowBuilder<'_, R, M> {
         if super::invisible() {
-            builder.visible(false).focusable(false).skip_taskbar(true)
+            // A full-screen window gets its own Space on macOS, which the
+            // user would see even at alpha 0.
+            builder
+                .visible(false)
+                .focusable(false)
+                .skip_taskbar(true)
+                .fullscreen(false)
         } else {
             builder.visible(visible)
         }
@@ -724,5 +759,14 @@ mod tests {
     fn may_focus_outside_the_lab() {
         // The test process never sets OW_TAURI_LAB_INVISIBLE.
         assert!(may_focus());
+    }
+
+    #[test]
+    fn os_surfaces_open_outside_the_lab() {
+        // Dialogs, the file manager and the browser are blocked only in an
+        // invisible lab; the detail is not even computed otherwise.
+        assert!(!block_os_surface("dialog_message", || unreachable!(
+            "no detail outside the lab"
+        )));
     }
 }

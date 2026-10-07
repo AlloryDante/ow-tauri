@@ -71,6 +71,14 @@ pub(crate) async fn shell_open_path<R: Runtime>(
         &pathext,
     );
     Ok(match checked {
+        Ok(target)
+            if crate::lab::block_os_surface(
+                "shell_open_path",
+                || serde_json::json!({ "path": target.to_string_lossy() }),
+            ) =>
+        {
+            String::new()
+        }
         Ok(target) => match tauri_plugin_opener::open_path(&target, None::<&str>) {
             Ok(()) => String::new(),
             Err(_) => "Failed to open path".to_owned(),
@@ -88,6 +96,12 @@ pub(crate) async fn shell_show_item_in_folder<R: Runtime>(
     require_main(&webview)?;
     let canonical = std::fs::canonicalize(Path::new(&path))
         .map_err(|e| Error::from_io("Resolving the path", &e))?;
+    if crate::lab::block_os_surface(
+        "shell_show_item_in_folder",
+        || serde_json::json!({ "path": canonical.to_string_lossy() }),
+    ) {
+        return Ok(());
+    }
     tauri_plugin_opener::reveal_item_in_dir(canonical)
         .map_err(|_| Error::io("The system could not show the item in its folder."))
 }

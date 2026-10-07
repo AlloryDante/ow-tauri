@@ -332,6 +332,24 @@ impl<R: Runtime> Overwolf<R> {
         crate::lab::probe_guests(&self.0.app, phase);
     }
 
+    /// Lab mode (feature `lab`, `OW_TAURI_LAB_DIR` set): appends `entry`, with
+    /// the trace's `t` and `wall` fields, as one JSON line to `file` (a plain
+    /// file name) in the trace directory, next to the plugin's own trace.
+    /// Does nothing when the trace is off or the name is not a plain file
+    /// name. For lab drivers only (the example's end-to-end run).
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// app.overwolf()
+    ///     .lab_record("e2e.jsonl", serde_json::json!({ "step": "start" }));
+    /// # }
+    /// ```
+    #[cfg(feature = "lab")]
+    pub fn lab_record(&self, file: &str, entry: Value) {
+        crate::lab::record(file, || entry);
+    }
+
     /// Starts the graceful quit sequence (A.6), as `app.quit()` does.
     ///
     /// ```no_run

@@ -98,6 +98,23 @@ pub use ext::{Overwolf, OverwolfExt};
 #[cfg(feature = "plugin")]
 pub use plugin::{Builder, COMMANDS};
 
+/// Whether lab windows are invisible (feature `lab` and
+/// `OW_TAURI_LAB_INVISIBLE=1`): every window the plugin builds is built
+/// hidden and then shown at alpha 0, and dialogs, the file manager and the
+/// system browser do not open. An app shell built for the lab uses it to keep
+/// the app out of the Dock as well (`ActivationPolicy::Accessory`, set on the
+/// `App` before the event loop starts). Never enable `lab` in a shipped app.
+///
+/// ```
+/// // The doc test process never sets OW_TAURI_LAB_INVISIBLE.
+/// assert!(!tauri_plugin_overwolf::lab_invisible());
+/// ```
+#[cfg(feature = "lab")]
+#[must_use]
+pub fn lab_invisible() -> bool {
+    lab::invisible()
+}
+
 /// The plugin name registered with Tauri.
 ///
 /// Permissions are namespaced with it (`overwolf:default`,

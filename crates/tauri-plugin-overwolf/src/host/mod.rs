@@ -552,6 +552,12 @@ impl<R: Runtime> Host<R> {
             self.with_core(|c| c.browser_opens.push(url.to_string()));
             return Ok(());
         }
+        if crate::lab::block_os_surface(
+            "open_in_browser",
+            || serde_json::json!({ "url": url.as_str() }),
+        ) {
+            return Ok(());
+        }
         tauri_plugin_opener::open_url(url.as_str(), None::<&str>).map_err(|err| {
             self.log(
                 LogLevel::Warn,

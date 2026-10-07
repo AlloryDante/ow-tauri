@@ -194,6 +194,15 @@ pub(crate) async fn dialog_open<R: Runtime>(
 ) -> Result<OpenResult> {
     require_main(&webview)?;
     let o: OpenDialogOptions = body(&request, "dialog_open")?;
+    if crate::lab::block_os_surface(
+        "dialog_open",
+        || serde_json::json!({ "title": o.title, "properties": o.properties }),
+    ) {
+        return Ok(OpenResult {
+            canceled: true,
+            file_paths: Vec::new(),
+        });
+    }
     let d = dialog(&webview)?;
     let parent = parent(&webview, o.window_id);
     let b = file_builder(
@@ -241,6 +250,15 @@ pub(crate) async fn dialog_save<R: Runtime>(
 ) -> Result<SaveResult> {
     require_main(&webview)?;
     let o: SaveDialogOptions = body(&request, "dialog_save")?;
+    if crate::lab::block_os_surface(
+        "dialog_save",
+        || serde_json::json!({ "title": o.title, "properties": o.properties }),
+    ) {
+        return Ok(SaveResult {
+            canceled: true,
+            file_path: String::new(),
+        });
+    }
     let d = dialog(&webview)?;
     let parent = parent(&webview, o.window_id);
     let b = file_builder(
@@ -270,6 +288,18 @@ pub(crate) async fn dialog_message<R: Runtime>(
 ) -> Result<MessageResult> {
     require_main(&webview)?;
     let options: MessageBoxOptions = body(&request, "dialog_message")?;
+    let cancel_id = options
+        .cancel_id
+        .unwrap_or_else(|| default_cancel_id(&options.buttons));
+    if crate::lab::block_os_surface(
+        "dialog_message",
+        || serde_json::json!({ "message": options.message, "buttons": options.buttons }),
+    ) {
+        return Ok(MessageResult {
+            response: cancel_id,
+            checkbox_checked: options.checkbox_checked,
+        });
+    }
     let d = dialog(&webview)?;
     if options.buttons.len() > MAX_BUTTONS {
         host(&state).log(
@@ -304,9 +334,6 @@ pub(crate) async fn dialog_message<R: Runtime>(
         let _ = tx.send(r);
     });
     let result = rx.await.unwrap_or(MessageDialogResult::Cancel);
-    let cancel_id = options
-        .cancel_id
-        .unwrap_or_else(|| default_cancel_id(&options.buttons));
     Ok(MessageResult {
         response: response_index(&result, &options.buttons, cancel_id),
         checkbox_checked: options.checkbox_checked,
