@@ -1013,6 +1013,61 @@ fn guests_are_transparent_unless_configured_off() {
     assert!(native_steps(&app, &guest).is_empty());
 }
 
+/// A `performance` element's mount: the whole viewport.
+fn performance_mount_body(element_id: &str) -> Value {
+    let mut body = mount_body(element_id);
+    body["attributes"]["performance"] = json!(true);
+    body["rect"] = json!({ "x": 0, "y": 0, "width": 400, "height": 300, "devicePixelRatio": 1 });
+    body
+}
+
+/// The guest label of a mount result.
+fn guest_of(mounted: &Value) -> String {
+    mounted["guestLabel"].as_str().unwrap().to_owned()
+}
+
+/// AF-11: the performance guest is raised to the top of its window when it
+/// mounts and whenever another guest of that window mounts after it.
+#[test]
+fn the_performance_guest_stays_on_top() {
+    let (app, _) = app("guest-zorder");
+    main_and_window(&app);
+    create_window(&app);
+    let zorders = || -> Vec<(String, String)> {
+        app.overwolf()
+            .test_guest_trace()
+            .into_iter()
+            .filter(|e| e["kind"] == "zorder")
+            .map(|e| {
+                (
+                    e["label"].as_str().unwrap().to_owned(),
+                    e["after"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    };
+    // Standard guests alone are never restacked.
+    let standard = guest_of(&invoke(&app, "bw-1", "adview_mount", mount_body("s1")).unwrap());
+    assert!(zorders().is_empty());
+    let perf =
+        guest_of(&invoke(&app, "bw-1", "adview_mount", performance_mount_body("p1")).unwrap());
+    assert_eq!(zorders(), [(perf.clone(), perf.clone())]);
+    // A guest mounted after it, or remounted, goes under it.
+    let later = guest_of(&invoke(&app, "bw-1", "adview_mount", mount_body("s2")).unwrap());
+    let again = guest_of(&invoke(&app, "bw-1", "adview_mount", mount_body("s1")).unwrap());
+    assert_ne!(again, standard);
+    // Another window's guests leave this window's stacking alone.
+    invoke(&app, "bw-2", "adview_mount", mount_body("s1")).unwrap();
+    assert_eq!(
+        zorders(),
+        [
+            (perf.clone(), perf.clone()),
+            (perf.clone(), later),
+            (perf.clone(), again),
+        ]
+    );
+}
+
 #[test]
 fn adview_update_command_and_window_close() {
     let (app, _) = app("guest-update");

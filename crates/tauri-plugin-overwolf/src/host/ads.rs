@@ -47,6 +47,10 @@ const FINISH_WAIT_MS: u64 = 1_000;
 #[expect(clippy::struct_excessive_bools, reason = "independent per-guest flags")]
 pub(crate) struct Guest {
     pub(crate) embedder: String,
+    /// The label of the native window the guest is a child of.
+    pub(crate) window: String,
+    /// Mount order (the guest label's number).
+    pub(crate) seq: u32,
     pub(crate) element_id: String,
     pub(crate) attributes: AdviewAttributes,
     pub(crate) rect: AdviewRect,
@@ -301,9 +305,9 @@ impl<R: Runtime> Host<R> {
         let scale = window.scale_factor().unwrap_or(1.0);
         let offset = page_offset(embedder, &window, scale, self.options.os_queries);
         let (x, y, w, h) = logical_rect(&mount.rect, scale, offset);
-        let label = self.with_core(|c| {
+        let (seq, label) = self.with_core(|c| {
             c.ads.next += 1;
-            guest_label(&embedder_label, c.ads.next)
+            (c.ads.next, guest_label(&embedder_label, c.ads.next))
         });
         let window_name = self.embedder_window_name(&embedder_label);
         let window_title = document_title.unwrap_or_else(|| window.title().unwrap_or_default());
@@ -390,6 +394,8 @@ impl<R: Runtime> Host<R> {
         let limits = &self.info.config.ads.guest_limits;
         let guest = Guest {
             embedder: embedder_label.clone(),
+            window: window.label().to_owned(),
+            seq,
             element_id: mount.element_id.clone(),
             attributes: mount.attributes,
             rect: mount.rect,
@@ -432,6 +438,8 @@ impl<R: Runtime> Host<R> {
                 "bounds": [x, y, w, h],
             })
         });
+        // The performance guest stays the top child of its window (B.3.4).
+        self.raise_performance_guest(window.label(), &label);
         // A window shown since the last poll counts first: ow-electron sees
         // `show` at once, so its first-visible-window heartbeat precedes the
         // 400025 of a guest that attaches after (E.2 #5, #6; observed).
@@ -457,6 +465,37 @@ impl<R: Runtime> Host<R> {
             crate::lab::record(
                 "wc-events.jsonl",
                 || json!({ "kind": "transparent-native", "label": native, "type": "owadview", "applied": cleared }),
+            );
+        });
+    }
+
+    /// Raises the performance guest of the native window `window` (the
+    /// latest one mounted, if there are several) to the top of the window's
+    /// child webviews, after the guest `mounted` was created there: the
+    /// performance guest itself, or a guest that would otherwise cover it
+    /// (B.3.4). A reload keeps its view, so it needs no raise. Lab trace:
+    /// `zorder`, then `zorder-native` with whether the guest is now on top.
+    fn raise_performance_guest(self: &Arc<Self>, window: &str, mounted: &str) {
+        let top = self.with_core(|c| {
+            c.ads
+                .guests
+                .iter()
+                .filter(|(_, g)| g.window == window && g.attributes.performance)
+                .max_by_key(|(_, g)| g.seq)
+                .map(|(l, _)| l.clone())
+        });
+        let Some(top) = top else { return };
+        let Some(webview) = self.app.get_webview(&top) else {
+            return;
+        };
+        self.guest_record("wc-events.jsonl", || {
+            json!({ "kind": "zorder", "label": top, "type": "owadview", "window": window, "after": mounted })
+        });
+        let native = top.clone();
+        let _ = crate::platform::webview::raise_to_top(&webview, move |is_top| {
+            crate::lab::record(
+                "wc-events.jsonl",
+                || json!({ "kind": "zorder-native", "label": native, "type": "owadview", "top": is_top }),
             );
         });
     }

@@ -1,6 +1,6 @@
 //! Platform webview operations the ads and consent services need and Tauri
 //! does not offer: muting a guest, a transparent guest background on macOS,
-//! the guest's first navigation with `Referer` and `Origin` (D.8.3), and on
+//! raising a guest above its sibling webviews, the guest's first navigation with `Referer` and `Origin` (D.8.3), and on
 //! Windows the request shaping handler, guest crash and load-failure reports
 //! (D.7, D.8).
 //!
@@ -144,6 +144,42 @@ pub(crate) fn clear_background<R: Runtime>(
             true
         };
         done(cleared);
+    })
+}
+
+/// Raises the guest to the top of its window's child webviews (B.3.4: the
+/// performance guest stays above every other guest). Nothing is detached
+/// or re-created, so the page keeps running undisturbed:
+///
+/// - Windows: `SetWindowPos(HWND_TOP)` of the guest's container window
+///   (the controller's `ParentWindow`), without moving, sizing or
+///   activating it.
+/// - macOS: `-[NSView addSubview:positioned:NSWindowAbove relativeTo:nil]`
+///   on the view's superview, which reorders an existing subview (and its
+///   layer) without removing it from the window.
+/// - Linux: `gdk_window_raise` of the guest widget's own `GdkWindow`, when
+///   it has one.
+///
+/// `done` runs on the webview's thread with whether the guest is now the
+/// top child (`None` when the platform cannot tell). Errors only when the
+/// webview is gone.
+pub(crate) fn raise_to_top<R: Runtime>(
+    webview: &Webview<R>,
+    done: impl FnOnce(Option<bool>) + Send + 'static,
+) -> tauri::Result<()> {
+    webview.with_webview(move |pw| {
+        #[cfg(target_os = "macos")]
+        let top = macos::raise_to_top(pw.inner());
+        #[cfg(windows)]
+        let top = windows_impl::raise_to_top(&pw.controller());
+        #[cfg(target_os = "linux")]
+        let top = linux::raise_to_top(&pw.inner());
+        #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+        let top = {
+            let _ = pw;
+            None
+        };
+        done(top);
     })
 }
 
@@ -595,6 +631,39 @@ mod macos {
         has_setter
     }
 
+    /// `NSWindowAbove` (`NSWindowOrderingMode`).
+    const NS_WINDOW_ABOVE: isize = 1;
+
+    /// Moves the view to the end of its superview's subviews (the top),
+    /// unless it is there already. Returns whether it is the top subview.
+    pub(super) fn raise_to_top(view: *mut c_void) -> Option<bool> {
+        if view.is_null() {
+            return None;
+        }
+        // SAFETY: Tauri hands a live `WKWebView*` on the main thread.
+        let obj: &AnyObject = unsafe { &*view.cast::<AnyObject>() };
+        // SAFETY: public NSView property.
+        let superview: Option<Retained<AnyObject>> = unsafe { msg_send![obj, superview] };
+        let superview = superview?;
+        let is_top = || {
+            // SAFETY: public NSView property; `lastObject` of an NSArray.
+            let subviews: Option<Retained<NSArray<AnyObject>>> =
+                unsafe { msg_send![&*superview, subviews] };
+            subviews
+                .and_then(|s| s.lastObject())
+                .is_some_and(|last| std::ptr::eq(Retained::as_ptr(&last), obj))
+        };
+        if !is_top() {
+            let nil: *const AnyObject = std::ptr::null();
+            // SAFETY: public NSView method; `obj` is already a subview, so
+            // AppKit only reorders it (no `viewWillMoveToWindow:`).
+            unsafe {
+                let () = msg_send![&*superview, addSubview: obj, positioned: NS_WINDOW_ABOVE, relativeTo: nil];
+            }
+        }
+        Some(is_top())
+    }
+
     /// `-[WKWebView loadRequest:]` with extra header fields.
     pub(super) fn load_request(wk_webview: *mut c_void, url: &str, headers: &[(&str, &str)]) {
         if wk_webview.is_null() {
@@ -650,6 +719,20 @@ mod linux {
             }
             false
         });
+    }
+
+    /// `gdk_window_raise` of the widget's own `GdkWindow`. A widget that
+    /// draws into its parent's window has no stacking of its own; it is
+    /// left alone (re-adding it to its container would move it in the
+    /// container's layout). Returns `Some(true)` when raised.
+    pub(super) fn raise_to_top(webview: &webkit2gtk::WebView) -> Option<bool> {
+        use gtk::prelude::WidgetExt as _;
+        if !webview.has_window() {
+            return None;
+        }
+        let window = webview.window()?;
+        window.raise();
+        Some(true)
     }
 
     /// Chromium's `net::Error` code and name closest to a `WebKitGTK` load
@@ -708,6 +791,10 @@ mod windows_impl {
         NavigationCompletedEventHandler, ProcessFailedEventHandler,
         WebResourceRequestedEventHandler, take_pwstr,
     };
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GW_HWNDPREV, GetWindow, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
+    };
     use windows::core::{BOOL, HSTRING, Interface, PWSTR};
 
     use super::{
@@ -723,6 +810,36 @@ mod windows_impl {
             {
                 let _ = w8.SetIsMuted(muted);
             }
+        }
+    }
+
+    /// The guest's container window (the controller's parent window, one
+    /// per webview).
+    fn container(controller: &ICoreWebView2Controller) -> Option<HWND> {
+        let mut hwnd = HWND::default();
+        // SAFETY: a COM call on the webview's own thread with a valid out
+        // pointer.
+        unsafe { controller.ParentWindow(&raw mut hwnd) }.ok()?;
+        (!hwnd.is_invalid()).then_some(hwnd)
+    }
+
+    /// `SetWindowPos(HWND_TOP)` of the container; whether it is now the
+    /// top sibling (no previous window in z-order).
+    pub(super) fn raise_to_top(controller: &ICoreWebView2Controller) -> Option<bool> {
+        let hwnd = container(controller)?;
+        // SAFETY: Win32 calls on a live window of this thread.
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                Some(HWND_TOP),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+            .ok()?;
+            Some(GetWindow(hwnd, GW_HWNDPREV).map_or(true, |prev| prev.is_invalid()))
         }
     }
 

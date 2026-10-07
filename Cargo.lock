@@ -4140,6 +4140,7 @@ dependencies = [
  "block2",
  "bytes",
  "embed-resource",
+ "gtk",
  "http",
  "http-body-util",
  "hyper",
