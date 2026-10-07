@@ -19,6 +19,26 @@ pub const ADVIEW_SCOPE: &str = "https://www.overwolf.com/monsdk/electron/";
 /// The token `adview-host.js` carries in place of its configuration (D.1).
 pub const ADVIEW_CONFIG_TOKEN: &str = "/*__OW_TAURI_ADVIEW_CONFIG__*/null";
 
+/// The ad event at which a performance guest stops passing input through
+/// and its element turns `pointer-events: auto` (B.3.4). ow-electron's
+/// element is still `pointer-events: none` after `display_ad_loaded` and
+/// `auto` after `performance_ad_loaded` (observed).
+///
+/// ```
+/// assert_eq!(tauri_plugin_overwolf::ads::MODAL_EVENT, "performance_ad_loaded");
+/// ```
+pub const MODAL_EVENT: &str = "performance_ad_loaded";
+
+/// The host message a guest gets when its embedder window is minimized,
+/// just before `window-hidden` (D.5). ow-electron sends both on minimize, and
+/// a running performance ad then dismisses itself (`performance_ad_dismiss`)
+/// (observed).
+///
+/// ```
+/// assert_eq!(tauri_plugin_overwolf::ads::WINDOW_MINIMIZED, "window-minimized");
+/// ```
+pub const WINDOW_MINIMIZED: &str = "window-minimized";
+
 /// Largest encoded `data` of one guest message (D.4, A.2.6).
 pub const MAX_EVENT_DATA_BYTES: usize = 16 * 1024;
 
@@ -45,7 +65,16 @@ pub struct AdviewMount {
     pub rect: AdviewRect,
     /// Whether the element is visible.
     pub visible: bool,
+    /// The embedder's `document.title` when the element mounted
+    /// (`windowTitle`, D.2), at most [`MAX_DOCUMENT_TITLE`] characters;
+    /// absent from older runtimes.
+    #[serde(default)]
+    pub document_title: Option<String>,
 }
+
+/// The longest `documentTitle` an `adview_mount` carries; a longer one is
+/// cut.
+pub const MAX_DOCUMENT_TITLE: usize = 1024;
 
 /// `AdviewAttributes` (A.2.5, B.3.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -717,14 +746,12 @@ pub fn guest_config(facts: &GuestFacts<'_>, visible: bool) -> Value {
     put("performanceAd", a.performance.into());
     put("adStyle", a.adstyle.clone().into());
     put("unit", unit.into());
-    put(
-        "customTracking",
-        if a.custom_tracking.is_object() {
-            a.custom_tracking.clone()
-        } else {
-            Value::Null
-        },
-    );
+    // Absent unless the attribute holds a JSON object: ow-electron's guest
+    // has no `customTracking` key without the attribute, so the ad library
+    // options have none either (observed).
+    if a.custom_tracking.is_object() {
+        put("customTracking", a.custom_tracking.clone());
+    }
     put("slotId", facts.slot_id.into());
     put(
         "visibilityState",
@@ -1106,7 +1133,7 @@ mod tests {
             true,
         );
         assert_eq!(c["unit"], "");
-        assert_eq!(c["customTracking"], Value::Null);
+        assert!(c.get("customTracking").is_none());
     }
 
     #[test]

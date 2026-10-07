@@ -186,7 +186,7 @@ pub(crate) fn raise_to_top<R: Runtime>(
 
 /// Lets mouse input pass through the guest to the webviews under it (`on`),
 /// or makes the guest take its input again (B.3.4: a performance guest
-/// until its first `display_ad_loaded`). The page keeps rendering and
+/// until its first `performance_ad_loaded`). The page keeps rendering and
 /// running either way:
 ///
 /// - Windows: an empty window region on the guest's container window
@@ -403,6 +403,95 @@ pub(crate) fn content_inset_top<R: Runtime>(window: &tauri::Window<R>) -> f64 {
     }
 }
 
+/// Shows `window` without making it key and without activating the app
+/// (`BrowserWindow.showInactive()`, and every lab window): on macOS
+/// `-[NSWindow orderFrontRegardless]` on the main thread, as ow-electron
+/// shows an inactive window. `Window::show` would call
+/// `makeKeyAndOrderFront:`, which activates the app and takes the keyboard
+/// from the app the user is in. Elsewhere `Window::show`.
+///
+/// On the main thread the window is ordered front before this returns, so a
+/// visibility read right after sees it shown; elsewhere the show is queued
+/// to the main thread.
+pub(crate) fn show_inactive<R: Runtime>(window: &tauri::Window<R>) -> tauri::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let address = window.ns_window()? as usize;
+        now_or_on_main(
+            objc2::MainThreadMarker::new().is_some(),
+            move || macos::order_front_regardless(address),
+            |show| window.run_on_main_thread(show),
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        window.show()
+    }
+}
+
+/// Runs `run` at once when on the main thread (`on_main`), else hands it to
+/// `queue` (which runs it on the main thread later).
+#[cfg_attr(
+    not(any(target_os = "macos", test)),
+    expect(dead_code, reason = "macOS only")
+)]
+fn now_or_on_main<F: FnOnce() + Send + 'static>(
+    on_main: bool,
+    run: F,
+    queue: impl FnOnce(F) -> tauri::Result<()>,
+) -> tauri::Result<()> {
+    if on_main {
+        run();
+        Ok(())
+    } else {
+        queue(run)
+    }
+}
+
+/// Runs `create` (which builds a webview) without letting the webview
+/// library activate the app. On macOS, wry calls `-[NSApplication activate]`
+/// for every webview it creates ("make sure the window is always on top"),
+/// which takes the keyboard from the app the user is in (a game) each time
+/// an ad guest, a hidden window or a consent page is created. ow-electron
+/// creates `<webview>` guests and hidden windows without activating the app.
+/// While `create` runs, `activate` and `activateIgnoringOtherApps:` of
+/// `NSApplication` do nothing (lab trace: `activation-suppressed` in
+/// `wc-events.jsonl`); other platforms run `create` as is.
+pub(crate) fn without_app_activation<T>(create: impl FnOnce() -> T) -> T {
+    #[cfg(target_os = "macos")]
+    {
+        macos::install_activation_guard();
+        let _guard = macos::ActivationGuard::new();
+        create()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        create()
+    }
+}
+
+/// A stage of a window's minimize, as the OS reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MinimizeStage {
+    /// The minimize started: on macOS the window is reported neither
+    /// visible nor minimized while it animates into the Dock.
+    Will,
+    /// The window is minimized.
+    Did,
+}
+
+/// Calls `on` with the window's `NSWindow*` address on each stage of a
+/// window minimize in this process (macOS
+/// `NSWindowWillMiniaturizeNotification` and
+/// `NSWindowDidMiniaturizeNotification`, on the main thread). Elsewhere
+/// does nothing: Windows and Linux report a minimized window at once.
+pub(crate) fn observe_minimize(on: impl Fn(usize, MinimizeStage) + Send + Sync + 'static) {
+    #[cfg(target_os = "macos")]
+    macos::observe_minimize(Box::new(on));
+    #[cfg(not(target_os = "macos"))]
+    drop(on);
+}
+
 /// The displays as the OS names them (`NSScreen.localizedName` with each
 /// screen's frame, top-left origin, on macOS); empty elsewhere, where
 /// Tauri's monitor names are already the OS names.
@@ -445,14 +534,196 @@ pub(crate) fn page_origin_y(webview_y: f64, inset_top: f64) -> f64 {
 mod macos {
     use std::ffi::c_void;
     use std::ptr::NonNull;
-    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex, Once, OnceLock};
 
     use objc2::rc::Retained;
-    use objc2::runtime::{AnyClass, AnyObject, Sel};
+    use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
     use objc2::{class, msg_send, sel};
     use objc2_foundation::{NSArray, NSHTTPCookie, NSMutableURLRequest, NSPoint, NSString, NSURL};
 
     use crate::host::cookies::StoredCookie;
+
+    /// How many webview creations run under [`super::without_app_activation`].
+    static SUPPRESS_ACTIVATION: AtomicUsize = AtomicUsize::new(0);
+
+    /// The `NSApplication` implementations [`install_activation_guard`]
+    /// replaced (`IMP` addresses), set once.
+    static ACTIVATE_ORIGINAL: OnceLock<usize> = OnceLock::new();
+    static ACTIVATE_IGNORING_ORIGINAL: OnceLock<usize> = OnceLock::new();
+
+    /// `-[NSApplication activate]` (macOS 14+).
+    type Activate = unsafe extern "C-unwind" fn(&AnyObject, Sel);
+    /// `-[NSApplication activateIgnoringOtherApps:]`.
+    type ActivateIgnoring = unsafe extern "C-unwind" fn(&AnyObject, Sel, Bool);
+
+    /// Holds activation off while it lives.
+    pub(super) struct ActivationGuard;
+
+    impl ActivationGuard {
+        pub(super) fn new() -> Self {
+            SUPPRESS_ACTIVATION.fetch_add(1, Ordering::SeqCst);
+            Self
+        }
+    }
+
+    impl Drop for ActivationGuard {
+        fn drop(&mut self) {
+            SUPPRESS_ACTIVATION.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    fn suppressed(selector: &str) -> bool {
+        if SUPPRESS_ACTIVATION.load(Ordering::SeqCst) == 0 {
+            return false;
+        }
+        crate::lab::record(
+            "wc-events.jsonl",
+            || serde_json::json!({ "kind": "activation-suppressed", "selector": selector }),
+        );
+        true
+    }
+
+    extern "C-unwind" fn guarded_activate(this: &AnyObject, cmd: Sel) {
+        if suppressed("activate") {
+            return;
+        }
+        if let Some(imp) = ACTIVATE_ORIGINAL.get() {
+            // SAFETY: the original `activate` of NSApplication, stored by
+            // `install_activation_guard`, called with its own arguments.
+            unsafe { std::mem::transmute::<usize, Activate>(*imp)(this, cmd) };
+        }
+    }
+
+    extern "C-unwind" fn guarded_activate_ignoring(this: &AnyObject, cmd: Sel, flag: Bool) {
+        if suppressed("activateIgnoringOtherApps:") {
+            return;
+        }
+        if let Some(imp) = ACTIVATE_IGNORING_ORIGINAL.get() {
+            // SAFETY: as in `guarded_activate`.
+            unsafe { std::mem::transmute::<usize, ActivateIgnoring>(*imp)(this, cmd, flag) };
+        }
+    }
+
+    /// Replaces `activate` and `activateIgnoringOtherApps:` of
+    /// `NSApplication`, once, with versions that do nothing while an
+    /// [`ActivationGuard`] lives and otherwise call the original. Every
+    /// other caller (the app itself, tao at launch) is unaffected.
+    pub(super) fn install_activation_guard() {
+        static INSTALL: Once = Once::new();
+        INSTALL.call_once(|| {
+            let class = class!(NSApplication);
+            let replace = |selector: Sel, slot: &OnceLock<usize>, imp: objc2::runtime::Imp| {
+                let Some(method) = class.instance_method(selector) else {
+                    return;
+                };
+                // The original is stored before the replacement can run.
+                let _ = slot.set(method.implementation() as usize);
+                // SAFETY: a method of a registered class; its encoding
+                // outlives the call.
+                let types = unsafe { objc2::ffi::method_getTypeEncoding(method) };
+                // SAFETY: `imp` has the selector's signature, as `types`
+                // says; the runtime keeps it for the class's lifetime.
+                unsafe {
+                    objc2::ffi::class_replaceMethod(
+                        std::ptr::from_ref(class).cast_mut(),
+                        selector,
+                        imp,
+                        types,
+                    );
+                }
+            };
+            let activate: Activate = guarded_activate;
+            let ignoring: ActivateIgnoring = guarded_activate_ignoring;
+            // SAFETY: function pointers cast to the runtime's `Imp` type.
+            let (activate, ignoring) = unsafe {
+                (
+                    std::mem::transmute::<Activate, objc2::runtime::Imp>(activate),
+                    std::mem::transmute::<ActivateIgnoring, objc2::runtime::Imp>(ignoring),
+                )
+            };
+            replace(sel!(activate), &ACTIVATE_ORIGINAL, activate);
+            replace(
+                sel!(activateIgnoringOtherApps:),
+                &ACTIVATE_IGNORING_ORIGINAL,
+                ignoring,
+            );
+        });
+    }
+
+    /// Every [`super::observe_minimize`] callback (one per host).
+    type MinimizeCallback = Box<dyn Fn(usize, super::MinimizeStage) + Send + Sync>;
+    static MINIMIZE_CALLBACKS: Mutex<Vec<MinimizeCallback>> = Mutex::new(Vec::new());
+
+    /// Adds `on` and, once per process, observes both minimize
+    /// notifications of every window.
+    pub(super) fn observe_minimize(on: MinimizeCallback) {
+        static INSTALL: Once = Once::new();
+        MINIMIZE_CALLBACKS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(on);
+        INSTALL.call_once(|| {
+            observe(
+                "NSWindowWillMiniaturizeNotification",
+                super::MinimizeStage::Will,
+            );
+            observe(
+                "NSWindowDidMiniaturizeNotification",
+                super::MinimizeStage::Did,
+            );
+        });
+    }
+
+    /// `-[NSNotificationCenter addObserverForName:object:queue:usingBlock:]`
+    /// for `name` from any object, delivered on the posting (main) thread;
+    /// the observer lives as long as the process.
+    fn observe(name: &str, stage: super::MinimizeStage) {
+        let name = NSString::from_str(name);
+        let block = block2::RcBlock::new(move |note: NonNull<AnyObject>| {
+            // SAFETY: AppKit passes a valid NSNotification for the call.
+            let note = unsafe { note.as_ref() };
+            // SAFETY: `-[NSNotification object]`, the NSWindow posting it.
+            let window: *const AnyObject = unsafe { msg_send![note, object] };
+            let callbacks = MINIMIZE_CALLBACKS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for on in callbacks.iter() {
+                on(window as usize, stage);
+            }
+        });
+        // SAFETY: a class method of Foundation's public API.
+        let center: Option<Retained<AnyObject>> =
+            unsafe { msg_send![class!(NSNotificationCenter), defaultCenter] };
+        let Some(center) = center else { return };
+        // SAFETY: the documented signature; a nil object and queue observe
+        // every sender on the posting thread, and the center copies the
+        // block.
+        let token: Option<Retained<AnyObject>> = unsafe {
+            msg_send![
+                &*center,
+                addObserverForName: &*name,
+                object: std::ptr::null::<AnyObject>(),
+                queue: std::ptr::null::<AnyObject>(),
+                usingBlock: &*block
+            ]
+        };
+        // The observer stays registered for the process's lifetime.
+        std::mem::forget(token);
+    }
+
+    /// `-[NSWindow orderFrontRegardless]`: on screen, front of its level,
+    /// neither key nor activating the app.
+    pub(super) fn order_front_regardless(address: usize) {
+        if address == 0 {
+            return;
+        }
+        // SAFETY: `address` is the live `NSWindow*` Tauri handed out for this
+        // window, used on the main thread.
+        let window: &AnyObject = unsafe { &*(address as *const AnyObject) };
+        // SAFETY: a public NSWindow method without arguments.
+        let () = unsafe { msg_send![window, orderFrontRegardless] };
+    }
 
     /// `NSWindow.contentView.frame` top minus `contentLayoutRect` top, in
     /// window coordinates (points).
@@ -854,6 +1125,51 @@ mod macos {
         // (nullable, autoreleased) WKNavigation.
         let _: *mut AnyObject = unsafe { msg_send![obj, loadRequest: &*request] };
     }
+
+    #[cfg(test)]
+    mod tests {
+        use objc2::{class, sel};
+
+        use super::*;
+
+        #[test]
+        fn activation_is_suppressed_only_while_a_guard_lives() {
+            install_activation_guard();
+            install_activation_guard(); // once
+            let class = class!(NSApplication);
+            let imp = |selector| {
+                class
+                    .instance_method(selector)
+                    .map(|m| m.implementation() as usize)
+            };
+            let activate: Activate = guarded_activate;
+            let ignoring: ActivateIgnoring = guarded_activate_ignoring;
+            assert_eq!(
+                imp(sel!(activateIgnoringOtherApps:)),
+                Some(ignoring as usize)
+            );
+            assert_ne!(ACTIVATE_IGNORING_ORIGINAL.get(), Some(&(ignoring as usize)));
+            if let Some(original) = ACTIVATE_ORIGINAL.get() {
+                assert_eq!(imp(sel!(activate)), Some(activate as usize));
+                assert_ne!(*original, activate as usize);
+            }
+            assert!(!suppressed("activate"));
+            {
+                let _outer = ActivationGuard::new();
+                assert!(suppressed("activate"));
+                {
+                    let _inner = ActivationGuard::new();
+                    assert!(suppressed("activate"));
+                }
+                assert!(suppressed("activateIgnoringOtherApps:"));
+            }
+            assert!(!suppressed("activate"));
+            assert!(super::super::without_app_activation(|| suppressed(
+                "activate"
+            )));
+            assert!(!suppressed("activate"));
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1225,6 +1541,38 @@ mod tests {
     /// under the title bar and `WKWebView` insets the page below it; guests
     /// placed at the webview's own origin overlapped the title bar and their
     /// page lost the overlap (a 300 x 250 slot reported 300 x 226).
+    /// Regression (lab diff, `reward-optin`): `showInactive()` queued the
+    /// show to the main thread, and the page loaded and mounted its ad
+    /// guests first, so their 400025 preceded the first-visible-window
+    /// heartbeat. On the main thread the show now happens before returning.
+    #[test]
+    fn a_show_on_the_main_thread_happens_before_returning() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let shown = Arc::new(AtomicBool::new(false));
+        let s = Arc::clone(&shown);
+        now_or_on_main(
+            true,
+            move || s.store(true, Ordering::SeqCst),
+            |_| panic!("not queued on the main thread"),
+        )
+        .unwrap();
+        assert!(shown.load(Ordering::SeqCst));
+        let queued = std::cell::Cell::new(false);
+        let s = Arc::clone(&shown);
+        shown.store(false, Ordering::SeqCst);
+        now_or_on_main(
+            false,
+            move || s.store(true, Ordering::SeqCst),
+            |_| {
+                queued.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(queued.get() && !shown.load(Ordering::SeqCst));
+    }
+
     #[test]
     fn guests_are_placed_below_the_content_inset() {
         // An app window's webview fills the window from its top edge.

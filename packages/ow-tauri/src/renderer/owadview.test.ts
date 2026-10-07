@@ -9,6 +9,7 @@ import { createAdviewEvent } from './owadview-events.js';
 import {
   AdviewRuntime,
   DEFAULT_STYLE,
+  MODAL_EVENT,
   PERFORMANCE_OVERLAY_STYLE,
   SHADOW_STYLE,
   VISIBILITY_POLL_MS,
@@ -264,9 +265,20 @@ describe('discovery and attach (B.3.1)', () => {
         },
         rect: { x: 10, y: 20, width: 300, height: 250, devicePixelRatio: 1 },
         visible: true,
+        documentTitle: document.title,
       },
     ]);
     expect(runtime.elements()).toEqual([el]);
+  });
+
+  it('sends the document title of the mount time (D.2 windowTitle)', async () => {
+    await startRuntime();
+    document.title = 'Before';
+    const el = createAd();
+    document.body.append(el);
+    await tick();
+    document.title = 'After';
+    expect(callsOf('adview_mount')[0]).toMatchObject({ documentTitle: 'Before' });
   });
 
   it('defines the element members and an open shadow root at attach [OBS]', async () => {
@@ -994,26 +1006,18 @@ describe('performance ads (B.3.4)', () => {
     expect(names()).toEqual(['adview_mount', 'adview_unmount']);
   });
 
-  it('dispatches destroyed, then unmounts, when the app removes it [OBS]', async () => {
+  it('unmounts with no destroyed event when the app removes it [OBS]', async () => {
+    // ow-electron sends `destroyed` after the guest closed; a removed element
+    // never hears it (lab: standard-remove, perf-remove, lab-layers).
     await startRuntime();
     const seen: string[] = [];
     const el = samplePerformanceAd(seen);
     await tick();
-    let callsAtDestroyed: string[] | undefined;
-    let destroyed: Event | undefined;
-    el.addEventListener('destroyed', (event) => {
-      destroyed = event;
-      callsAtDestroyed = names();
-    });
     document.body.removeChild(el);
     await tick();
-    expect(seen).toEqual(['destroyed']);
-    expect(callsAtDestroyed).toEqual(['adview_mount']);
+    await tick();
+    expect(seen).toEqual([]);
     expect(names()).toEqual(['adview_mount', 'adview_unmount']);
-    expect(destroyed?.constructor).toBe(Event);
-    expect(destroyed?.bubbles).toBe(false);
-    const base = new Set(Object.keys(new Event('x')));
-    expect(Object.keys(destroyed ?? {}).filter((key) => !base.has(key))).toEqual([]);
     // A new element works as before.
     samplePerformanceAd(seen);
     await tick();
@@ -1046,7 +1050,7 @@ describe('performance DOM shape (B.3.4) [OBS]', () => {
     expect(el.shadowRoot).toBeNull();
   });
 
-  it('is a 0x0 box with a flex overlay; other elements keep the block default', async () => {
+  it('is a 0x0 block with a flex overlay; other elements are inline-flex', async () => {
     await startRuntime();
     const el = samplePerformanceAd([]);
     const standard = document.createElement('owadview');
@@ -1058,20 +1062,29 @@ describe('performance DOM shape (B.3.4) [OBS]', () => {
     expect(overlay).not.toBeNull();
     if (overlay) expect(getComputedStyle(overlay).display).toBe('flex');
     expect(getComputedStyle(standard).width).not.toBe('0px');
-    expect(DEFAULT_STYLE).toContain(':where(owadview[performance]) { width: 0; height: 0; }');
+    // ow-electron's standard element computes inline-flex [OBS].
+    expect(getComputedStyle(standard).display).toBe('inline-flex');
+    expect(DEFAULT_STYLE).toContain(
+      ':where(owadview[performance]) { display: block; width: 0; height: 0; }',
+    );
   });
 
-  it('switches to pointer-events auto at the first display_ad_loaded, before dispatch', async () => {
+  it('switches to pointer-events auto at the first performance_ad_loaded, before dispatch', async () => {
     await startRuntime();
     const el = samplePerformanceAd([]);
     await tick();
     const id = runtime.elementId(el);
     const atDispatch: (string | null)[] = [];
-    el.addEventListener('display_ad_loaded', () => atDispatch.push(el.getAttribute('style')));
+    el.addEventListener('performance_ad_loaded', () => atDispatch.push(el.getAttribute('style')));
     services.emit({ elementId: id, name: 'impression', source: 'guest' });
     expect(el.getAttribute('style')).toBe('pointer-events: none;');
+    // ow-electron's element is still `none` after display_ad_loaded [OBS].
     services.emit({ elementId: id, name: 'display_ad_loaded', data: {}, source: 'guest' });
     services.emit({ elementId: id, name: 'display_ad_loaded', data: {}, source: 'guest' });
+    expect(el.getAttribute('style')).toBe('pointer-events: none;');
+    expect(MODAL_EVENT).toBe('performance_ad_loaded');
+    services.emit({ elementId: id, name: 'performance_ad_loaded', data: {}, source: 'guest' });
+    services.emit({ elementId: id, name: 'performance_ad_loaded', data: {}, source: 'guest' });
     expect(atDispatch).toEqual(['pointer-events: auto;', 'pointer-events: auto;']);
     // The div's own style is unchanged; it inherits the element's value.
     expect((el.firstElementChild as HTMLElement).getAttribute('style')).toBe(
@@ -1126,7 +1139,7 @@ describe('element lifecycle of the official sample (B.3.4) [OBS]', () => {
     return ad;
   }
 
-  it('stopAd() (removeChild) dispatches destroyed and unmounts a standard slot', async () => {
+  it('stopAd() (removeChild) unmounts a standard slot with no destroyed event', async () => {
     await startRuntime();
     const seen: string[] = [];
     const container = document.createElement('div');
@@ -1137,12 +1150,44 @@ describe('element lifecycle of the official sample (B.3.4) [OBS]', () => {
     expect(callsOf('adview_mount')).toHaveLength(1);
     container.removeChild(ad);
     await tick();
-    expect(seen).toEqual(['owadview-container:destroyed']);
+    await tick();
+    expect(seen).toEqual([]);
     expect(names()).toEqual(['adview_mount', 'adview_unmount']);
     // startAd() again: the sample makes a new element, which attaches.
     sampleStartAd(container, 'owadview-container', [400, 300], seen);
     await tick();
     expect(callsOf('adview_mount')).toHaveLength(2);
+  });
+
+  it('a slot moved to another container in one task dies and then hears destroyed [OBS]', async () => {
+    // ow-electron (lab standard-remove): the moved element gets `destroyed`
+    // after its guest closed, and no new guest.
+    await startRuntime();
+    const seen: string[] = [];
+    const first = document.createElement('div');
+    const second = document.createElement('div');
+    document.body.append(first, second);
+    const ad = sampleStartAd(first, 'owadview-container', [400, 300], seen);
+    await tick();
+    let callsAtDestroyed: string[] | undefined;
+    let destroyed: Event | undefined;
+    ad.addEventListener('destroyed', (event) => {
+      destroyed = event;
+      callsAtDestroyed = names();
+    });
+    second.appendChild(ad);
+    await tick();
+    await tick();
+    runtime.flush();
+    await tick();
+    expect(seen).toEqual(['owadview-container:destroyed']);
+    expect(callsAtDestroyed).toEqual(['adview_mount', 'adview_unmount']);
+    expect(callsOf('adview_mount')).toHaveLength(1);
+    expect(destroyed?.constructor).toBe(Event);
+    expect(destroyed?.bubbles).toBe(false);
+    const base = new Set(Object.keys(new Event('x')));
+    expect(Object.keys(destroyed ?? {}).filter((key) => !base.has(key))).toEqual([]);
+    expect(runtime.elements()).toEqual([]);
   });
 
   it('a container removed and re-appended (documented high-impact handler) stays dead', async () => {
@@ -1166,7 +1211,8 @@ describe('element lifecycle of the official sample (B.3.4) [OBS]', () => {
     await tick();
     runtime.flush();
     await tick();
-    expect(seen).toEqual(['owadview-container2:destroyed']);
+    // Its late `destroyed` came while it was out of the document.
+    expect(seen).toEqual([]);
     expect(callsOf('adview_mount')).toHaveLength(2);
     expect(callsOf('adview_unmount')).toEqual([{ elementId: runtime.elementId(smallAd) }]);
     expect(runtime.elements()).toEqual([hi]);

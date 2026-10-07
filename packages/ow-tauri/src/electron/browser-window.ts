@@ -565,21 +565,24 @@ export class BrowserWindow extends EventEmitter {
   }
 
   /**
-   * Shows the window without requesting focus (partial: some platforms still
-   * activate it); emits `show` when it was hidden.
+   * Shows the window without focusing it or activating the app
+   * (`window_show_inactive`; macOS orders it front without making it key, as
+   * ow-electron does; partial elsewhere: the platform may activate it); emits
+   * `show` when it was hidden.
    */
   showInactive(): void {
+    if (this.#destroyed) return;
     const changed = !this.#state.visible;
     this.#set({ visible: true, minimized: false });
-    this.#native(
-      'show',
-      undefined,
-      changed
-        ? () => {
-            this.#emitVisibility('show');
-          }
-        : undefined,
-    );
+    this.#op(async ({ hostId }) => {
+      await kernel.command('window_show_inactive', { id: hostId });
+      if (changed) this.#emitVisibility('show');
+    }).catch((error: unknown) => {
+      kernel.log(
+        'warn',
+        `BrowserWindow ${String(this.id)}: showInactive failed: ${(error as Error).message}`,
+      );
+    });
   }
 
   /** Hides the window; emits `hide` when it was visible. */

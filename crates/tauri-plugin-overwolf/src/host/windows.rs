@@ -15,6 +15,7 @@ use super::{CloseRequest, EVAL_TIMEOUT_MS, Host, PendingEval};
 use crate::error::{Error, ErrorCode};
 use crate::ipc::messages::{HostMessage, WindowEventName};
 use crate::lifecycle::CLOSE_TIMEOUT_MS;
+use crate::platform::webview::MinimizeStage;
 use crate::state::log::LogLevel;
 use crate::window::options::{
     LoadTarget, NAVIGATION_HOOK_IS_TOP_LEVEL_ONLY, ResolvedLoad, UiNavigation, WindowClassWire,
@@ -65,6 +66,19 @@ fn bounds_data<R: Runtime>(window: &tauri::Window<R>) -> Option<Value> {
     Some(
         json!({ "bounds": { "x": pos.x, "y": pos.y, "width": size.width, "height": size.height } }),
     )
+}
+
+/// The window's `NSWindow*` address (macOS); `None` elsewhere.
+fn native_address<R: Runtime>(window: &tauri::Window<R>) -> Option<usize> {
+    #[cfg(target_os = "macos")]
+    {
+        window.ns_window().ok().map(|p| p as usize)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window;
+        None
+    }
 }
 
 fn read_state<R: Runtime>(window: &tauri::Window<R>) -> WindowState {
@@ -269,7 +283,15 @@ impl<R: Runtime> Host<R> {
         }
         // Lab windows are built hidden and shown invisible (feature `lab`).
         b = crate::lab::window_builder(b, visible);
-        let window = b.build().map_err(Error::from)?;
+        // A hidden window (and every lab window) is built without activating
+        // the app, as ow-electron builds `show: false` windows; a shown one
+        // activates it, as ow-electron's `show()` does.
+        let window = if visible && !crate::lab::invisible() {
+            b.build()
+        } else {
+            crate::platform::webview::without_app_activation(|| b.build())
+        }
+        .map_err(Error::from)?;
         crate::lab::after_build(&window, visible);
         self.install_app_hooks(window.as_ref());
         if let Some(z) = o.web_preferences.as_ref().and_then(|w| w.zoom_factor) {
@@ -366,9 +388,17 @@ impl<R: Runtime> Host<R> {
         {
             builder = builder.additional_browser_args(&self.info.browser_args);
         }
-        let remote = window
-            .add_child(builder, LogicalPosition::new(0.0, 0.0), size)
-            .map_err(Error::from)?;
+        // Part of the window, so it activates the app only when the window is
+        // shown (see `create_window`).
+        let shown = window.is_visible().unwrap_or(false) && !crate::lab::invisible();
+        let remote = if shown {
+            window.add_child(builder, LogicalPosition::new(0.0, 0.0), size)
+        } else {
+            crate::platform::webview::without_app_activation(|| {
+                window.add_child(builder, LogicalPosition::new(0.0, 0.0), size)
+            })
+        }
+        .map_err(Error::from)?;
         self.install_app_hooks(&remote);
         if let Some(old) = self.app.get_webview(&ui_label(id))
             && let Err(err) = old.close()
@@ -561,6 +591,9 @@ impl<R: Runtime> Host<R> {
     pub(crate) fn apply_window_state(self: &Arc<Self>, id: u32, now: WindowState) {
         let minimized = self.with_core(|c| {
             let entry = c.windows.get_mut(id)?;
+            if now.minimized {
+                entry.minimizing = false;
+            }
             let events = derive_state_events(entry.state, now);
             let changed = entry.state.minimized != now.minimized;
             entry.state = now;
@@ -571,6 +604,53 @@ impl<R: Runtime> Host<R> {
         });
         if let Some(minimized) = minimized {
             self.ads_window_minimized(id, minimized);
+        }
+    }
+
+    /// The OS reported a stage of the minimize of the window whose
+    /// `NSWindow*` is `ns_window` (macOS); windows of other hosts are
+    /// ignored.
+    pub(crate) fn os_window_minimize(self: &Arc<Self>, ns_window: usize, stage: MinimizeStage) {
+        let ids = self.with_core(|c| c.windows.ids());
+        let id = ids.into_iter().find(|&id| {
+            self.app
+                .get_window(&ui_label(id))
+                .is_some_and(|w| native_address(&w) == Some(ns_window))
+        });
+        if let Some(id) = id {
+            self.window_minimize_stage(id, stage);
+        }
+    }
+
+    /// A stage of the minimize of window `id`. While it animates into the
+    /// Dock, macOS reports the window neither visible nor minimized: from
+    /// [`MinimizeStage::Will`] the visibility poll treats it as minimized,
+    /// not hidden. At [`MinimizeStage::Did`] the minimize is applied at
+    /// once (the `minimize` event, and the guests' `window-minimized` and
+    /// `window-hidden`, as ow-electron sends them when the minimize ends
+    /// (observed)).
+    pub(crate) fn window_minimize_stage(self: &Arc<Self>, id: u32, stage: MinimizeStage) {
+        crate::lab::record(
+            "wc-events.jsonl",
+            || serde_json::json!({ "kind": "minimize-stage", "windowId": id, "stage": format!("{stage:?}") }),
+        );
+        match stage {
+            MinimizeStage::Will => self.with_core(|c| {
+                if let Some(e) = c.windows.get_mut(id) {
+                    e.minimizing = true;
+                }
+            }),
+            MinimizeStage::Did => {
+                let known = self.with_core(|c| c.windows.get(id).map(|e| e.state));
+                let mut now = self
+                    .app
+                    .get_window(&ui_label(id))
+                    .map(|w| read_state(&w))
+                    .or(known)
+                    .unwrap_or_default();
+                now.minimized = true;
+                self.apply_window_state(id, now);
+            }
         }
     }
 

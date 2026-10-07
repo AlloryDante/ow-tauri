@@ -126,6 +126,10 @@ pub struct WindowState {
 
 /// One registered window.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent per-window flags"
+)]
 pub struct WindowEntry {
     /// Electron-style id.
     pub id: u32,
@@ -146,6 +150,19 @@ pub struct WindowEntry {
     pub analytics_name: Option<String>,
     /// Start of the current visible period, in host milliseconds.
     pub visible_since: Option<u64>,
+    /// A minimize ended the last visible period. Restoring the window does
+    /// not start a new one; showing it after a hide does (ow-electron
+    /// (observed), E.2 #7).
+    pub minimize_ended: bool,
+    /// Whether the window was shown the last time its ad guests followed
+    /// it (`None` before the first poll). A minimize does not change it:
+    /// the guests follow a minimize on their own path.
+    pub guests_shown: Option<bool>,
+    /// The window is being minimized: the OS has started the minimize but
+    /// does not report the window minimized yet. macOS reports it not
+    /// visible during its minimize animation (about half a second); that is
+    /// part of the minimize, not a hide.
+    pub minimizing: bool,
 }
 
 /// What a visibility observation changed (E.2 #5, #7).
@@ -200,17 +217,84 @@ impl WindowEntry {
         now_ms: u64,
         url: Option<&str>,
     ) -> VisibilityChange {
+        self.observe_window(visible, false, now_ms, url)
+    }
+
+    /// [`WindowEntry::observe_visibility`] for a window that may be
+    /// minimized: a minimized window is not visible, its minimize ends the
+    /// visible period, and its restore starts none (only a show after a
+    /// hide does), as in ow-electron (observed).
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::window::{VisibilityChange, WindowKind, WindowRegistry, WindowState};
+    /// let mut r = WindowRegistry::new();
+    /// r.insert(1, WindowKind::Ui, WindowState::default());
+    /// let e = r.get_mut(1).unwrap();
+    /// assert_eq!(e.observe_window(true, false, 0, None), VisibilityChange::Shown);
+    /// assert!(matches!(e.observe_window(false, true, 20_000, None), VisibilityChange::Ended(_)));
+    /// // Restored: no new visible period.
+    /// assert_eq!(e.observe_window(true, false, 26_000, None), VisibilityChange::None);
+    /// ```
+    pub fn observe_window(
+        &mut self,
+        visible: bool,
+        minimized: bool,
+        now_ms: u64,
+        url: Option<&str>,
+    ) -> VisibilityChange {
+        let minimized = self.counts_as_minimized(minimized);
+        let visible = visible && !minimized;
         match (visible, self.visible_since) {
+            (true, None) if self.minimize_ended => VisibilityChange::None,
             (true, None) => {
                 self.visible_since = Some(now_ms);
                 self.fix_name(url);
                 VisibilityChange::Shown
             }
-            (false, Some(_)) => self
-                .end_visible_period(now_ms, url)
-                .map_or(VisibilityChange::None, VisibilityChange::Ended),
+            (false, Some(_)) => {
+                self.minimize_ended = minimized;
+                self.end_visible_period(now_ms, url)
+                    .map_or(VisibilityChange::None, VisibilityChange::Ended)
+            }
+            (false, None) if !minimized => {
+                self.minimize_ended = false;
+                VisibilityChange::None
+            }
             _ => VisibilityChange::None,
         }
+    }
+
+    /// Whether a poll that read `os_minimized` sees a minimized window: the
+    /// OS says so, the window is being minimized, or the host already
+    /// applied its minimize (a poll that read the OS just before the
+    /// minimize ended must not take it for a hide).
+    fn counts_as_minimized(&self, os_minimized: bool) -> bool {
+        os_minimized || self.minimizing || self.state.minimized
+    }
+
+    /// The ad guests' part of a visibility poll: `Some(shown)` when the
+    /// guests must follow a show or a hide of the window, `None` when
+    /// nothing changed or the window is minimized or being minimized (a
+    /// minimize reaches the guests on its own path, with its own messages).
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::window::{WindowKind, WindowRegistry, WindowState};
+    /// let mut r = WindowRegistry::new();
+    /// r.insert(1, WindowKind::Ui, WindowState::default());
+    /// let e = r.get_mut(1).unwrap();
+    /// assert_eq!(e.guests_follow(true, false), Some(true));
+    /// e.minimizing = true;
+    /// assert_eq!(e.guests_follow(false, false), None);
+    /// e.minimizing = false;
+    /// assert_eq!(e.guests_follow(false, false), Some(false));
+    /// ```
+    pub fn guests_follow(&mut self, visible: bool, minimized: bool) -> Option<bool> {
+        if self.counts_as_minimized(minimized)
+            || self.guests_shown.replace(visible) == Some(visible)
+        {
+            return None;
+        }
+        Some(visible)
     }
 
     /// A page load finished; fixes the name when the window is visible.
@@ -278,6 +362,9 @@ impl WindowRegistry {
                 loaded: false,
                 analytics_name: None,
                 visible_since: None,
+                minimize_ended: false,
+                guests_shown: None,
+                minimizing: false,
             },
         );
     }
@@ -448,6 +535,83 @@ mod tests {
         assert_eq!(classify("ow-cmp-startup-x"), WebviewClass::Other);
         assert_eq!(ui_label(7), "bw-7");
         assert_eq!(remote_label(7), "bwr-7");
+    }
+
+    #[test]
+    fn a_minimize_ends_the_visible_period_and_a_restore_starts_none() {
+        let mut r = WindowRegistry::new();
+        r.insert(1, WindowKind::Ui, WindowState::default());
+        let e = r.get_mut(1).unwrap();
+        assert_eq!(
+            e.observe_window(true, false, 0, None),
+            VisibilityChange::Shown
+        );
+        // macOS: a minimized window is also not visible.
+        let VisibilityChange::Ended(p) = e.observe_window(false, true, 20_000, None) else {
+            panic!("the minimize ends the period")
+        };
+        assert_eq!(p.visible_ms, 20_000);
+        assert_eq!(
+            e.observe_window(false, true, 21_000, None),
+            VisibilityChange::None
+        );
+        // Restored: no new period, so quitting sends nothing [OBS].
+        assert_eq!(
+            e.observe_window(true, false, 26_000, None),
+            VisibilityChange::None
+        );
+        assert_eq!(e.end_visible_period(50_000, None), None);
+        // hide() and show() again: a new period.
+        assert_eq!(
+            e.observe_window(false, false, 51_000, None),
+            VisibilityChange::None
+        );
+        assert_eq!(
+            e.observe_window(true, false, 52_000, None),
+            VisibilityChange::Shown
+        );
+        // A window reported visible and minimized at once is not visible.
+        assert!(matches!(
+            e.observe_window(true, true, 60_000, None),
+            VisibilityChange::Ended(_)
+        ));
+    }
+
+    /// Regression (lab diff, `perf-minimize`): during the macOS minimize
+    /// animation the window is reported neither visible nor minimized; the
+    /// poll took that for a hide, so the guests got no `window-minimized`
+    /// and the restore started a new visible period.
+    #[test]
+    fn a_window_being_minimized_is_not_hidden() {
+        let mut r = WindowRegistry::new();
+        r.insert(1, WindowKind::Ui, WindowState::default());
+        let e = r.get_mut(1).unwrap();
+        assert_eq!(
+            e.observe_window(true, false, 0, None),
+            VisibilityChange::Shown
+        );
+        assert_eq!(e.guests_follow(true, false), Some(true));
+        e.minimizing = true;
+        assert!(matches!(
+            e.observe_window(false, false, 20_000, None),
+            VisibilityChange::Ended(_)
+        ));
+        assert_eq!(e.guests_follow(false, false), None);
+        e.minimizing = false;
+        assert_eq!(e.guests_follow(false, true), None);
+        // A poll that read the OS before the minimize ended, applied after
+        // the host recorded it, is no hide either (lab: the guest got
+        // `window-hidden` before `window-minimized`).
+        e.state.minimized = true;
+        assert_eq!(e.guests_follow(false, false), None);
+        e.state.minimized = false;
+        // Restored: the guests were never told the window was hidden, and
+        // no new period starts.
+        assert_eq!(
+            e.observe_window(true, false, 26_000, None),
+            VisibilityChange::None
+        );
+        assert_eq!(e.guests_follow(true, false), None);
     }
 
     #[test]

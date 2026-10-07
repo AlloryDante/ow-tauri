@@ -128,6 +128,7 @@ pub(crate) fn handler<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + 
         window::window_eval,
         window::window_devtools,
         window::window_set_name,
+        window::window_show_inactive,
         window::screen_snapshot,
         shell::shell_open_external,
         shell::shell_open_path,

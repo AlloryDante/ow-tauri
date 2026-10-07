@@ -12,6 +12,7 @@
  *
  * @packageDocumentation
  */
+import { installHiddenTimerAlignment } from './hidden-timers.js';
 import { Outbox, copy, deepFreeze, hostFunction, sanitize } from './outbox.js';
 
 /** The only origin the ad shim runs on (D.1). */
@@ -92,9 +93,11 @@ export interface AdviewHostApi {
   /** Sets the embedder focus behind `hasWindowFocus()` and `document.hasFocus()`. */
   setEmbedderFocus: (...args: unknown[]) => void;
   /**
-   * Sets `document.visibilityState` (`visible` or `hidden`) and fires
-   * `visibilitychange` only when the state changes, as Electron's guest
-   * does: its repeated `hidden` signals reach the page as one change.
+   * Sets `document.visibilityState` (`visible` or `hidden`) when it
+   * changes, with the `visibilitychange` events an ow-electron guest
+   * document sees then [OBS]: Chromium's own events, which arrive while
+   * the state still reads the old value (one on hide, three on show),
+   * then the one for the change. A repeated state fires nothing.
    */
   setVisibility: (...args: unknown[]) => void;
   /** Stores the `pageUrl` the next load of this guest starts with. */
@@ -102,6 +105,18 @@ export interface AdviewHostApi {
 }
 
 type Visibility = 'visible' | 'hidden';
+
+/**
+ * `visibilitychange` events an ow-electron guest document sees in the old
+ * state before a hide takes effect [OBS].
+ */
+export const EARLY_EVENTS_ON_HIDE = 1;
+
+/**
+ * `visibilitychange` events an ow-electron guest document sees in the old
+ * state before a show takes effect [OBS].
+ */
+export const EARLY_EVENTS_ON_SHOW = 3;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -196,6 +211,9 @@ export function installAdviewHost(win: Window, config: unknown): boolean {
   };
   Object.assign(overwolf, functions);
   for (const key of DATA_KEYS) {
+    // A key the host left out stays absent (`customTracking` without the
+    // attribute, as on ow-electron [OBS]).
+    if (key !== 'pageUrl' && !Object.prototype.hasOwnProperty.call(config, key)) continue;
     overwolf[key] = key === 'pageUrl' ? pageUrl : copy(config[key]);
   }
   Object.defineProperty(win, '__overwolf__', {
@@ -214,7 +232,9 @@ export function installAdviewHost(win: Window, config: unknown): boolean {
     });
   }
 
-  // Visibility and focus as the page reads them (D.5).
+  // Visibility and focus as the page reads them (D.5), and the long
+  // timers of a hidden page aligned as Chromium aligns them (B.3.4).
+  installHiddenTimerAlignment(win, () => visibility === 'hidden', fn);
   try {
     Object.defineProperty(doc, 'visibilityState', { configurable: true, get: () => visibility });
     Object.defineProperty(doc, 'hidden', {
@@ -259,8 +279,10 @@ export function installAdviewHost(win: Window, config: unknown): boolean {
       const next = args[0];
       if (next !== 'visible' && next !== 'hidden') return;
       if (next === visibility) return;
-      visibility = next;
       const EventType = (Reflect.get(win, 'Event') as typeof Event | undefined) ?? Event;
+      const early = next === 'hidden' ? EARLY_EVENTS_ON_HIDE : EARLY_EVENTS_ON_SHOW;
+      for (let i = 0; i < early; i++) doc.dispatchEvent(new EventType('visibilitychange'));
+      visibility = next;
       doc.dispatchEvent(new EventType('visibilitychange'));
     }),
     setNextPageUrl: fn((...args: unknown[]) => {

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   ADVIEW_COMMAND,
   DATA_KEYS,
+  EARLY_EVENTS_ON_SHOW,
   MAX_HANDLERS,
   DEFAULT_HOST_KEY,
   hostKeyOf,
@@ -211,6 +212,15 @@ describe('functions (D.3, D.4)', () => {
     expect(g.sent[2]?.args['data']).toEqual({ a: 1 });
   });
 
+  it('has no customTracking key when the host left it out [OBS]', () => {
+    const rest: Record<string, unknown> = { ...config() };
+    delete rest['customTracking'];
+    const g = guest(ADVIEW_URL, rest);
+    expect(Object.keys(g.ow)).not.toContain('customTracking');
+    expect(Object.keys(g.ow).at(-1)).toBe('unit');
+    expect(call(g.ow, 'getCustomTracking')).toBeNull();
+  });
+
   it('returns copies of systemInfo and customTracking', () => {
     const g = guest();
     const info = call(g.ow, 'getSystemInformation') as Record<string, unknown>;
@@ -266,23 +276,25 @@ describe('host to guest (D.5)', () => {
     expect(names(g).filter((n) => !n.startsWith('__host:'))).toEqual([]);
   });
 
-  it('fires visibilitychange only on a change, like Electron (hidden x2 on hide; hidden, visible on show)', () => {
+  it('fires the visibilitychange events an ow-electron guest sees (visible, hidden on hide; hidden x3, visible on show)', () => {
     const g = guest();
     const doc = g.win.document;
     const states: string[] = [];
     doc.addEventListener('visibilitychange', () => states.push(doc.visibilityState));
-    // Hide: Electron signals `hidden` twice.
+    // Hide: Electron signals `hidden` twice; the second changes nothing.
     g.host.setVisibility('hidden');
     g.host.setVisibility('hidden');
+    expect(states).toEqual(['visible', 'hidden']);
     // Show: `hidden`, then `visible`.
     g.host.setVisibility('hidden');
     g.host.setVisibility('visible');
-    // The same again (a second reward opt-in).
-    g.host.setVisibility('hidden');
-    g.host.setVisibility('hidden');
+    expect(states).toEqual(['visible', 'hidden', 'hidden', 'hidden', 'hidden', 'visible']);
+    // The same again (a second reward opt-in); lab captures of ow-electron
+    // show this pattern on every hide and show.
+    states.length = 0;
     g.host.setVisibility('hidden');
     g.host.setVisibility('visible');
-    expect(states).toEqual(['hidden', 'visible', 'hidden', 'visible']);
+    expect(states).toEqual(['visible', 'hidden', 'hidden', 'hidden', 'hidden', 'visible']);
     expect(doc.hidden).toBe(false);
   });
 
@@ -307,7 +319,8 @@ describe('host to guest (D.5)', () => {
     g.host.setVisibility('visible');
     g.host.setVisibility('bogus');
     expect(doc.visibilityState).toBe('visible');
-    expect(changes).toBe(1);
+    // One show: the early events in the old state, then the change.
+    expect(changes).toBe(EARLY_EVENTS_ON_SHOW + 1);
     expect(call(g.ow, 'hasWindowFocus')).toBe(false);
     g.host.setEmbedderFocus(true);
     expect(call(g.ow, 'hasWindowFocus')).toBe(true);

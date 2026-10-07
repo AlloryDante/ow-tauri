@@ -187,14 +187,14 @@ Status values:
 | `pageurl` attribute | becomes the guest's `pageUrl` | identical | B.3.2, D.2 | Target |
 | element shape | after attach: `OwAdViewElement` prototype with Electron's `<webview>` methods, `pageUrl`, `setPageUrl`, `sendCommand`; open shadow root with `style` and `iframe` | owadview members on the instance (incl. `pageUrl`, `setPageUrl`, `sendCommand`); same shadow root; no generic `<webview>` methods | B.3.3, B.3.4 | Target (owadview members); Deviation (webview methods); R3-2 (method behaviour) |
 | element events | plain `Event`, data as own properties, `display_ad_loaded` twice, sub-frame `did-fail-load`; Electron's standard `<webview>` events also forwarded | identical for the ad events; `render-process-gone`, navigation and console events | B.3.5 | Target; Deviation (`did-frame-*`, `media-*`) |
-| host to guest messages | `consent` (twice), `customTracking` (resent per reload), `eHashes`, `window-hidden` | identical | D.5 | Target; R3-1 (minimize) |
+| host to guest messages | `consent` (twice), `customTracking` (resent per reload), `eHashes`, `window-minimized` (minimize), `window-hidden` | identical | D.5 | Target |
 | email hashes | `{sha1, md5, sha256}` lower-case hex, trimmed and lower-cased input; sent as `eHashes`, never in `__overwolf__` | identical | A.2.2, D.5 | Target; R3-6 (gmail rule) |
 | ad document request | `Referer: https://www.overwolf.com/<uid>`, `Origin`, full header order, cookies | identical | D.8.2 | Target (Windows, macOS, Linux) |
 | subresource `Origin` | forced on every guest request | Windows identical | D.8.3 | Target (Windows); Gap (macOS); Gap until a web extension (Linux) |
 | `x-ow-*` on `owads.min.js` | `x-ow-uid`, `x-ow-phase`, `x-ow-window` | Windows identical | D.8.3 | Target (Windows); Gap (macOS, Linux); Overwolf |
 | guest web security | off; insecure content allowed | off on Windows and Linux | D.8.1 | Target (Windows, Linux); Gap (macOS) |
 | hidden embedder | loads, never fills | identical | B.3.4 | Target |
-| visibility | `hidden` for `display: none`, scrolled out, window hidden; screen position ignored; the page reloads itself after `hidden` | identical signals; 0.5 intersection ratio | B.3.4, D.5 | Target; R3-1 (minimize) |
+| visibility | `hidden` for `display: none`, scrolled out, window hidden or minimized; screen position ignored; the page reloads itself after `hidden` | identical signals and `visibilitychange` events (one in the old state on hide, three on show); the hidden main frame's timeouts of 1 s or more aligned to 1 s wake-ups as in Chromium (shorter timers and the ad frames run on time); 0.5 intersection ratio; a reload asked for while hidden is held until 2.5 s after `hidden` or until visible again | B.3.4, D.5 | Partial |
 | crash recovery | immediate reload, no cap, `render-process-gone` | identical | D.7 | Target |
 | load errors | main frame reloaded every 5000 ms, no cap, no analytics | identical | D.7 | Target |
 | test and live | identical shaping, only `testAd` differs | identical | D.7 | Target |

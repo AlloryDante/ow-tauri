@@ -161,6 +161,31 @@ pub(crate) async fn window_set_name<R: Runtime>(
         .ok_or_else(|| no_window(id))
 }
 
+/// `window_show_inactive`: `BrowserWindow.showInactive()`. Shows the window
+/// without making it key or activating the app, as ow-electron does (macOS:
+/// `orderFrontRegardless`). Elsewhere it is a plain show (partial: the
+/// platform may activate the window). A sync command, so it runs on the main
+/// thread in call order: the window is shown before the app's next call
+/// (its page load) is handled, as Electron's synchronous `showInactive()`.
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri hands command arguments over by value"
+)]
+pub(crate) fn window_show_inactive<R: Runtime>(
+    webview: Webview<R>,
+    state: State<'_, Overwolf<R>>,
+    id: u32,
+) -> Result<()> {
+    require_main(&webview)?;
+    let host = host(&state);
+    let window = host
+        .app
+        .get_window(&ui_label(id))
+        .ok_or_else(|| no_window(id))?;
+    crate::platform::webview::show_inactive(&window).map_err(Error::from)
+}
+
 #[tauri::command]
 pub(crate) async fn screen_snapshot<R: Runtime>(
     webview: Webview<R>,

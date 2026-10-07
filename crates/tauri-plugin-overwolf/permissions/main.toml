@@ -42,6 +42,7 @@ permissions = [
   "allow-window-eval",
   "allow-window-devtools",
   "allow-window-set-name",
+  "allow-window-show-inactive",
   "allow-screen-snapshot",
   "allow-shell-open-external",
   "allow-shell-open-path",

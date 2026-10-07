@@ -1704,6 +1704,32 @@ Denies the window_set_name command without any pre-configured scope.
 <tr>
 <td>
 
+`overwolf:allow-window-show-inactive`
+
+</td>
+<td>
+
+Enables the window_show_inactive command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`overwolf:deny-window-show-inactive`
+
+</td>
+<td>
+
+Denies the window_show_inactive command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `overwolf:main`
 
 </td>

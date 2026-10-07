@@ -171,7 +171,8 @@ impl<R: Runtime> Host<R> {
         {
             builder = builder.additional_browser_args(&self.info.browser_args);
         }
-        let window = builder.build()?;
+        // Hidden: building it must not activate the app.
+        let window = crate::platform::webview::without_app_activation(|| builder.build())?;
         // A.6 crash signals: WebView2 `ProcessFailed`, WebKitGTK
         // `web-process-terminated` (macOS: the app forwards them, A.5).
         self.install_app_hooks(window.as_ref());

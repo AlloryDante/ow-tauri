@@ -443,6 +443,7 @@ setup and during `on_event`, so registering from there deadlocks.
 | `window_eval` | `{ id: number; code: string; wantResult: boolean }` | `unknown` | `not-found`, `ipc-remote-error`, `ipc-timeout` | `webContents.executeJavaScript(code)`. The code always runs through the platform's native script evaluation (`Webview::eval`), never through page-level `eval`, so the page's CSP needs no `unsafe-eval`. For `ui` / `overlay` windows with `wantResult`, Rust evaluates `__OW_TAURI_RUNTIME__.evalBegin(<n>, () => (<code>\n))` and then `__OW_TAURI_RUNTIME__.evalFallback(<n>, () => { <code>\n})`; the second runs only when the first did not parse (statement code), and resolves `undefined`. The runtime reports through `eval_result` (A.2.5), 30 s timeout. For `remote` windows the code runs and the call resolves `undefined` (partial, B.2). |
 | `window_devtools` | `{ id: number; open: boolean }` | `void` | `unsupported` (release build without the `devtools` feature) | `webContents.openDevTools()` / `closeDevTools()`. |
 | `window_set_name` | `{ id: number; name: string }` | `void` | `not-found` | ow-electron `BrowserWindow` `name` option; normalised as E.2 describes and used for analytics (`<label>_window_closed`, guest `windowName`). |
+| `window_show_inactive` | `{ id: number }` | `void` | `not-found` | `BrowserWindow.showInactive()`: macOS `-[NSWindow orderFrontRegardless]` (on screen, not key, the app is not activated), as ow-electron shows an inactive window; elsewhere a plain show. `plugin:window|show` would activate the app. |
 | `screen_snapshot` | none | `{ displays: ElectronDisplay[]; primaryDisplayId: number; cursor: { x: number; y: number } }` | none | Fresh screen state; the cache is also pushed (C.6). |
 | `shell_open_external` | `{ url: string }` | `void` | `invalid-argument` (not an absolute URL by the WHATWG parser, scheme not `http`, `https` or `mailto`, or credentials in the URL), `io` | via `tauri-plugin-opener`. |
 | `shell_open_path` | `{ path: string }` | `string` (empty on success, Electron semantics) | none | Checked by the plugin before opener runs (A.2.3.2); a refused or failed open returns the error string, never throws. |
@@ -606,6 +607,7 @@ interface AdviewMount {
   attributes: AdviewAttributes;
   rect: AdviewRect;
   visible: boolean;
+  documentTitle?: string;       // the embedder's document.title at mount (D.2 windowTitle), cut to 1024
 }
 interface AdviewAttributes {
   cid: string;                  // trimmed, at most 20 characters
@@ -1171,7 +1173,7 @@ Instance members:
 | `loadURL(url)`, `loadFile(path, { query, hash })` | S | returns a promise that resolves on `did-finish-load`; a remote URL switches the window to class `remote`: its content becomes a fresh `bwr-<id>` webview with no IPC, no preload and no init scripts (A.2.3.1). The facade calls a URL remote when it is `http(s)` and its origin differs from the main webview's `location.origin` (the app origin), the same test Rust applies |
 | `show()`, `hide()`, `close()`, `destroy()`, `focus()`, `isVisible()`, `isFocused()` | S | Tauri reports no visibility change, so the facade emits `show` / `hide` itself when a call changes the cached visibility, after the native call (A.3) |
 | `blur()` | P | Tauri has no command for it; only the cached state changes (`isFocused()` returns `false`) |
-| `showInactive()` | P | shows without requesting focus; some platforms still activate the window |
+| `showInactive()` | P | `window_show_inactive`: on macOS the window is not made key and the app is not activated (as ow-electron); Windows and Linux use a plain show, which may activate it |
 | `minimize()`, `maximize()`, `unmaximize()`, `restore()`, `isMinimized()`, `isMaximized()`, `setFullScreen()`, `isFullScreen()` | S | state reads use the cache, refreshed on every window event |
 | `setBounds()`, `getBounds()`, `getContentBounds()`, `setSize()`, `getSize()`, `setPosition()`, `getPosition()`, `setMinimumSize()`, `setMaximumSize()`, `center()` | S | getters are synchronous from the cache |
 | `setMovable()` | P | Tauri has no command for it; the flag is cached (`isMovable()`) and applied only through the constructor's `movable` option |
@@ -1256,8 +1258,10 @@ for tests).
 
 1. **Default style.** At document start it adds a constructed style sheet to
    `document.adoptedStyleSheets` with
-   `:where(owadview) { display: block; width: 100%; height: 100%; }`.
-   `:where()` has zero specificity, so any app rule wins. Without it an
+   `:where(owadview) { display: inline-flex; width: 100%; height: 100%; }`
+   (ow-electron's element computes `inline-flex` [OBS]; a performance
+   element is a 0 x 0 `block`). `:where()` has zero specificity, so any app
+   rule wins. Without it an
    unknown element is `display: inline` with no content and a 0 x 0 box, and
    the sample's ads (an unstyled `owadview` appended to a sized
    `div.ad-container`) would never mount.
@@ -1340,6 +1344,18 @@ would give app code control over remote ad content [DEC].
 | element disconnected (including via an ancestor) | `adview_unmount` |
 | document `pagehide` / unload | Rust closes every guest owned by the webview |
 
+**Removal and moves.** An element removed or moved (removed and inserted
+again in one task, also through an ancestor) after attach is dead: its guest
+closes and it never attaches again. Once `adview_unmount` returned, it gets a
+plain `destroyed` event only if it is in the document again by then (a move);
+an element removed for good hears nothing. ow-electron sends `destroyed` after
+the guest closed and only an attached element receives it [OBS lab
+standard-remove, perf-remove].
+
+A performance element turns `pointer-events: auto`, and its guest stops
+passing input through, at its first `performance_ad_loaded`; it is still
+`none` after `display_ad_loaded` in ow-electron [OBS].
+
 **Shadow root.** At mount the runtime attaches an open shadow root to the
 element holding a `<style>` and a transparent `about:blank` `<iframe>`
 (`pointer-events: none`, 100 % of the box), because ow-electron's element has
@@ -1366,13 +1382,31 @@ ow-electron signals the guest `hidden` when the element is `display: none`,
 when it is scrolled out of the viewport, and when the embedder window is
 hidden (plus a `window-hidden` message, D.5); a resize signals nothing, and
 the window's position on the screen plays no part (an off-screen window
-still fills test ads) [OBS]. About 2 s after `hidden` the ad page stops and
+still fills test ads) [OBS]. A minimize signals `hidden` plus the
+`window-minimized` and `window-hidden` messages (D.5) [OBS]. About 2 s after `hidden` the ad page stops and
 calls `__overwolf__.reload()`; the host reloads the guest 3 to 5 s after
 `hidden`, and the reloaded page waits until it is `visible` again [OBS].
 ow-tauri passes its visibility result to the guest the same way (D.5) and
-lets the page drive the reload. The intersection threshold for a partly
-visible element was not measured; the 0.5 ratio above is [DEC]. Minimize and
-restore were not observed: **Unknown (R3-1)** (OQ-27).
+lets the page drive the reload. The page asks 2.6 to 4.8 s after `hidden` in
+ow-electron, whose hidden document's timers are throttled, and a slot hidden
+for 2 s and shown again keeps its ad [OBS]. Chromium runs a hidden page's
+timers only at aligned wake-ups, once per second ("Timer throttling in Chrome
+88", developer.chrome.com) [DOC]; WebKit runs them on time. The shim aligns
+the guest main frame's timeouts of 1 s or more to whole-second wake-ups while
+it reads `hidden`; shorter timeouts and intervals run on time [DEC]: aligning
+every timer of the main frame alone (its cross-origin ad frames keep running
+on time) left the ad silent after a 1-frame and a 2 s hide [OBS: lab,
+reward-optin, two runs]. Chromium's one-per-minute intensive throttling after
+5 minutes hidden is not emulated. ow-tauri also holds a reload asked for
+while hidden until 2.5 s after `hidden`, or until the guest is visible again
+if that comes first [DEC]. A page that asked has given up its ad and plays
+nothing more until it reloads [OBS: lab, 2 s hide], so the request is never
+dropped. With the alignment and the `visibilitychange` events of D.5 a 2 s
+hide keeps the ad, and a minimized window's performance ad dismisses itself
+before it shuts down, as in ow-electron [OBS: lab, reward-optin and
+perf-minimize]. The intersection threshold for a partly
+visible element was not measured; the 0.5 ratio above is [DEC]. The guests of
+a minimized embedder stay hidden until the restore (R3-1, OQ-27).
 
 Native child webviews always paint above the page. Any HTML that must cover an
 ad (menus, modals) needs the app to hide the element; the runtime does that
@@ -1875,12 +1909,14 @@ ow-tauri sends the same:
 | `consent` | string | a consent page saves (D.6.6): **twice**, first the TCF string (`saveConsent`), then the stored, URL-encoded unified string `cmp%3D...` (`saveUnifiedConsent`). Sent to every existing guest, including one that has not finished loading; **not** resent after a guest reloads [OBS] |
 | `customTracking` | object or `null` | the element's `customTracking` changed, and again after every later reload of that guest [OBS]; Overwolf documents that updates reach the running ad page [DOC] |
 | `eHashes` | `{ sha1, md5, sha256 }` | `setUserEmailHashes()` or `generateUserEmailHashes()` was called (A.2.2); sent to every existing guest; not resent after a reload [OBS] |
-| `window-hidden` | none | the embedder window was hidden; nothing is sent when it is shown again [OBS] |
+| `window-minimized` | none | the embedder window was minimized, when the minimize ends, before `window-hidden`; the guest document turns `hidden` after both [OBS]. A running performance ad then dismisses itself (`performance_ad_dismiss`) and shuts down about 1 s later [OBS] (ow-tauri: with the hidden-page timer alignment of B.3.4) |
+| `window-hidden` | none | the embedder window was hidden or minimized (not again when a hidden window is minimized); nothing is sent when it is shown or restored again [OBS] |
 | `ad-clicked` | URL string | a popup or gesture navigation was opened in the system browser (D.7); ow-tauri only [DEC, Low; OQ-17] |
 
 `disableAdsFPD()`, `disableAdsOptimization()` and resizes send nothing
-[OBS]. Minimize and restore were not observed (**Unknown (R3-1)**); ow-tauri
-sends nothing for them [DEC]. ow-tauri sends no other host messages. The
+[OBS]. A restore with a live guest was not observed (the performance ad of
+R3-1 had dismissed itself); ow-tauri sends nothing for it beyond the guest's
+visibility [DEC]. ow-tauri sends no other host messages. The
 page's own `postMessage` traffic (`owCustomTracking`, `owPageUrl`, `oam-*`,
 `display-ad-*`) is not host traffic.
 
@@ -1891,7 +1927,12 @@ gains or loses focus. ow-tauri reproduces them inside the shim, never through
 `onmessage`: visibility through `__owTauriHost.setVisibility(<'visible'|'hidden'>)`,
 which overrides `document.visibilityState` and `document.hidden` and fires
 `visibilitychange` (in ow-electron the guest's `document.visibilityState`
-reads `hidden` while its window is hidden [OBS]); focus through
+reads `hidden` while its window is hidden [OBS]). An ow-electron guest
+document sees more than one `visibilitychange` per change: on a hide one
+event that still reads the old state, then the change; on a show three that
+still read `hidden`, then the change [OBS: lab, every hide and show of the
+reward and minimize captures]. The shim fires the same; a repeated state
+fires nothing; focus through
 `setEmbedderFocus` (D.3), which also drives `document.hasFocus()` (it reads
 `true` while the embedder window has focus [OBS]).
 
@@ -2258,6 +2299,9 @@ priority: u=4, i
   zstd.
 - HTTP/2 negotiated by ALPN, as observed; header order inside HTTP/2 frames
   is best effort.
+- An idle connection is kept until the server ends it: ow-electron sends the
+  close counter on its existing session after 90 s or more of silence [OBS],
+  so the client sets no pool idle timeout [DEC].
 - One attempt, 30 s timeout (none for `cmp-eu-only`, D.6.2), no retry, no
   queue, no persistence; failures are logged at debug level [POC, OBS: no
   retries seen].
@@ -2340,7 +2384,9 @@ with a warning.
 - Trigger [OBS]: each visible period ends with one event. `hide()` sends it;
   a later `close()` does not send it again; showing the window again and
   closing it sends another with the new length; quitting while the window is
-  visible sends it. A visible period shorter than 1 s sends nothing.
+  visible sends it. A minimize ends the visible period like `hide()`, and the
+  restore starts none: quitting after it sends nothing [OBS]. ow-tauri starts
+  a new period at the next `show()` after a `hide()` [DEC]. A visible period shorter than 1 s sends nothing.
 - Windows that were never shown send nothing (including `ow-main`, the
   startup consent window and the default-consent window). Ad guests are not
   windows. The consent settings window (`ow-cmp`) sends nothing either,

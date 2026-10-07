@@ -37,6 +37,17 @@ const READY_TIMEOUT_MS: u64 = 20_000;
 /// (D.3).
 const RELOAD_DELAY_MS: u64 = 70;
 
+/// A reload the page asks for while it is hidden runs no earlier than this
+/// long after the guest was told `hidden`, or as soon as the guest is
+/// visible again (D.5). The ad page asks about 2 s after `hidden`; in
+/// ow-electron the hidden Chromium document's throttled timers make that
+/// 2.6 to 4.8 s (observed). `WebKit` runs timers on time; the shim aligns
+/// the hidden page's long timeouts as Chromium does (B.3.4), and this hold
+/// covers a request that still comes early.
+/// A page that asked has given up its ad and plays nothing more until it
+/// reloads (lab: a 2 s hide), so the request is never dropped.
+const HIDDEN_RELOAD_HOLD_MS: u64 = 2_500;
+
 /// A guest's `did-finish-load` waits this long for the shim's `dom-ready`
 /// (ow-electron reports `dom-ready` first); after that it goes alone (a
 /// document without the shim).
@@ -88,11 +99,16 @@ pub(crate) struct Guest {
     /// A `pageurl` for the next load (B.3.3).
     pub(crate) next_page_url: Option<String>,
     pub(crate) reload_at: Option<u64>,
+    /// `reload_at` is a page reload held while hidden
+    /// ([`HIDDEN_RELOAD_HOLD_MS`]); becoming visible runs it at once.
+    pub(crate) reload_held: bool,
+    /// When the guest was last told `hidden` (`None` while visible).
+    pub(crate) hidden_at: Option<u64>,
     pub(crate) retry_at: Option<u64>,
     pub(crate) apply_setting_logged: bool,
     /// Mouse input passes through the guest to the app (B.3.4): a
     /// performance guest from its mount until its first
-    /// `display_ad_loaded`.
+    /// `performance_ad_loaded`.
     pub(crate) passthrough: bool,
 }
 
@@ -140,7 +156,7 @@ impl AdsCore {
 enum Next {
     Nothing,
     /// Forward to the embedder; `true` when the guest's input pass-through
-    /// ends first (its first `display_ad_loaded`).
+    /// ends first (its first `performance_ad_loaded`).
     Forward(String, String, Option<Value>, bool),
     Reload,
     Close,
@@ -150,7 +166,8 @@ enum Next {
     DomReady(String, String, bool),
     Ready(Option<String>),
     Log(&'static str),
-    ScheduleReload,
+    /// A page reload, due this many milliseconds from now.
+    ScheduleReload(u64),
 }
 
 /// Platform reports for guests and consent windows, routed to the host.
@@ -375,13 +392,15 @@ impl<R: Runtime> Host<R> {
                 .data_directory(self.info.ads_data_dir.clone())
                 .additional_browser_args(&self.ads_browser_args());
         }
-        let webview = window
-            .add_child(builder, LogicalPosition::new(x, y), LogicalSize::new(w, h))
-            .map_err(Error::from)?;
+        // A `<webview>` guest never activates the app in ow-electron.
+        let webview = crate::platform::webview::without_app_activation(|| {
+            window.add_child(builder, LogicalPosition::new(x, y), LogicalSize::new(w, h))
+        })
+        .map_err(Error::from)?;
         if !mount.visible {
             let _ = webview.hide();
         }
-        let _ = crate::platform::webview::set_muted(&webview, true);
+        Self::mute_guest(&webview, true, "mount");
         if transparent {
             self.clear_guest_background(&webview);
         }
@@ -428,6 +447,8 @@ impl<R: Runtime> Host<R> {
             tracking_changed: false,
             next_page_url: None,
             reload_at: None,
+            reload_held: false,
+            hidden_at: (!sent_visible).then_some(now),
             retry_at: None,
             apply_setting_logged: false,
             passthrough: performance,
@@ -435,7 +456,7 @@ impl<R: Runtime> Host<R> {
         self.with_core(|c| {
             c.ads.guests.insert(label.clone(), guest);
         });
-        crate::lab::record("wc-events.jsonl", || {
+        self.guest_record("wc-events.jsonl", || {
             json!({
                 "kind": "created",
                 "label": label,
@@ -444,6 +465,7 @@ impl<R: Runtime> Host<R> {
                 "elementId": mount.element_id,
                 "visible": mount.visible,
                 "bounds": [x, y, w, h],
+                "windowTitle": window_title,
             })
         });
         // The performance guest stays the top child of its window, and
@@ -461,6 +483,18 @@ impl<R: Runtime> Host<R> {
         // The first navigation may already be allowed (D.6.5).
         self.ads_tick(now);
         Ok(label)
+    }
+
+    /// Mutes or unmutes a guest's audio. Lab trace: `set-muted` in
+    /// `ipc.jsonl` with the state and its cause (`mount`, `load`,
+    /// `setAudioMuted`, `page`), as the ow-electron harness records
+    /// `webContents.setAudioMuted`.
+    fn mute_guest(webview: &Webview<R>, muted: bool, cause: &str) {
+        crate::lab::record(
+            "ipc.jsonl",
+            || json!({ "dir": "host->page", "via": "set-muted", "type": "owadview", "label": webview.label(), "muted": muted, "cause": cause }),
+        );
+        let _ = crate::platform::webview::set_muted(webview, muted);
     }
 
     /// Clears what the builder's `transparent` flag leaves of a new guest's
@@ -619,7 +653,7 @@ impl<R: Runtime> Host<R> {
 
     /// Calls the shim's host function `function` in the guest `label`.
     fn guest_call(self: &Arc<Self>, label: &str, function: &str, arg: &Value) {
-        crate::lab::record(
+        self.guest_record(
             "ipc.jsonl",
             || json!({ "dir": "host->page", "via": "guest-call", "type": "owadview", "label": label, "function": function, "args": arg }),
         );
@@ -667,10 +701,19 @@ impl<R: Runtime> Host<R> {
     /// window).
     /// Sends only a change, unless `force` (a new document).
     fn sync_visibility(self: &Arc<Self>, label: &str, force: bool) {
+        let now = self.now();
         let send = self.with_core(|c| {
             c.ads.guests.get_mut(label).and_then(|g| {
                 let visible = g.visible && !g.embedder_hidden && !g.embedder_minimized;
                 let changed = std::mem::replace(&mut g.sent_visible, visible) != visible;
+                if changed {
+                    g.hidden_at = (!visible).then_some(now);
+                    if visible && std::mem::take(&mut g.reload_held) {
+                        // Visible again before the hold ended: the reload
+                        // the page asked for runs at the next tick (D.5).
+                        g.reload_at = Some(now);
+                    }
+                }
                 (changed || force).then_some(visible)
             })
         });
@@ -705,6 +748,10 @@ impl<R: Runtime> Host<R> {
                 let (x, y, w, h) = logical_rect(&rect, scale, offset);
                 let _ = wv.set_position(LogicalPosition::new(x, y));
                 let _ = wv.set_size(LogicalSize::new(w, h));
+                crate::lab::record(
+                    "wc-events.jsonl",
+                    || json!({ "kind": "bounds", "label": label, "type": "owadview", "bounds": [x, y, w, h] }),
+                );
             }
             self.with_core(|c| {
                 if let Some(g) = c.ads.guests.get_mut(&label) {
@@ -796,7 +843,7 @@ impl<R: Runtime> Host<R> {
             AdviewCommandName::SetAudioMuted => {
                 let muted = args.first().and_then(Value::as_bool).unwrap_or(true);
                 if let Some(w) = self.app.get_webview(&label) {
-                    let _ = crate::platform::webview::set_muted(&w, muted);
+                    Self::mute_guest(&w, muted, "setAudioMuted");
                 }
             }
             AdviewCommandName::Reload => self.reload_guest(&label),
@@ -836,6 +883,7 @@ impl<R: Runtime> Host<R> {
                 }
                 g.begin_load(now);
                 g.reload_at = None;
+                g.reload_held = false;
                 true
             })
         });
@@ -1130,7 +1178,7 @@ impl<R: Runtime> Host<R> {
         };
         if let Some(w) = self.app.get_webview(label) {
             // ow-electron mutes, and signals visibility and focus, on every load.
-            let _ = crate::platform::webview::set_muted(&w, true);
+            Self::mute_guest(&w, true, "load");
             self.sync_visibility(label, true);
             let focused = w.window().is_focused().unwrap_or(false);
             self.guest_call(label, "setEmbedderFocus", &Value::Bool(focused));
@@ -1192,8 +1240,9 @@ impl<R: Runtime> Host<R> {
                 None if InternalEvent::is_reserved(&event.name) => Next::Nothing,
                 None => {
                     // The interstitial turns modal at its first
-                    // `display_ad_loaded` (B.3.4, observed).
-                    let modal = g.passthrough && event.name == "display_ad_loaded";
+                    // `performance_ad_loaded`, not at `display_ad_loaded`
+                    // (B.3.4, observed).
+                    let modal = g.passthrough && event.name == crate::ads::MODAL_EVENT;
                     if modal {
                         g.passthrough = false;
                     }
@@ -1238,8 +1287,15 @@ impl<R: Runtime> Host<R> {
                 }
                 Some(InternalEvent::Crash) => Next::Crash,
                 Some(InternalEvent::Reload) => {
-                    g.reload_at = Some(now + RELOAD_DELAY_MS);
-                    Next::ScheduleReload
+                    let held = g
+                        .hidden_at
+                        .filter(|_| !g.sent_visible)
+                        .map(|h| h + HIDDEN_RELOAD_HOLD_MS)
+                        .filter(|&t| t > now + RELOAD_DELAY_MS);
+                    let at = held.unwrap_or(now + RELOAD_DELAY_MS);
+                    g.reload_at = Some(at);
+                    g.reload_held = held.is_some();
+                    Next::ScheduleReload(at - now)
                 }
                 Some(InternalEvent::DomReady) => {
                     g.dom_ready = true;
@@ -1281,7 +1337,7 @@ impl<R: Runtime> Host<R> {
             Next::Crash => self.guest_crashed(label, GoneReason::Killed, 0),
             Next::Mute(muted) => {
                 if let Some(w) = self.app.get_webview(label) {
-                    let _ = crate::platform::webview::set_muted(&w, muted);
+                    Self::mute_guest(&w, muted, "page");
                 }
             }
             Next::DomReady(embedder, element_id, finish) => {
@@ -1296,13 +1352,13 @@ impl<R: Runtime> Host<R> {
                     self.guest_call(label, "setNextPageUrl", &Value::from(p));
                 }
             }
-            Next::ScheduleReload => {
-                // A one-shot timer: the reload follows ~70 ms later, not at
-                // the next 250 ms host tick.
+            Next::ScheduleReload(delay_ms) => {
+                // A one-shot timer: the reload follows ~70 ms later (or when
+                // a hidden page's hold ends), not at the next 250 ms tick.
                 let host = Arc::clone(self);
                 let label = label.to_owned();
                 tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(RELOAD_DELAY_MS)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     host.run_due_reload(&label);
                 });
             }
@@ -1361,15 +1417,28 @@ impl<R: Runtime> Host<R> {
     }
 
     /// The embedder window `id` was minimized or restored: its guests'
-    /// documents are hidden while it is minimized. Nothing is sent to the
-    /// page (D.5: no message for minimize or restore).
+    /// documents are hidden while it is minimized. On minimize each guest
+    /// gets a `window-minimized` and a `window-hidden` message, in that
+    /// order, and then its document turns `hidden`, as in ow-electron
+    /// (observed: the guest document reports `hidden` after both
+    /// messages). No `window-hidden` when the window was
+    /// already hidden. Nothing is sent on restore beyond the visibility
+    /// (D.5).
     pub(crate) fn ads_window_minimized(self: &Arc<Self>, id: u32, minimized: bool) {
         for l in self.guests_of_window(id) {
-            self.with_core(|c| {
-                if let Some(g) = c.ads.guests.get_mut(&l) {
-                    g.embedder_minimized = minimized;
-                }
+            let (changed, already_hidden) = self.with_core(|c| {
+                c.ads.guests.get_mut(&l).map_or((false, false), |g| {
+                    let changed =
+                        std::mem::replace(&mut g.embedder_minimized, minimized) != minimized;
+                    (changed, g.embedder_hidden)
+                })
             });
+            if changed && minimized {
+                self.guest_deliver(&l, crate::ads::WINDOW_MINIMIZED, None);
+                if !already_hidden {
+                    self.guest_deliver(&l, "window-hidden", None);
+                }
+            }
             self.sync_visibility(&l, false);
         }
     }

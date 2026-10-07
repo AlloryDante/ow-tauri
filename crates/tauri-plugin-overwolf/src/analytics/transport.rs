@@ -68,8 +68,24 @@ impl std::fmt::Debug for HyperTransport {
     }
 }
 
+/// How long an idle connection stays in the pool: forever, until the server
+/// ends it. ow-electron keeps its HTTP/2 session to an Overwolf host open
+/// while idle and sends `electron_window_closed` on it after 90 s or more of
+/// silence, answered in about 80 ms ((observed) netlog: the request binds to the
+/// existing session). hyper's default of 90 s dropped that connection just
+/// before the close counter, so the counter paid a new TCP and TLS handshake
+/// (0.3 to 3.5 s) and could outlast the quit drain. A connection the server
+/// closed is noticed when it is checked out, and a request that never reached
+/// it is retried on a new one.
+const POOL_IDLE_TIMEOUT: Option<Duration> = None;
+
 impl HyperTransport {
     pub(crate) fn new() -> Self {
+        Self::with_pool_idle_timeout(POOL_IDLE_TIMEOUT)
+    }
+
+    /// The transport with `idle` as the pool's idle timeout (`None`: never).
+    fn with_pool_idle_timeout(idle: Option<Duration>) -> Self {
         let tls = native_tls::TlsConnector::builder()
             .request_alpns(&["h2", "http/1.1"])
             .build()
@@ -83,6 +99,7 @@ impl HyperTransport {
             };
             let https = hyper_tls::HttpsConnector::from((proxy, tls.into()));
             hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+                .pool_idle_timeout(idle)
                 .build(https)
         });
         HyperTransport { client }
@@ -700,6 +717,74 @@ mod tests {
         ];
         assert_eq!(head.lines().collect::<Vec<_>>(), want);
         assert_eq!(sent, body);
+    }
+
+    /// Serves keep-alive HTTP/1.1 on a loopback socket and counts the
+    /// connections it accepted.
+    fn serve_keep_alive() -> (String, Arc<AtomicUsize>) {
+        use std::io::{BufRead as _, BufReader, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!(
+            "http://{}/analytics/Counter",
+            listener.local_addr().unwrap()
+        );
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&accepted);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                count.fetch_add(1, Ordering::SeqCst);
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut stream = stream;
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                            return;
+                        }
+                        if line == "\r\n" {
+                            let ok = b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n";
+                            if stream.write_all(ok).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        (url, accepted)
+    }
+
+    /// Two GETs `gap` apart on `transport`; returns the connections used.
+    fn connections_for(transport: &HyperTransport, gap: Duration) -> usize {
+        let (url, accepted) = serve_keep_alive();
+        let get = || HostRequest {
+            method: Method::Get,
+            url: url.clone(),
+            headers: vec![],
+            body: None,
+            timeout: Some(Duration::from_secs(10)),
+        };
+        let first = tauri::async_runtime::block_on(transport.send(get())).unwrap();
+        assert_eq!(first.status, 200);
+        std::thread::sleep(gap);
+        let second = tauri::async_runtime::block_on(transport.send(get())).unwrap();
+        assert_eq!(second.status, 200);
+        accepted.load(Ordering::SeqCst)
+    }
+
+    /// Regression (lab diff, `perf-twice`): the close counter after 90 s of
+    /// silence opened a new connection (hyper's 90 s idle timeout) and was
+    /// still unanswered at quit; ow-electron reuses its idle session. An
+    /// idle timeout shorter than the gap is what makes the second request
+    /// connect again, and the transport sets none.
+    #[test]
+    fn an_idle_connection_is_reused_however_long_it_waited() {
+        let gap = Duration::from_millis(300);
+        let short = HyperTransport::with_pool_idle_timeout(Some(Duration::from_millis(50)));
+        assert_eq!(connections_for(&short, gap), 2);
+        assert_eq!(POOL_IDLE_TIMEOUT, None);
+        assert_eq!(connections_for(&HyperTransport::new(), gap), 1);
     }
 
     #[test]

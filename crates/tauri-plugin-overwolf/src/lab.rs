@@ -18,9 +18,12 @@
 //!     fields the plugin puts on it (macOS and Linux: the load request;
 //!     Windows: the request handler).
 //!   - `wc-events.jsonl`: ad guest and consent window lifecycle (created,
-//!     navigation, page load, crash, load failure, reload, close).
+//!     navigation, page load, crash, load failure, reload, close), each
+//!     guest move or resize (`bounds`), and the guests' native state
+//!     (`transparent`, `zorder`, `passthrough`).
 //!   - `ipc.jsonl`: host-to-guest messages and calls, guest-to-host events,
-//!     and the element events the host dispatches.
+//!     the element events the host dispatches, and each guest mute change
+//!     (`set-muted`, with its cause).
 //!   - `cookie-changes.jsonl`: changes of the ads data store's cookies
 //!     (macOS: polled every 250 ms), with their attributes.
 //!   - `state-writes.jsonl`: every state file write, with its bytes.
@@ -458,9 +461,11 @@ mod pages {
 })())";
 
     /// Lab only: records the URLs the guest page and its same-origin frames
-    /// request (Resource Timing, at most 2000; what the ow-electron harness
-    /// reads from the developer tools protocol, where the fill impression is
-    /// sent from a same-origin frame), for the live fill check. Read back by
+    /// request (Resource Timing, at most 2000, cut at 800 characters except
+    /// the ad library frame's, whose query is its `options`; what the
+    /// ow-electron harness reads from the developer tools protocol, where the
+    /// fill impression is sent from a same-origin frame), for the live fill
+    /// check and the ad library options (lab check L10). Read back by
     /// [`GUEST_PROBE`] as `labResources`.
     #[cfg(feature = "lab")]
     const GUEST_TAP: &str = r"(() => {
@@ -468,8 +473,9 @@ mod pages {
   if (performance[key]) return;
   const seen = [];
   Object.defineProperty(performance, key, { value: seen });
+  // The ad library frame's URL carries its whole `options` (L10): kept in full.
   const keep = (e) => {
-    if (seen.length < 2000) seen.push(e.name.slice(0, 800));
+    if (seen.length < 2000) seen.push(e.name.slice(0, /oam\/releases\//.test(e.name) ? 16000 : 800));
   };
   const tapped = new WeakSet();
   const tap = (w) => {
@@ -706,7 +712,8 @@ mod window_guard {
             let _ = window.run_on_main_thread(move || {
                 set_alpha_zero(address);
                 if visible {
-                    let _ = w.show();
+                    // Not `show()`: `makeKeyAndOrderFront:` activates the app.
+                    order_front_regardless(address);
                     super::record(
                         "windows.jsonl",
                         || json!({ "kind": "shown", "label": w.label(), "alpha": 0 }),
@@ -722,6 +729,22 @@ mod window_guard {
                 || json!({ "kind": "kept-hidden", "label": window.label() }),
             );
         }
+    }
+
+    /// `-[NSWindow orderFrontRegardless]`: shown without becoming key or
+    /// activating the app (the invisible lab app never comes to the front).
+    #[cfg(target_os = "macos")]
+    fn order_front_regardless(address: usize) {
+        use objc2::msg_send;
+        use objc2::runtime::AnyObject;
+        if address == 0 {
+            return;
+        }
+        // SAFETY: `address` is the live `NSWindow*` Tauri handed out for this
+        // window, used on the main thread.
+        let obj: &AnyObject = unsafe { &*(address as *const AnyObject) };
+        // SAFETY: a public NSWindow method without arguments.
+        let () = unsafe { msg_send![obj, orderFrontRegardless] };
     }
 
     /// `-[NSWindow setAlphaValue:0]` and `setIgnoresMouseEvents:YES`.

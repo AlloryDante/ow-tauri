@@ -496,6 +496,24 @@ impl<R: Runtime> Overwolf<R> {
         self.0.apply_window_state(id, state);
     }
 
+    /// As if the OS reported the minimize of window `id` started (`done`
+    /// false: macOS animates it into the Dock, reporting it neither visible
+    /// nor minimized) or ended (`done` true).
+    pub fn test_window_minimize_stage(&self, id: u32, done: bool) {
+        let stage = if done {
+            crate::platform::webview::MinimizeStage::Did
+        } else {
+            crate::platform::webview::MinimizeStage::Will
+        };
+        self.0.window_minimize_stage(id, stage);
+    }
+
+    /// As if the visibility poll saw window `id` with this OS state; the
+    /// window's analytics periods and its guests follow (E.2 #7, D.5).
+    pub fn test_poll_window(&self, id: u32, visible: bool, minimized: bool) {
+        self.0.apply_poll(&[(id, visible, minimized)]);
+    }
+
     /// The URLs the plugin would have opened in the system browser (a host
     /// without OS queries only records them).
     #[must_use]

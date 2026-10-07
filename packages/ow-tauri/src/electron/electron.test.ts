@@ -295,6 +295,25 @@ describe('BrowserWindow (B.2.2)', () => {
     });
   });
 
+  it('showInactive() asks the plugin for an inactive show, never plugin:window|show', async () => {
+    // plugin:window|show is makeKeyAndOrderFront: on macOS it activates the
+    // app and takes the keyboard from the app the user is in.
+    await start();
+    const win = new BrowserWindow({ show: false });
+    const seen: string[] = [];
+    win.on('show', () => seen.push('show'));
+    win.showInactive();
+    await settle();
+    expect(host.callsOf('window_show_inactive')).toEqual([{ id: 1 }]);
+    expect(names()).not.toContain('plugin:window|show');
+    expect(win.isVisible()).toBe(true);
+    expect(seen).toEqual(['show']);
+    win.showInactive();
+    await settle();
+    expect(host.callsOf('window_show_inactive')).toHaveLength(2);
+    expect(seen).toEqual(['show']);
+  });
+
   it('emits show and hide after the native call when the visibility changes', async () => {
     await start();
     const win = new BrowserWindow({ show: false });

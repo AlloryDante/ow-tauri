@@ -268,8 +268,15 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
   ow-tauri reproduces those inside the shim, not as messages. ow-tauri adds
   `ad-clicked` (OQ-17). `ads.legacyHostMessages` is removed.
 - **Source.** Observed.
-- **Open.** R3-1: messages and visibility on minimize and restore. Interim:
-  nothing sent.
+- **R3-1 (minimize).** ow-electron sends `window-minimized` and
+  `window-hidden` when the minimize ends, and the guest document turns
+  `hidden` after both; a running performance ad then dismisses itself and
+  shuts down. ow-tauri sends the same in the same order (CONTRACT D.5); with
+  the hidden-page timer alignment (CONTRACT B.3.4) its performance ad
+  dismisses itself and shuts down as in ow-electron [OBS: lab
+  perf-minimize].
+- **Open.** A restore with a live guest (not observed). Interim: nothing sent
+  beyond the visibility.
 
 ### OQ-17: click and navigation rules
 
@@ -325,7 +332,8 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 - **Source.** Observed;
   https://dev.overwolf.com/ow-electron/monetization/advertising/overview
   (containers stay visible; `display: none` pauses ads).
-- **Open.** R3-1: minimized windows.
+- **R3-1.** A minimized embedder's guests are hidden until the restore, in
+  both hosts (CONTRACT B.3.4).
 
 ### OQ-28: crash and load-error recovery
 

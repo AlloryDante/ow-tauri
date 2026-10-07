@@ -288,8 +288,9 @@ impl<R: Runtime> Host<R> {
             .focused(false)
             .focusable(false)
             .decorations(false)
-            .skip_taskbar(true)
-            .build()
+            .skip_taskbar(true);
+        // Hidden: building it must not activate the app.
+        let window = crate::platform::webview::without_app_activation(|| window.build())
             .map_err(Error::from)?;
         crate::lab::after_build(&window, false);
         crate::lab::record(

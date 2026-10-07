@@ -352,33 +352,49 @@ impl<R: Runtime> Host<R> {
     /// ends visible periods (E.2 #5, #7) and runs the heartbeat check (#9).
     pub(crate) fn poll_visibility(self: &Arc<Self>) {
         let ids = self.with_core(|c| c.windows.ids());
-        let visible: Vec<(u32, bool)> = ids
+        // (id, visible, minimized). macOS reports a minimized window as not
+        // visible; its minimize is not a hide (window-minimized, then
+        // window-hidden, come from `ads_window_minimized`).
+        let visible: Vec<(u32, bool, bool)> = ids
             .into_iter()
             .map(|id| {
-                let v = self
-                    .app
-                    .get_window(&crate::window::ui_label(id))
-                    .is_some_and(|w| w.is_visible().unwrap_or(false));
-                (id, v)
+                let w = self.app.get_window(&crate::window::ui_label(id));
+                let v = w.as_ref().is_some_and(|w| w.is_visible().unwrap_or(false));
+                let m = w
+                    .as_ref()
+                    .is_some_and(|w| w.is_minimized().unwrap_or(false));
+                (id, v, m)
             })
             .collect();
+        let any_visible = self.apply_poll(&visible);
+        self.analytics_tick(any_visible);
+    }
+
+    /// One visibility poll's observations, `(id, visible, minimized)` as
+    /// the OS reports them: starts and ends visible periods and moves the
+    /// guests with their window. Returns whether any window is in a visible
+    /// period.
+    pub(crate) fn apply_poll(self: &Arc<Self>, visible: &[(u32, bool, bool)]) -> bool {
         let now = self.now();
-        let (shown, ended, hidden, any_visible) = self.with_core(|c| {
-            let mut shown = Vec::new();
+        let (ended, guests, any_visible) = self.with_core(|c| {
+            let mut shown = false;
             let mut ended = Vec::new();
-            let mut hidden = Vec::new();
-            for (id, v) in visible {
+            let mut guests = Vec::new();
+            for &(id, v, minimized) in visible {
                 let url = Self::window_url(c, id);
                 let Some(entry) = c.windows.get_mut(id) else {
                     continue;
                 };
-                match entry.observe_visibility(v, now, url.as_deref()) {
-                    VisibilityChange::Shown => shown.push(id),
-                    VisibilityChange::Ended(p) => {
-                        ended.push(p);
-                        hidden.push(id);
-                    }
+                match entry.observe_window(v, minimized, now, url.as_deref()) {
+                    VisibilityChange::Shown => shown = true,
+                    VisibilityChange::Ended(p) => ended.push(p),
                     VisibilityChange::None => {}
+                }
+                // The guests follow the window itself, not its analytics
+                // periods; a minimize reaches them through
+                // `ads_window_minimized`.
+                if let Some(v) = entry.guests_follow(v, minimized) {
+                    guests.push((id, v));
                 }
             }
             let any_visible = c.windows.ids().iter().any(|id| {
@@ -386,21 +402,27 @@ impl<R: Runtime> Host<R> {
                     .get(*id)
                     .is_some_and(|e| e.visible_since.is_some())
             });
-            (shown, ended, hidden, any_visible)
+            // The first-visible-window heartbeat is queued under the same
+            // lock that starts the visible period: a guest attaching on
+            // another thread right after sees the window visible, and its
+            // 400025 must not overtake the heartbeat (E.2 #5, #6). The
+            // analytics session never takes the core lock.
+            if shown {
+                self.analytics_window_shown();
+            }
+            (ended, guests, any_visible)
         });
-        for id in hidden {
-            self.ads_window_hidden(id);
-        }
-        for &id in &shown {
-            self.ads_window_shown(id);
-        }
-        if !shown.is_empty() {
-            self.analytics_window_shown();
+        for (id, v) in guests {
+            if v {
+                self.ads_window_shown(id);
+            } else {
+                self.ads_window_hidden(id);
+            }
         }
         for p in ended {
             self.analytics_window_closed(&p.name, &p.title, p.visible_ms);
         }
-        self.analytics_tick(any_visible);
+        any_visible
     }
 
     /// A page of window `id` finished loading: fixes its analytics name

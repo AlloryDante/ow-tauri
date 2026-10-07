@@ -44,6 +44,7 @@ pub const COMMANDS: &[&str] = &[
     "window_eval",
     "window_devtools",
     "window_set_name",
+    "window_show_inactive",
     "screen_snapshot",
     "shell_open_external",
     "shell_open_path",

@@ -296,6 +296,12 @@ fn setup<R: Runtime>(
         create_main_webview_later(app);
     }
     host.spawn_ticker();
+    let weak = Arc::downgrade(&host);
+    crate::platform::webview::observe_minimize(move |ns_window, stage| {
+        if let Some(host) = weak.upgrade() {
+            host.os_window_minimize(ns_window, stage);
+        }
+    });
     crate::lab::start(app);
     Ok(())
 }

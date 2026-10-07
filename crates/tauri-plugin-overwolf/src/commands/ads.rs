@@ -204,7 +204,12 @@ pub(crate) async fn adview_mount<R: Runtime>(
     let mount: AdviewMount = body(&request, "adview_mount")?;
     // The guest's `<UA>` and `windowTitle` (E.1, D.2) are fixed at creation.
     host.wait_user_agent().await;
-    let title = document_title(&webview).await;
+    // The title the element read at mount; asking the page instead can
+    // time out on a busy machine and fall back to the native title.
+    let title = match mount.document_title.clone() {
+        Some(t) => Some(t.chars().take(crate::ads::MAX_DOCUMENT_TITLE).collect()),
+        None => document_title(&webview).await,
+    };
     let guest_label = host.mount_guest(&webview, mount, title)?;
     Ok(Mounted { guest_label })
 }
@@ -251,8 +256,16 @@ pub(crate) async fn adview_command<R: Runtime>(
     )
 }
 
+/// Synchronous on purpose, as [`cmp_event`]: a guest's messages are handled
+/// in the order it sent them. Async, a `setMute(false)`, the `play` it
+/// belongs to and the `setMute(true)` after it, sent within a millisecond,
+/// reached the host in any order (lab diff, `reward-optin`).
 #[tauri::command]
-pub(crate) async fn adview_event<R: Runtime>(
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri hands command arguments over by value"
+)]
+pub(crate) fn adview_event<R: Runtime>(
     webview: Webview<R>,
     state: State<'_, Overwolf<R>>,
     request: Request<'_>,
@@ -271,8 +284,17 @@ pub(crate) async fn adview_event<R: Runtime>(
     host.guest_event(&label, event)
 }
 
+/// Synchronous on purpose: Tauri runs it on the main thread in arrival
+/// order, so `saveConsent` is stored and sent to the guests before the
+/// `saveUnifiedConsent` the page calls right after it, as in ow-electron
+/// (D.6.6). An `async` command runs on a worker pool, where two calls a
+/// millisecond apart can swap.
 #[tauri::command]
-pub(crate) async fn cmp_event<R: Runtime>(
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri hands command arguments over by value"
+)]
+pub(crate) fn cmp_event<R: Runtime>(
     webview: Webview<R>,
     state: State<'_, Overwolf<R>>,
     name: CmpEventName,
@@ -284,4 +306,22 @@ pub(crate) async fn cmp_event<R: Runtime>(
     }
     let url = webview.url().ok();
     host(&state).cmp_event(&label, url.as_ref(), name, data)
+}
+
+#[cfg(test)]
+mod tests {
+    /// Regression (lab diff, `reward-optin` and the consent order): the
+    /// commands whose calls must be handled in arrival order stay
+    /// synchronous, so Tauri runs them on the main thread one after another.
+    #[test]
+    fn ordered_commands_stay_synchronous() {
+        let source = include_str!("ads.rs");
+        for name in ["adview_event", "cmp_event"] {
+            assert!(
+                source.contains(&format!("pub(crate) fn {name}<")),
+                "{name} must be a synchronous command"
+            );
+            assert!(!source.contains(&format!("pub(crate) async fn {name}<")));
+        }
+    }
 }

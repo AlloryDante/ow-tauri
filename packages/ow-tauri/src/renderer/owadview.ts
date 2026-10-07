@@ -11,8 +11,10 @@
  * exactly as ow-electron does (B.3.5).
  *
  * The element lifecycle follows ow-electron [OBS]: an element the app
- * removes after attach gets a plain `destroyed` event, then its guest
- * closes, and it never attaches again (the app creates a new element); a
+ * removes or moves after attach loses its guest and never attaches again
+ * (the app creates a new element); after the guest closed it gets a plain
+ * `destroyed` event only when it is back in the document by then (a move),
+ * as ow-electron's late `destroyed` reaches only an attached element; a
  * performance element leaves the document in the task after its `shutdown`
  * event; a second performance element while one is up is removed at once.
  *
@@ -24,7 +26,7 @@
  * `<iframe>` placeholder [OBS]. A performance element gets no shadow root:
  * it gets the inline style `pointer-events: none;` and one light-DOM
  * overlay `div`, and turns `pointer-events: auto` at its first
- * `display_ad_loaded` [OBS].
+ * `performance_ad_loaded` (still `none` after `display_ad_loaded`) [OBS].
  *
  * @packageDocumentation
  */
@@ -51,14 +53,23 @@ export const TAG = 'owadview';
 
 /**
  * The default style: zero specificity, so any app rule wins (B.3.1 item 1).
- * A performance element is a 0x0 block whose overlay `div` (a flex box) is
- * fixed over the viewport, as on ow-electron [OBS]; it never takes room in
- * the page.
+ * An element is an `inline-flex` box filling its container, as ow-electron's
+ * element computes [OBS]. A performance element is a 0x0 block whose overlay
+ * `div` (a flex box) is fixed over the viewport, as on ow-electron [OBS]; it
+ * never takes room in the page.
  */
 export const DEFAULT_STYLE =
-  ':where(owadview) { display: block; width: 100%; height: 100%; }' +
-  ' :where(owadview[performance]) { width: 0; height: 0; }' +
+  ':where(owadview) { display: inline-flex; width: 100%; height: 100%; }' +
+  ' :where(owadview[performance]) { display: block; width: 0; height: 0; }' +
   ' :where(owadview[performance]) > :where(div) { display: flex; }';
+
+/**
+ * The ad event at which a performance element turns `pointer-events: auto`
+ * (before it is dispatched): `performance_ad_loaded`. ow-electron's element
+ * is still `none` after `display_ad_loaded` and `auto` after
+ * `performance_ad_loaded`, with no host message in between [OBS].
+ */
+export const MODAL_EVENT = 'performance_ad_loaded';
 
 /**
  * Inline style of the light-DOM `div` a performance element holds after
@@ -196,7 +207,7 @@ interface Entry {
   hostRemoved: boolean;
   /** The light-DOM overlay `div` of a performance element. */
   overlay: HTMLElement | undefined;
-  /** A performance mount took its first `display_ad_loaded`: the overlay takes input. */
+  /** A performance mount took its first {@link MODAL_EVENT}: the overlay takes input. */
   modal: boolean;
   /** Mount generation: incremented by every mount and unmount. */
   gen: number;
@@ -586,6 +597,16 @@ export class AdviewRuntime implements FacadeOwadview {
         }
         continue;
       }
+      // Removed, maybe inserted again in the same task (a move): dead either way.
+      for (const node of record.removedNodes) {
+        if (node.nodeType !== 1) continue;
+        for (const entry of new Set([...this.#tracked.values(), ...this.#live.values()])) {
+          if (entry.used && !entry.dead && (node === entry.el || node.contains(entry.el))) {
+            this.#untrack(entry);
+            this.#detach(entry);
+          }
+        }
+      }
       for (const node of record.addedNodes) {
         if (node.nodeType === 1) this.#scan(node as Element);
       }
@@ -681,7 +702,15 @@ export class AdviewRuntime implements FacadeOwadview {
       this.#attachShadow(entry);
     }
     this.#live.set(id, entry);
-    const request = { elementId: id, attributes: current, rect: entry.rect, visible };
+    // `windowTitle` (D.2) is the title at mount: sent along, so Rust does
+    // not have to ask the page for it.
+    const request = {
+      elementId: id,
+      attributes: current,
+      rect: entry.rect,
+      visible,
+      documentTitle: this.#env.document.title,
+    };
     this.#enqueue(entry, async () => {
       try {
         await this.#services.command('adview_mount', request);
@@ -699,22 +728,25 @@ export class AdviewRuntime implements FacadeOwadview {
   }
 
   /**
-   * The element left the document after it was attached: it is dead from
-   * now on (B.3.4). A mounted element the app removed gets a plain
-   * `destroyed` event first, then its guest closes, as on ow-electron
-   * [OBS]; one the runtime removed after `shutdown` was unmounted already.
+   * The element left the document (or moved) after it was attached: it is
+   * dead from now on (B.3.4) and its guest closes. ow-electron then sends a
+   * plain `destroyed`, which reaches the element only when it is attached
+   * again by then (moved in one task); one removed for good hears nothing
+   * [OBS]. One the runtime removed after `shutdown` was unmounted already.
    */
   #detach(entry: Entry): void {
     entry.dead = true;
     if (!entry.mounted) return;
-    if (!entry.hostRemoved) {
+    const notify = !entry.hostRemoved;
+    this.#unmount(entry, () => {
+      if (!notify || !entry.el.isConnected) return;
       const EventCtor = (this.#env.window as Window & { Event?: typeof Event }).Event ?? Event;
       entry.el.dispatchEvent(createAdviewEvent('destroyed', undefined, EventCtor));
-    }
-    this.#unmount(entry);
+    });
   }
 
-  #unmount(entry: Entry): void {
+  /** Closes the element's guest; `closed` runs once the host answered. */
+  #unmount(entry: Entry, closed?: () => void): void {
     const id = entry.id;
     this.#forget(entry);
     this.#enqueue(entry, async () => {
@@ -723,6 +755,7 @@ export class AdviewRuntime implements FacadeOwadview {
       } catch (error) {
         this.#services.log('debug', `adview_unmount ${id} failed: ${(error as Error).message}`);
       }
+      closed?.();
     });
     this.#updatePoll();
   }
@@ -1069,7 +1102,7 @@ export class AdviewRuntime implements FacadeOwadview {
       return;
     if (source !== 'host' && CLICK_NAMES.has(name)) entry.lastGuestClick = now;
     // The overlay turns modal before the app hears of the load [OBS].
-    if (name === 'display_ad_loaded' && entry.attributes?.performance === true && !entry.modal) {
+    if (name === MODAL_EVENT && entry.attributes?.performance === true && !entry.modal) {
       entry.modal = true;
       entry.el.style.setProperty('pointer-events', 'auto');
     }

@@ -138,7 +138,17 @@ fn invoke_from(
     cmd: &str,
     body: Value,
 ) -> Result<Value, Value> {
-    let webview = AnyWebview(app.get_webview(label).unwrap());
+    invoke_webview(app.get_webview(label).unwrap(), url, cmd, body)
+}
+
+/// [`invoke_from`] on a webview handle (usable from any thread).
+fn invoke_webview(
+    webview: tauri::Webview<MockRuntime>,
+    url: &str,
+    cmd: &str,
+    body: Value,
+) -> Result<Value, Value> {
+    let webview = AnyWebview(webview);
     get_ipc_response(
         &webview,
         InvokeRequest {
@@ -981,7 +991,8 @@ fn native_steps(app: &App<MockRuntime>, label: &str) -> Vec<Value> {
     app.overwolf()
         .test_guest_trace()
         .into_iter()
-        .filter(|e| e["label"] == label && e.get("kind").is_some())
+        // `created` records the mount itself, not a native step.
+        .filter(|e| e["label"] == label && e.get("kind").is_some() && e["kind"] != "created")
         .collect()
 }
 
@@ -1069,8 +1080,10 @@ fn the_performance_guest_stays_on_top() {
 }
 
 /// AF-12: clicks pass through a performance guest from its mount until its
-/// first `display_ad_loaded`, switched in the host without a round trip;
-/// standard guests never pass input through.
+/// first `performance_ad_loaded` (ow-electron's element stays
+/// `pointer-events: none` after `display_ad_loaded` until then [OBS]),
+/// switched in the host without a round trip; standard guests never pass
+/// input through.
 #[test]
 fn the_performance_guest_passes_input_through_until_its_first_ad() {
     let (app, captured) = app("guest-passthrough");
@@ -1111,22 +1124,24 @@ fn the_performance_guest_passes_input_through_until_its_first_ad() {
         )
         .unwrap();
     };
-    // Other messages leave it alone; the first display_ad_loaded ends it,
-    // a second one changes nothing.
+    // Other messages leave it alone, `display_ad_loaded` included; the first
+    // performance_ad_loaded ends it, a second one changes nothing.
     event(&perf, "impression");
-    assert_eq!(ow.test_guest(&perf).unwrap()["passthrough"], true);
     event(&perf, "display_ad_loaded");
+    assert_eq!(ow.test_guest(&perf).unwrap()["passthrough"], true);
+    assert_eq!(switches(&perf), [json!(true)]);
+    event(&perf, "performance_ad_loaded");
     assert_eq!(switches(&perf), [json!(true), json!(false)]);
     assert_eq!(ow.test_guest(&perf).unwrap()["passthrough"], false);
-    event(&perf, "display_ad_loaded");
-    event(&standard, "display_ad_loaded");
+    event(&perf, "performance_ad_loaded");
+    event(&standard, "performance_ad_loaded");
     assert_eq!(switches(&perf), [json!(true), json!(false)]);
     assert!(switches(&standard).is_empty());
     // The event still reaches the element, after the switch.
     let all = wait_for(&captured, |m| {
         adview_events(m)
             .iter()
-            .filter(|(s, n)| s == "guest" && n == "display_ad_loaded")
+            .filter(|(s, n)| s == "guest" && n == "performance_ad_loaded")
             .count()
             == 3
     });
@@ -1382,6 +1397,96 @@ impl tauri_plugin_overwolf::analytics::Transport for Requests {
     }
 }
 
+/// The host's analytics requests by kind, in send order.
+fn request_names(requests: &Requests) -> Vec<String> {
+    requests
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            if r.url.contains("hasVisibleWindow%22%3Atrue") {
+                "visible-heartbeat".to_owned()
+            } else if r.url.contains("InsertStats") {
+                let body = String::from_utf8_lossy(r.body.as_deref().unwrap_or_default());
+                if body.contains("400025") {
+                    "400025"
+                } else {
+                    "stats"
+                }
+                .to_owned()
+            } else {
+                "other".to_owned()
+            }
+        })
+        .collect()
+}
+
+/// Regression (lab diff, `sizes` with seven slots): guests attaching at
+/// once on several threads. One poll started the window's visible period;
+/// the others saw it visible and sent their 400025 before the first had
+/// queued the first-visible-window heartbeat.
+#[test]
+fn guests_attaching_at_once_all_count_after_the_shown_window() {
+    let requests = Arc::new(Requests::default());
+    let mut context = ow_tauri_acl_tests::context();
+    context.config_mut().plugins.0.insert(
+        "overwolf".into(),
+        json!({ "state": { "appDataDir": temp_dir("shown-before-attach-at-once") } }),
+    );
+    let app = mock_builder()
+        .plugin(
+            Builder::new()
+                .manifest_json(ow_tauri_acl_tests::manifest())
+                .companion_plugins(false)
+                .main_webview(false)
+                .skip_os_queries()
+                .skip_updater_os_steps()
+                .analytics_transport(Arc::clone(&requests) as _)
+                .argv(vec!["acl-fixture".into()])
+                .build(),
+        )
+        .build(context)
+        .unwrap();
+    main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
+    invoke(&app, "ow-main", "main_ready", json!({})).unwrap();
+    let start = Arc::new(std::sync::Barrier::new(8));
+    let mounts: Vec<_> = (0..8)
+        .map(|i| {
+            let webview = app.get_webview("bw-1").unwrap();
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || {
+                start.wait();
+                invoke_webview(
+                    webview,
+                    origin(),
+                    "adview_mount",
+                    mount_body(&format!("e{i}")),
+                )
+                .unwrap();
+            })
+        })
+        .collect();
+    for m in mounts {
+        m.join().unwrap();
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let names = loop {
+        let names = request_names(&requests);
+        if names.iter().filter(|n| *n == "400025").count() == 8 || Instant::now() > deadline {
+            break names;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let heartbeat = names.iter().position(|n| n == "visible-heartbeat");
+    let first_attach = names.iter().position(|n| n == "400025");
+    assert!(
+        heartbeat.is_some() && first_attach.is_some() && heartbeat < first_attach,
+        "the first-visible-window heartbeat precedes every 400025: {names:?}"
+    );
+}
+
 #[test]
 fn a_shown_window_counts_before_a_guest_that_attaches_after_it() {
     let requests = Arc::new(Requests::default());
@@ -1444,6 +1549,78 @@ fn a_shown_window_counts_before_a_guest_that_attaches_after_it() {
         heartbeat.is_some() && attach.is_some() && heartbeat < attach,
         "the first-visible-window heartbeat precedes 400025: {names:?}"
     );
+}
+
+#[test]
+fn a_hidden_page_reload_waits_and_runs_when_visible_again() {
+    let (app, _) = app("guest-reload-hidden");
+    main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
+    let ow = app.overwolf();
+    let guest = invoke(&app, "bw-1", "adview_mount", mount_body("e1")).unwrap()["guestLabel"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // The first navigation is due after the mount delay.
+    ow.test_ads_tick(ow.test_now() + 3_100);
+    let page = tauri::Url::parse(ADVIEW_PAGE).unwrap();
+    app.get_webview(&guest)
+        .unwrap()
+        .navigate(page.clone())
+        .unwrap();
+    ow.test_page_load(&guest, &page, true);
+    let event = |name: &str| {
+        invoke_from(
+            &app,
+            &guest,
+            ADVIEW_PAGE,
+            "adview_event",
+            json!({ "name": name, "data": {} }),
+        )
+        .unwrap();
+    };
+    event("__host:ready");
+    let state = |key: &str| ow.test_guest(&guest).unwrap()[key].clone();
+    // Hidden for 2 s, then shown: the page's reload request is held, then
+    // runs once the guest is visible. Regression (lab diff, L7): dropping
+    // it left a page that had given up its ad with nothing to play.
+    ow.test_ads_window_visible(1, false);
+    assert_eq!(state("visibilityState"), "hidden");
+    event("__host:reload");
+    assert_eq!(state("reloadScheduled"), true);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(state("ready"), true, "no reload during the hold");
+    ow.test_ads_window_visible(1, true);
+    assert_eq!(state("reloadScheduled"), true);
+    ow.test_ads_tick(ow.test_now());
+    assert_eq!(state("reloadScheduled"), false);
+    assert_eq!(state("ready"), false, "the reload ran once visible");
+    app.get_webview(&guest)
+        .unwrap()
+        .navigate(page.clone())
+        .unwrap();
+    ow.test_page_load(&guest, &page, true);
+    event("__host:ready");
+    assert_eq!(state("ready"), true);
+    // Hidden for longer: the held reload runs once the hold ends.
+    ow.test_ads_window_visible(1, false);
+    event("__host:reload");
+    ow.test_ads_tick(ow.test_now() + 3_000);
+    assert_eq!(state("reloadScheduled"), false);
+    assert_eq!(state("ready"), false, "the reload ran");
+    app.get_webview(&guest)
+        .unwrap()
+        .navigate(page.clone())
+        .unwrap();
+    ow.test_page_load(&guest, &page, true);
+    event("__host:ready");
+    // Visible again after the held reload ran: nothing more to run.
+    // Regression (lab diff, reward-visibility-probe): a second reload of
+    // the fresh page when the slot came back.
+    ow.test_ads_window_visible(1, true);
+    assert_eq!(state("reloadScheduled"), false);
+    ow.test_ads_tick(ow.test_now());
+    assert_eq!(state("ready"), true, "no second reload once visible");
 }
 
 #[test]
@@ -1673,15 +1850,140 @@ fn a_minimized_window_hides_its_guests_until_restored() {
         .unwrap()
         .to_owned();
     let state = |key: &str| ow.test_guest(&guest).unwrap()[key].clone();
+    let messages = || -> Vec<Value> {
+        ow.test_guest_trace()
+            .into_iter()
+            .filter(|r| r["via"] == "private-message" && r["label"] == guest.as_str())
+            .map(|r| r["message"]["type"].clone())
+            .collect()
+    };
     assert_eq!(state("visibilityState"), "visible");
+    let before = messages().len();
     ow.test_window_minimized(1, true);
     assert_eq!(state("embedderMinimized"), true);
     assert_eq!(state("visibilityState"), "hidden");
+    // ow-electron [OBS]: window-minimized, then window-hidden.
+    assert_eq!(
+        messages()[before..],
+        [json!("window-minimized"), json!("window-hidden")]
+    );
     // Shown but still minimized: still hidden.
     ow.test_ads_window_visible(1, true);
     assert_eq!(state("visibilityState"), "hidden");
     ow.test_window_minimized(1, false);
     assert_eq!(state("visibilityState"), "visible");
+    // Restore sends no message.
+    assert_eq!(messages().len(), before + 2);
+    // A hidden window that is then minimized gets no second window-hidden.
+    ow.test_ads_window_visible(1, false);
+    let hidden = messages().len();
+    ow.test_window_minimized(1, true);
+    assert_eq!(messages()[hidden..], [json!("window-minimized")]);
+}
+
+/// Regression (lab diff, `perf-minimize`): while macOS animates a window
+/// into the Dock it reports it neither visible nor minimized. The poll took
+/// that for a hide, so the guests got `window-hidden` without
+/// `window-minimized`; the performance ad then closed before the window was
+/// seen minimized.
+#[test]
+fn a_window_animating_into_the_dock_is_minimized_not_hidden() {
+    let (app, _) = app("guest-minimizing");
+    main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
+    let ow = app.overwolf();
+    let guest = invoke(&app, "bw-1", "adview_mount", mount_body("e1")).unwrap()["guestLabel"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let state = |key: &str| ow.test_guest(&guest).unwrap()[key].clone();
+    let messages = || -> Vec<Value> {
+        ow.test_guest_trace()
+            .into_iter()
+            .filter(|r| r["via"] == "private-message" && r["label"] == guest.as_str())
+            .map(|r| r["message"]["type"].clone())
+            .collect()
+    };
+    ow.test_poll_window(1, true, false);
+    let before = messages().len();
+    ow.test_window_minimize_stage(1, false);
+    // Animating: neither visible nor minimized, and not a hide.
+    ow.test_poll_window(1, false, false);
+    assert_eq!(state("visibilityState"), "visible");
+    assert_eq!(messages().len(), before);
+    let steps = || -> Vec<Value> {
+        ow.test_guest_trace()
+            .into_iter()
+            .filter(|r| {
+                r["label"] == guest.as_str()
+                    && (r["via"] == "private-message" || r["function"] == "setVisibility")
+            })
+            .map(|r| {
+                if r["via"] == "private-message" {
+                    r["message"]["type"].clone()
+                } else {
+                    r["args"].clone()
+                }
+            })
+            .collect()
+    };
+    let steps_before = steps().len();
+    ow.test_window_minimize_stage(1, true);
+    assert_eq!(state("embedderMinimized"), true);
+    assert_eq!(state("visibilityState"), "hidden");
+    assert_eq!(
+        messages()[before..],
+        [json!("window-minimized"), json!("window-hidden")]
+    );
+    // ow-electron (observed): both messages reach the guest before its
+    // document turns hidden.
+    assert_eq!(
+        steps()[steps_before..],
+        [
+            json!("window-minimized"),
+            json!("window-hidden"),
+            json!("hidden")
+        ]
+    );
+    // The poll then sees it minimized: nothing more.
+    ow.test_poll_window(1, false, true);
+    // Restored: visible again, no message, and no hide on the next poll.
+    ow.test_window_minimized(1, false);
+    ow.test_poll_window(1, true, false);
+    assert_eq!(state("visibilityState"), "visible");
+    assert_eq!(messages().len(), before + 2);
+}
+
+/// Regression (lab diff, `high-impact-only` on a loaded machine): the
+/// guest's `windowTitle` was asked from the page with a 250 ms limit and fell
+/// back to the native window title when the page answered late. The title
+/// the element sends with the mount wins, cut to 1024 characters.
+#[test]
+fn the_mount_carries_the_document_title() {
+    let (app, _) = app("guest-title");
+    main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
+    let ow = app.overwolf();
+    let title = |label: &str| {
+        ow.test_guest_trace()
+            .into_iter()
+            .find(|r| r["kind"] == "created" && r["label"] == label)
+            .map(|r| r["windowTitle"].clone())
+    };
+    let mut body = mount_body("e1");
+    body["documentTitle"] = json!("Page Title");
+    let guest = invoke(&app, "bw-1", "adview_mount", body).unwrap()["guestLabel"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(title(&guest), Some(json!("Page Title")));
+    let mut body = mount_body("e2");
+    body["documentTitle"] = json!("x".repeat(2000));
+    let guest = invoke(&app, "bw-1", "adview_mount", body).unwrap()["guestLabel"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(title(&guest), Some(json!("x".repeat(1024))));
 }
 
 #[test]
