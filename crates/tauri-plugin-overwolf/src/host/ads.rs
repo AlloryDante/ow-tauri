@@ -170,6 +170,13 @@ enum Next {
     ScheduleReload(u64),
 }
 
+/// Whether a minimize also sends the guests `window-hidden` after
+/// `window-minimized` (D.5). ow-electron sends both on macOS but only
+/// `window-minimized` on Windows, where a minimized window is not hidden
+/// [OBS: Windows lab, `perf-minimize`]; Linux keeps the macOS behaviour
+/// (not observed).
+pub(crate) const MINIMIZE_SENDS_WINDOW_HIDDEN: bool = !cfg!(windows);
+
 /// Platform reports for guests and consent windows, routed to the host.
 pub(super) struct Reports<R: Runtime>(pub(super) Weak<Host<R>>);
 
@@ -1447,9 +1454,10 @@ impl<R: Runtime> Host<R> {
 
     /// The embedder window `id` was minimized or restored: its guests'
     /// documents are hidden while it is minimized. On minimize each guest
-    /// gets a `window-minimized` and a `window-hidden` message, in that
+    /// gets a `window-minimized` message and, except on Windows (see
+    /// [`MINIMIZE_SENDS_WINDOW_HIDDEN`]), a `window-hidden` message, in that
     /// order, and then its document turns `hidden`, as in ow-electron
-    /// (observed: the guest document reports `hidden` after both
+    /// (observed: the guest document reports `hidden` after the
     /// messages). No `window-hidden` when the window was
     /// already hidden. Nothing is sent on restore beyond the visibility
     /// (D.5).
@@ -1464,7 +1472,7 @@ impl<R: Runtime> Host<R> {
             });
             if changed && minimized {
                 self.guest_deliver(&l, crate::ads::WINDOW_MINIMIZED, None);
-                if !already_hidden {
+                if MINIMIZE_SENDS_WINDOW_HIDDEN && !already_hidden {
                     self.guest_deliver(&l, "window-hidden", None);
                 }
             }

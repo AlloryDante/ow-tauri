@@ -30,9 +30,9 @@ pub const ADVIEW_CONFIG_TOKEN: &str = "/*__OW_TAURI_ADVIEW_CONFIG__*/null";
 pub const MODAL_EVENT: &str = "performance_ad_loaded";
 
 /// The host message a guest gets when its embedder window is minimized,
-/// just before `window-hidden` (D.5). ow-electron sends both on minimize, and
-/// a running performance ad then dismisses itself (`performance_ad_dismiss`)
-/// (observed).
+/// just before `window-hidden` (D.5). ow-electron sends both on minimize
+/// (only this one on Windows), and a running performance ad then dismisses
+/// itself (`performance_ad_dismiss`) (observed).
 ///
 /// ```
 /// assert_eq!(tauri_plugin_overwolf::ads::WINDOW_MINIMIZED, "window-minimized");

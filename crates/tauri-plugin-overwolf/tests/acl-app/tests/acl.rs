@@ -2043,23 +2043,33 @@ fn a_minimized_window_hides_its_guests_until_restored() {
     ow.test_window_minimized(1, true);
     assert_eq!(state("embedderMinimized"), true);
     assert_eq!(state("visibilityState"), "hidden");
-    // ow-electron [OBS]: window-minimized, then window-hidden.
-    assert_eq!(
-        messages()[before..],
-        [json!("window-minimized"), json!("window-hidden")]
-    );
+    // ow-electron [OBS]: window-minimized, then window-hidden; on Windows
+    // window-minimized only.
+    let on_minimize = minimize_messages();
+    assert_eq!(messages()[before..], on_minimize);
     // Shown but still minimized: still hidden.
     ow.test_ads_window_visible(1, true);
     assert_eq!(state("visibilityState"), "hidden");
     ow.test_window_minimized(1, false);
     assert_eq!(state("visibilityState"), "visible");
     // Restore sends no message.
-    assert_eq!(messages().len(), before + 2);
+    assert_eq!(messages().len(), before + on_minimize.len());
     // A hidden window that is then minimized gets no second window-hidden.
     ow.test_ads_window_visible(1, false);
     let hidden = messages().len();
     ow.test_window_minimized(1, true);
     assert_eq!(messages()[hidden..], [json!("window-minimized")]);
+}
+
+/// The host messages a guest gets when its embedder window is minimized:
+/// `window-minimized`, then `window-hidden`, except on Windows, where
+/// ow-electron sends `window-minimized` only (Windows lab, `perf-minimize`).
+fn minimize_messages() -> Vec<Value> {
+    if cfg!(windows) {
+        vec![json!("window-minimized")]
+    } else {
+        vec![json!("window-minimized"), json!("window-hidden")]
+    }
 }
 
 /// Regression (lab diff, `perf-minimize`): while macOS animates a window
@@ -2112,27 +2122,20 @@ fn a_window_animating_into_the_dock_is_minimized_not_hidden() {
     ow.test_window_minimize_stage(1, true);
     assert_eq!(state("embedderMinimized"), true);
     assert_eq!(state("visibilityState"), "hidden");
-    assert_eq!(
-        messages()[before..],
-        [json!("window-minimized"), json!("window-hidden")]
-    );
-    // ow-electron (observed): both messages reach the guest before its
+    let on_minimize = minimize_messages();
+    assert_eq!(messages()[before..], on_minimize);
+    // ow-electron (observed): the messages reach the guest before its
     // document turns hidden.
-    assert_eq!(
-        steps()[steps_before..],
-        [
-            json!("window-minimized"),
-            json!("window-hidden"),
-            json!("hidden")
-        ]
-    );
+    let mut expected = on_minimize.clone();
+    expected.push(json!("hidden"));
+    assert_eq!(steps()[steps_before..], expected);
     // The poll then sees it minimized: nothing more.
     ow.test_poll_window(1, false, true);
     // Restored: visible again, no message, and no hide on the next poll.
     ow.test_window_minimized(1, false);
     ow.test_poll_window(1, true, false);
     assert_eq!(state("visibilityState"), "visible");
-    assert_eq!(messages().len(), before + 2);
+    assert_eq!(messages().len(), before + on_minimize.len());
 }
 
 /// Regression (lab diff, `high-impact-only` on a loaded machine): the

@@ -1383,7 +1383,8 @@ when it is scrolled out of the viewport, and when the embedder window is
 hidden (plus a `window-hidden` message, D.5); a resize signals nothing, and
 the window's position on the screen plays no part (an off-screen window
 still fills test ads) [OBS]. A minimize signals `hidden` plus the
-`window-minimized` and `window-hidden` messages (D.5) [OBS]. About 2 s after `hidden` the ad page stops and
+`window-minimized` and `window-hidden` messages (D.5) [OBS]; on Windows only
+`window-minimized` [OBS: Windows lab]. About 2 s after `hidden` the ad page stops and
 calls `__overwolf__.reload()`; the host reloads the guest 3 to 5 s after
 `hidden`, and the reloaded page waits until it is `visible` again [OBS].
 ow-tauri passes its visibility result to the guest the same way (D.5) and
@@ -2375,7 +2376,11 @@ Windows, where the main page loads after the webview exists [OBS: Windows
 lab]. This keeps
 `disableAnonymousAnalytics()` called at module load effective, as in
 ow-electron. If `main_ready` never arrives, the sequence starts after 10 s
-with a warning, and #2 with it.
+with a warning, and #2 with it. #6 leaves when the guest's webview exists:
+ow-electron creates the guests mounted together within about 100 ms, while
+on Windows WebView2 creates them on the main thread one after another
+(80 to 150 ms each), so their 400025 reports spread over that time [OBS:
+Windows lab].
 
 **Second launch:** #1 and 400022 are not sent; everything else is unchanged
 [OBS].
