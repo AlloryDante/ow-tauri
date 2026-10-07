@@ -1,7 +1,8 @@
 //! `ow-electron.json`, shared with ow-electron (CONTRACT F.2).
 //!
 //! ow-tauri reads `firstLaunch`, `cmp.*` and `utmParams`, and writes only
-//! `firstLaunch` and `cmp.*`. It never writes `utmParams` and never removes
+//! `firstLaunch`, `cmp.*` and `eHashes` (the last email hashes an app set,
+//! as ow-electron does (observed)). It never writes `utmParams` and never removes
 //! keys; every other key keeps its value (and, with `serde_json`'s
 //! `preserve_order`, its position). Writes are read-modify-write under an
 //! in-process lock, through a temp file renamed over the original. A file
@@ -181,6 +182,23 @@ impl OwElectronFile {
         })
     }
 
+    /// Writes `eHashes: { sha1, md5, sha256 }`, replacing an earlier value
+    /// (ow-electron stores the hashes of every `setUserEmailHashes()`
+    /// (observed)).
+    ///
+    /// # Errors
+    ///
+    /// As [`OwElectronFile::update`].
+    pub fn write_e_hashes(&self, sha1: &str, md5: &str, sha256: &str) -> Result<(), WriteError> {
+        self.update(|map| {
+            let mut hashes = Map::new();
+            hashes.insert("sha1".into(), Value::String(sha1.to_owned()));
+            hashes.insert("md5".into(), Value::String(md5.to_owned()));
+            hashes.insert("sha256".into(), Value::String(sha256.to_owned()));
+            map.insert("eHashes".into(), Value::Object(hashes));
+        })
+    }
+
     /// Writes the fields of `cmp` that are set, keeping other keys of the
     /// existing `cmp` object.
     ///
@@ -277,6 +295,26 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(file.path()).unwrap(),
             r#"{"firstLaunch":true,"cmp":{"cmpString":"CQTEST","timeStamp":1791302123,"unifiedConsentString":"cmp%3DCQTEST%26ac%3D"}}"#
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn e_hashes_follow_cmp_as_in_ow_electron() {
+        let dir = test_dir("owe-ehashes");
+        let file = OwElectronFile::new(dir.join("ow-electron.json"));
+        file.set_first_launch().unwrap();
+        file.write_cmp(&CmpBlock {
+            cmp_string: Some("CQ".into()),
+            time_stamp: Some(1),
+            unified_consent_string: None,
+        })
+        .unwrap();
+        file.write_e_hashes("old", "old", "old").unwrap();
+        file.write_e_hashes("s1", "m5", "s256").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(file.path()).unwrap(),
+            r#"{"firstLaunch":true,"cmp":{"cmpString":"CQ","timeStamp":1},"eHashes":{"sha1":"s1","md5":"m5","sha256":"s256"}}"#
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
