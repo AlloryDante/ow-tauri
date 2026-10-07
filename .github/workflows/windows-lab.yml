@@ -102,6 +102,14 @@ jobs:
           node -e "require('fs').accessSync(require('@overwolf/ow-electron'))" \
             || node node_modules/@overwolf/ow-electron/install.js
           node -e "console.log(require('@overwolf/ow-electron/package.json').version)"
+      # The runner's display starts at 1024 x 768, smaller than most lab
+      # windows: each host then fits the window to the screen its own way and
+      # the scenarios no longer compare like with like.
+      - name: display 1920 x 1080
+        shell: pwsh
+        run: |
+          try { Set-DisplayResolution -Width 1920 -Height 1080 -Force } catch { Write-Warning "display resolution unchanged: $_" }
+          Get-CimInstance Win32_VideoController | Format-Table Name, CurrentHorizontalResolution, CurrentVerticalResolution
       - name: lab (ow-electron, then ow-tauri, per scenario; parity-diff; Windows checks)
         env:
           SCENARIOS: ${{ inputs.scenarios || 'all' }}

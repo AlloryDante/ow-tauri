@@ -15,6 +15,8 @@ import {
   compareAdformats,
   consentDuringAttach,
   fillImpressions,
+  GUEST_CREATE_MS,
+  guestCreationSpread,
   guestVisibility,
   labelledUserAgent,
   loadedBefore,
@@ -22,6 +24,8 @@ import {
   normalise,
   PACKAGE_RUNTIME_FILE,
   PACKAGE_RUNTIME_REQUEST,
+  packageRuntimeLog,
+  sameElement,
   sentOsClick,
   withoutPackageRuntime,
   withoutPointerEvents,
@@ -534,6 +538,7 @@ test("ow-electron's package manager traffic on Windows is a documented deviation
     'POST https://tracking.overwolf.com/tracking/InsertStats 400029',
     'POST https://tracking.overwolf.com/tracking/InsertStats 400037',
     'POST https://tracking.overwolf.com/tracking/InsertStats 400043',
+    'POST https://tracking.overwolf.com/tracking/InsertStats 400046',
   ])
     assert.ok(PACKAGE_RUNTIME_REQUEST.test(key), key);
   for (const key of [
@@ -633,4 +638,45 @@ test('a probe that carries its webContents id names its guest without file times
     [vis(4, 'visible'), vis(5, 'visible'), vis(4, 'hidden')].join('\n'),
   );
   assert.deepEqual(guestVisibility(dir), { reward: ['visible', 'hidden'], std: ['visible'] });
+});
+
+test("guest attach reports spread over the guests' creation are a platform gap", () => {
+  // Windows lab (sizes): seven 400025 reports 70 ms apart on ow-electron and
+  // 447 ms on ow-tauri, allowed 320 ms for a plain burst.
+  const kinds = Array(7).fill('400025');
+  assert.equal(guestCreationSpread(kinds, 447, 320), true);
+  assert.equal(guestCreationSpread(kinds, 320 + GUEST_CREATE_MS * 6 + 1, 320), false);
+  assert.equal(guestCreationSpread([...kinds.slice(1), '400023'], 447, 320), false);
+  assert.equal(guestCreationSpread(['400025'], 447, 320), false);
+  const d = {
+    section: 'host-request',
+    field: 'timing',
+    guestCreation: true,
+  };
+  assert.equal(classify(d).class, 'intended:os-gap');
+  assert.equal(classify({ ...d, guestCreation: false }).class, 'BUG');
+});
+
+test('element structure samples pair by cid, not by the order the pages reported them', () => {
+  const a = { cid: 'parity_400x300_0', t: 10 };
+  const b = { cid: 'parity_400x300_1', t: 9 };
+  assert.equal(sameElement(a, [b, { ...a, t: 11 }]).t, 11);
+  assert.equal(sameElement({ cid: 'other' }, [b]), b);
+  assert.equal(sameElement({ cid: null }, [b, a]), b);
+  assert.equal(sameElement(a, []), undefined);
+});
+
+test("ow-electron's log written only by the package manager is package runtime state", () => {
+  // Windows lab (A): the package manager's remote config fetch timed out.
+  const owpm = [
+    "[2026-10-07 21:06:57.058] [info] ow-electron 42.11.4 session start - app 'Parity Harness' 0.1.0 - uid x - pid 1",
+    "[2026-10-07 21:06:57.058] [error] [owpm] request 'https://example.invalid/config' timeout",
+    '[2026-10-07 21:06:57.067] [error] [owpm] failed to get owepm remote config Error: abort',
+    '    at ClientRequest.<anonymous> (node:electron/js2c/browser_init:2:94037)',
+  ].join('\r\n');
+  assert.equal(packageRuntimeLog(owpm), true);
+  assert.equal(packageRuntimeLog(`${owpm}\r\n[2026-10-07 21:07:00.000] [error] [ads] boom`), false);
+  assert.equal(packageRuntimeLog(owpm.split('\r\n')[0]), false);
+  assert.equal(packageRuntimeLog(''), false);
+  assert.equal(packageRuntimeLog(null), false);
 });

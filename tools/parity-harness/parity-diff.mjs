@@ -87,10 +87,32 @@ export function normalise(text) {
  * (CONTRACT H).
  */
 export const PACKAGE_RUNTIME_REQUEST =
-  /\/(Counter electron_pm_[a-z_]+|Counter electron_cs_error|InsertStats 4000(29|37|43))$/;
+  /\/(Counter electron_pm_[a-z_]+|Counter electron_cs_error|InsertStats 4000(29|37|43|46))$/;
 
 /** The package manager's own state: its log and its switch in ow-electron.json. */
 export const PACKAGE_RUNTIME_FILE = /(^|[\\/])owpm\.log$/;
+
+/** ow-electron's own log, which it writes only when something logs. */
+const ELECTRON_LOG = /(^|[\\/])logs[\\/]ow-electron\.log$/;
+
+/**
+ * Whether ow-electron's log holds only its session line and the package
+ * manager's entries (`[owpm]`, with their stack lines): it was written
+ * because the package manager logged, e.g. a failed remote config fetch
+ * (Windows lab: `request config error 'abort'`, sent as InsertStats 400046).
+ *
+ * @param {string | null} text
+ * @returns {boolean}
+ */
+export function packageRuntimeLog(text) {
+  if (!text) return false;
+  const entries = text.split(/\r?\n/).filter((l) => /^\[\d{4}-/.test(l));
+  return (
+    entries.length > 0 &&
+    entries.every((l) => / \[owpm\] /.test(l) || / session start - /.test(l)) &&
+    entries.some((l) => / \[owpm\] /.test(l))
+  );
+}
 const PACKAGE_RUNTIME_KEY = 'owepm.enabled';
 
 export function labelledUserAgent(electron, tauri) {
@@ -426,9 +448,16 @@ function stateFile(runDir, phase) {
   const dir = join(runDir, 'files', phase, 'ow-electron');
   const manifest = readJson(join(dir, 'manifest.json'));
   const file = join(dir, 'files', 'ow-electron.json');
+  const files = manifest?.files?.map((f) => f.path) ?? [];
+  const log = files.find((f) => ELECTRON_LOG.test(f));
+  const logFile = log && join(dir, 'files', ...log.split(/[\\/]/));
   return {
-    files: manifest?.files?.map((f) => f.path) ?? [],
+    files,
     text: existsSync(file) ? readFileSync(file, 'utf8') : null,
+    packageRuntimeLog:
+      logFile !== undefined &&
+      existsSync(logFile) &&
+      packageRuntimeLog(readFileSync(logFile, 'utf8')),
   };
 }
 
@@ -571,6 +600,11 @@ const RULES = [
     when: (d) => d.section === 'element-api' && d.field === 'own' && d.webviewOnly,
     cls: 'intended:os-gap',
     why: "own properties of Electron's <webview> element; <owadview> is not a <webview> (PARITY deviations, CONTRACT B.3.3)",
+  },
+  {
+    when: (d) => d.section === 'host-request' && d.field === 'timing' && d.guestCreation,
+    cls: 'intended:os-gap',
+    why: "each guest's attach report (400025) leaves once its webview exists; WebView2 (wry) creates guest webviews on the main thread one after another, so guests mounted together report over their creation time (CONTRACT E.2 order and timing)",
   },
   {
     when: (d) => d.section === 'host-request' && d.field === 'header-order' && d.pseudoOnly,
@@ -934,16 +968,43 @@ function compareHostRequests(e, t, out, tolerance, burst) {
     const spread = Math.max(...times) - Math.min(...times);
     const allowed = b.end - b.start + burst;
     if (spread > allowed) {
+      const kinds = b.pairs.map(([i]) => normalise(e.hostRequests[i].key).split(' ').pop());
       out.push({
         section: 'host-request',
-        key: `burst of ${b.pairs.length} at ${b.start} ms (${b.pairs.map(([i]) => normalise(e.hostRequests[i].key).split(' ').pop()).join(', ')})`,
+        key: `burst of ${b.pairs.length} at ${b.start} ms (${kinds.join(', ')})`,
         field: 'timing',
         electron: `spread ${b.end - b.start} ms`,
         tauri: `spread ${spread} ms`,
+        guestCreation: guestCreationSpread(kinds, spread, allowed),
         why: `requests ow-electron sends together left ${spread} ms apart (allowed ${allowed} ms)`,
       });
     }
   }
+}
+
+/**
+ * Main-thread time a WebView2 guest webview takes to create (wry creates
+ * each one synchronously, one after another): 80 to 150 ms on a CI runner
+ * [OBS: Windows lab].
+ */
+export const GUEST_CREATE_MS = 150;
+
+/**
+ * Whether a burst's spread is the guests' own creation: every request is a
+ * guest-attach report (InsertStats Kind 400025, one per guest when its
+ * webview exists) and the spread stays within one creation per further guest.
+ *
+ * @param {string[]} kinds - the last word of each request's key
+ * @param {number} spread - ow-tauri's spread, ms
+ * @param {number} allowed - the spread allowed for any burst, ms
+ * @returns {boolean}
+ */
+export function guestCreationSpread(kinds, spread, allowed) {
+  return (
+    kinds.length > 1 &&
+    kinds.every((k) => k === '400025') &&
+    spread <= allowed + GUEST_CREATE_MS * (kinds.length - 1)
+  );
 }
 
 function compareIdentity(e, t, out) {
@@ -1251,7 +1312,8 @@ function compareStateFile(e, t, out) {
           field: 'missing-file',
           electron: f,
           tauri: null,
-          packageRuntime: PACKAGE_RUNTIME_FILE.test(f),
+          packageRuntime:
+            PACKAGE_RUNTIME_FILE.test(f) || (ELECTRON_LOG.test(f) && a.packageRuntimeLog === true),
         });
     if (a.text === null || b.text === null) continue;
     const sa = jsonShape(a.text);
@@ -1658,7 +1720,7 @@ function compareElementEvents(e, t, out) {
       });
   }
   const es = e.elementStructure[0];
-  const ts = t.elementStructure[0];
+  const ts = sameElement(es, t.elementStructure);
   if (es && ts) {
     // The high-impact zone the page expanded (or not) when the structure
     // was sampled: its rect follows the served ad's timing.
@@ -1679,6 +1741,21 @@ function compareElementEvents(e, t, out) {
         });
     }
   }
+}
+
+/**
+ * The structure sample of the element `sample` describes, among `samples`
+ * from the other host: the one with the same `cid`, else the first. Each
+ * host samples its elements in the order their pages report them, which
+ * differs between hosts (Windows lab, audio: two slots sampled within 2 ms).
+ *
+ * @template {{cid?: string | null}} T
+ * @param {T | undefined} sample
+ * @param {T[]} samples
+ * @returns {T | undefined}
+ */
+export function sameElement(sample, samples) {
+  return samples.find((s) => sample?.cid != null && s.cid === sample.cid) ?? samples[0];
 }
 
 /**

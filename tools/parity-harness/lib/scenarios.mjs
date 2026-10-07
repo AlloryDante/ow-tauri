@@ -480,10 +480,10 @@ export const SCENARIOS = {
 
   'perf-small': {
     describe:
-      'R3: performance ad (docs example) in a 900x500 window, below the documented 1000x600 minimum.',
+      'R3: performance ad (docs example) in a 900x480 window, below the documented 1000x600 minimum and, on every platform, below the 500x500 content area the ad itself requires. (ow-tauri sizes are content sizes, CONTRACT B.2.2; on Windows a 900x500 ow-electron window has only 884x435 of content, so 500 high passed on ow-tauri alone.)',
     defaults: { mode: 'test', present: 'transparent', layout: 'none', duration: 90 },
     config: {
-      window: { width: 900, height: 500 },
+      window: { width: 900, height: 480 },
       elementSpec: [{ at: 3000, ...PERF_DOC }],
       actions: PERF_PROBES,
     },
