@@ -245,6 +245,47 @@ describe('host to guest (D.5)', () => {
     expect(call(g.ow, 'getCustomTracking')).toBeNull();
   });
 
+  it('delivers the element methods as private messages, data as given (AF-8)', () => {
+    const g = guest();
+    const seen: unknown[] = [];
+    call(g.ow, 'onmessage', (m: unknown) => seen.push(m));
+    const args = ['userPlay', 1, null, { a: [true] }];
+    expect(g.host.deliver({ type: 'sendCommand', data: args })).toBe(true);
+    expect(g.host.deliver({ type: 'sendCommand', data: [] })).toBe(true);
+    expect(g.host.deliver({ type: 'setPageUrl', data: ['https://example.com/p'] })).toBe(true);
+    expect(seen).toEqual([
+      { type: 'sendCommand', data: ['userPlay', 1, null, { a: [true] }] },
+      { type: 'sendCommand', data: [] },
+      { type: 'setPageUrl', data: ['https://example.com/p'] },
+    ]);
+    // A copy: the handler never holds the host's object.
+    expect((seen[0] as { data: unknown }).data).not.toBe(args);
+    // The message changes nothing else: no pageUrl, no tracking.
+    expect(g.ow['pageUrl']).toBe('');
+    expect(call(g.ow, 'getCustomTracking')).toEqual({ a: 1 });
+    expect(names(g).filter((n) => !n.startsWith('__host:'))).toEqual([]);
+  });
+
+  it('fires visibilitychange only on a change, like Electron (hidden x2 on hide; hidden, visible on show)', () => {
+    const g = guest();
+    const doc = g.win.document;
+    const states: string[] = [];
+    doc.addEventListener('visibilitychange', () => states.push(doc.visibilityState));
+    // Hide: Electron signals `hidden` twice.
+    g.host.setVisibility('hidden');
+    g.host.setVisibility('hidden');
+    // Show: `hidden`, then `visible`.
+    g.host.setVisibility('hidden');
+    g.host.setVisibility('visible');
+    // The same again (a second reward opt-in).
+    g.host.setVisibility('hidden');
+    g.host.setVisibility('hidden');
+    g.host.setVisibility('hidden');
+    g.host.setVisibility('visible');
+    expect(states).toEqual(['hidden', 'visible', 'hidden', 'visible']);
+    expect(doc.hidden).toBe(false);
+  });
+
   it('keeps at most 16 handlers', () => {
     const g = guest();
     let calls = 0;

@@ -82,11 +82,20 @@ export interface HostMessage {
 
 /** The host API: what Rust calls in the guest (D.5). */
 export interface AdviewHostApi {
-  /** Passes a host message to the page's `onmessage` handlers. */
+  /**
+   * Passes a host message `{type, data?}` of any type to the page's
+   * `onmessage` handlers, e.g. `consent`, `customTracking`, `eHashes`,
+   * `window-hidden`, and the element methods' `sendCommand`
+   * (`data: [...args]`) and `setPageUrl` (`data: [url]`) [OBS].
+   */
   deliver: (...args: unknown[]) => boolean;
   /** Sets the embedder focus behind `hasWindowFocus()` and `document.hasFocus()`. */
   setEmbedderFocus: (...args: unknown[]) => void;
-  /** Sets `document.visibilityState` (`visible` or `hidden`). */
+  /**
+   * Sets `document.visibilityState` (`visible` or `hidden`) and fires
+   * `visibilitychange` only when the state changes, as Electron's guest
+   * does: its repeated `hidden` signals reach the page as one change.
+   */
   setVisibility: (...args: unknown[]) => void;
   /** Stores the `pageUrl` the next load of this guest starts with. */
   setNextPageUrl: (...args: unknown[]) => void;
