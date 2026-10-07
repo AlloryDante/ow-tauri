@@ -68,8 +68,10 @@ Cargo workspace with its own `Cargo.lock`, like the packages sample.
   accepts `OW_TAURI_TEST_AD=1`, but the badge only sees the switch, so use
   the `:test` scripts.
 - **Restart in TEST / LIVE** in the top bar relaunches the app with or
-  without `--test-ad` (`app.relaunch`). Going LIVE asks for an inline
-  confirmation first.
+  without `--test-ad` (`app.relaunch`) and comes back to the same page and
+  choice (`--showcase-page=<page>[/<choice>]`, e.g. `layouts/tower` or
+  `sizes/300x250`; the same switch opens the app on that page). Going LIVE
+  asks for an inline confirmation first.
 
 ## Identity
 
@@ -108,12 +110,16 @@ full on screen only, and timeline exports carry the masked uid.
 
 ## Pages
 
-1. **Sizes**: all seven sizes (970x90, 728x90, 160x600, 400x600, 400x60,
-   400x300, 300x250) with unique `cid`s, plus a 300x250 in a scroll box below
-   the fold that loads only when scrolled into view. The timeline folds away
-   on this page to make room; at the default 1280x860 the 300x250 sits just
-   below the others. In LIVE mode the 400x300 is left out (policy note on the
-   page).
+1. **Sizes**: the seven documented sizes (970x90, 728x90, 160x600, 400x600,
+   400x60, 400x300, 300x250), each with its own `cid`. A slot loads only
+   once it is fully in view, and all seven do not fit one window, so the
+   **Show** select picks a group: **Towers and rectangles** (160x600,
+   400x600, 400x300, 300x250; the default), **Banners** (970x90, 728x90,
+   400x60), **Below the fold** (a 300x250 in a scroll box that loads only
+   when scrolled into view) or one size alone. Switching builds fresh
+   containers. The timeline folds away on this page to make room. In LIVE
+   mode the groups leave the 400x300 out (one video container per page;
+   policy note on the page); it can still be shown alone.
 2. **Layouts**: the eight recommended layouts at true size; switching or
    **Recreate** builds fresh containers. This is the live-mode proof page.
 3. **High impact**: a 440 px wide, full-height zone with Tower Plus
@@ -124,8 +130,9 @@ full on screen only, and timeline exports carry the masked uid.
    performance `<owadview>`. The **Click me** counter shows clicks passing
    through while the ad loads and blocked once it is shown. The DOM panel
    shows the live `owadview` count and the element's `pointer-events`.
-   **Shrink to 900x500** shows the error path (`performance_ad_error`, then
-   `shutdown`); **Restore size** undoes it. A no-fill ends with `shutdown`
+   **Shrink to 900x500**, then adding an interstitial, shows the error path
+   (`performance_ad_error`, then `shutdown`); **Restore size** undoes it.
+   Shrinking while an interstitial is already shown does not end it. A no-fill ends with `shutdown`
    only: `performance_ad_no_fill` has not been seen to fire.
 5. **Reward**: a coin shop. The 400x300 `adstyle="rewarded-ad;"` slot
    preloads, is hidden on `video_ad_ready`, and **Watch ad · +100 coins** shows
@@ -145,6 +152,49 @@ full on screen only, and timeline exports carry the masked uid.
    test flag).
 9. **Parity**: the parity harness's report (`parity-diff.json` copied to
    `<userData>/parity-report.json`), or the commands that make it.
+
+## Measured results (lab, macOS, 2026-10-07)
+
+Invisible lab runs (`e2e/`, alpha-0 windows, never frontmost, no process
+left), ow-tauri 0.1.0 on Tauri 2.12.1 and ow-electron 42.11.4 on one Mac
+(1280x837 window). TEST is the full tour (47 steps, every page and button);
+LIVE used a lab app identity whose uid is not enabled for live demand.
+"Same events" means the same ad event names per slot over the run, guest
+lifecycle left out (`e2e/compare.mjs`).
+
+**TEST mode** (tours `B2-T-tour-2` against `B2-E-tour-4`)
+
+| Format (page)                             | ow-tauri                                                             | ow-electron            | Notes                                                                                                                                                           |
+| ----------------------------------------- | -------------------------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Standard, seven sizes (1)                 | all fill, 2 to 34 s                                                  | all fill, 3 to 7 s     | 970x90 test creative is often blank on both                                                                                                                     |
+| Below the fold (1)                        | waits, fills about 2 s after scrolling in                            | same                   |                                                                                                                                                                 |
+| Eight layouts (2)                         | 8/8 fill, 2.5 to 3.7 s                                               | 8/8 fill, 2.5 to 5.1 s | which slot gets a video creative varies per load                                                                                                                |
+| High impact (3)                           | takeover, then removed and restored                                  | same                   | `high-impact-ad-loaded` / `-removed`, sibling `display: none`                                                                                                   |
+| Interstitial (4)                          | pass-through while loading, modal after                              | same                   | probe: "Click me" 0 to 1 while loading, the ad on top once shown                                                                                                |
+| Interstitial, small window (4)            | `performance_ad_error`, `shutdown`                                   | same                   |                                                                                                                                                                 |
+| Interstitial, red dim / blur 3 / unit (4) | load / load / `shutdown`                                             | same                   |                                                                                                                                                                 |
+| Reward (5)                                | ready, play, granted once, next ready                                | same                   | `complete` came after 11 s (ow-tauri) and 87 s (ow-electron) after a 2 s hide during play; one of three ow-tauri runs reloaded the guest on that hide (see Lab) |
+| House slot (6)                            | test video plays                                                     | same                   | no house ad configured                                                                                                                                          |
+| Controls (7)                              | tracking, mute, display, scroll, hide, minimize: a new ad after each | same                   |                                                                                                                                                                 |
+| Consent and identity (8)                  | CMP required, three hashes, uid masked                               | same                   | the privacy settings window is skipped in lab runs                                                                                                              |
+
+Step by step, 240 of 305 compare rows are the same and 19 differ only in
+guest lifecycle (ow-electron reports a `did-fail-load` per guest). The
+remaining rows are timing: a video's `play` lands one step earlier or later.
+
+**LIVE mode** (9 ad loads in total, never clicked)
+
+| Run (page)               | Loads | ow-tauri                                                    | ow-electron                                             |
+| ------------------------ | ----- | ----------------------------------------------------------- | ------------------------------------------------------- |
+| Layout Combo Classic (2) | 2 + 2 | auctions sent (`gampad/ads`, prebid bidders), no fill event | auctions sent, slot impression ping sent, no fill event |
+| 300x250 alone (1)        | 1 + 1 | auctions sent, no fill event                                | auctions sent, slot impression ping sent, no fill event |
+| Reward (5)               | 2     | video auctions sent, no `video_ad_ready`                    | not run                                                 |
+| Interstitial (4)         | 1     | `shutdown` (no fill)                                        | not run                                                 |
+
+No format filled live on either host for this uid: the requests go out the
+same way, demand does not answer. The ow-tauri guest probe lists only the
+guest page's own requests, not those of its frames, so the impression ping
+is not visible there.
 
 ## Run of show (presenter)
 
@@ -188,3 +238,11 @@ known request-header gap, `docs/ARCHITECTURE.md` section 6).
 `e2e/` drives the showcase headlessly on both hosts (macOS, invisible
 windows, test ads): see [e2e/README.md](e2e/README.md). The Tauri shell has
 the lab only with its `lab` Cargo feature, which is off by default.
+
+Open lab notes: in one of three ow-tauri tours the reward guest asked the
+host to reload (`__host:reload`) when its slot came back from a 2 s
+`display: none` during play, so that video never completed; the other two
+and both ow-electron tours completed. In one ow-tauri tour the banner slot
+of four layouts and the controls slot got no test fill (guest visible,
+sized and requesting ads); the tour before and the ow-electron tours filled
+them.
