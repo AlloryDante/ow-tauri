@@ -1,7 +1,8 @@
 //! Platform webview operations the ads and consent services need and Tauri
-//! does not offer: muting a guest, the guest's first navigation with
-//! `Referer` and `Origin` (D.8.3), and on Windows the request shaping
-//! handler, guest crash and load-failure reports (D.7, D.8).
+//! does not offer: muting a guest, a transparent guest background on macOS,
+//! the guest's first navigation with `Referer` and `Origin` (D.8.3), and on
+//! Windows the request shaping handler, guest crash and load-failure reports
+//! (D.7, D.8).
 //!
 //! Every function hands its work to the webview's thread with
 //! `Webview::with_webview` and returns at once.
@@ -116,6 +117,33 @@ pub(crate) fn set_muted<R: Runtime>(webview: &Webview<R>, muted: bool) -> tauri:
         {
             let _ = (pw, muted);
         }
+    })
+}
+
+/// The rest of a transparent guest background that the webview builder's
+/// `transparent` flag does not set (B.3.4): on macOS the `WKWebView`'s own
+/// `drawsBackground` (`NO`, the private key-value key Tauri and wry use for
+/// transparent webviews, set only when the view answers to it) and the
+/// public `underPageBackgroundColor` (clear, macOS 12+), which shows when a
+/// page is scrolled past its edge. Nothing on Windows and Linux, where the
+/// builder flag makes the whole background transparent.
+///
+/// `done` runs on the webview's thread with whether the background was
+/// cleared (`true` on Windows and Linux); it does not run when the webview
+/// is gone. Errors only when the webview is gone.
+pub(crate) fn clear_background<R: Runtime>(
+    webview: &Webview<R>,
+    done: impl FnOnce(bool) + Send + 'static,
+) -> tauri::Result<()> {
+    webview.with_webview(move |pw| {
+        #[cfg(target_os = "macos")]
+        let cleared = macos::clear_background(pw.inner());
+        #[cfg(not(target_os = "macos"))]
+        let cleared = {
+            let _ = pw;
+            true
+        };
+        done(cleared);
     })
 }
 
@@ -525,6 +553,46 @@ mod macos {
         // SAFETY: the selector exists (checked above) and takes an
         // NSUInteger.
         let () = unsafe { msg_send![obj, _setPageMuted: state] };
+    }
+
+    /// `drawsBackground = NO` (key-value coding, when the view has the
+    /// private `_setDrawsBackground:` setter the key resolves to, so the
+    /// call cannot raise) and a clear `underPageBackgroundColor` (macOS
+    /// 12+). Returns whether `drawsBackground` was set.
+    pub(super) fn clear_background(wk_webview: *mut c_void) -> bool {
+        if wk_webview.is_null() {
+            return false;
+        }
+        // SAFETY: Tauri hands a live `WKWebView*` on the main thread.
+        let obj: &AnyObject = unsafe { &*wk_webview.cast::<AnyObject>() };
+        // SAFETY: `respondsToSelector:` exists on every NSObject.
+        let has_setter: bool =
+            unsafe { msg_send![obj, respondsToSelector: sel!(_setDrawsBackground:)] };
+        if has_setter {
+            // SAFETY: a public NSNumber class method.
+            let no: Option<Retained<AnyObject>> =
+                unsafe { msg_send![class!(NSNumber), numberWithBool: false] };
+            if let Some(no) = no {
+                let key = NSString::from_str("drawsBackground");
+                // SAFETY: key-value coding of a key the view answers to
+                // (checked above), with an NSNumber value.
+                let () = unsafe { msg_send![obj, setValue: &*no, forKey: &*key] };
+            }
+        }
+        // SAFETY: `respondsToSelector:` exists on every NSObject.
+        let has_under_page: bool =
+            unsafe { msg_send![obj, respondsToSelector: sel!(setUnderPageBackgroundColor:)] };
+        if has_under_page {
+            // SAFETY: a public NSColor class method (AppKit, linked by wry).
+            let clear: Option<Retained<AnyObject>> =
+                unsafe { msg_send![class!(NSColor), clearColor] };
+            if let Some(clear) = clear {
+                // SAFETY: public WKWebView property (macOS 12+, checked
+                // above) taking an NSColor.
+                let () = unsafe { msg_send![obj, setUnderPageBackgroundColor: &*clear] };
+            }
+        }
+        has_setter
     }
 
     /// `-[WKWebView loadRequest:]` with extra header fields.

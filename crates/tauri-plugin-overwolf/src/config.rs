@@ -96,6 +96,10 @@ pub struct WebviewConfig {
 /// `plugins.overwolf.ads`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent configuration switches, read from JSON"
+)]
 pub struct AdsConfig {
     /// Test inventory (same as `--test-ad`).
     pub test_ad: bool,
@@ -106,6 +110,15 @@ pub struct AdsConfig {
     pub ow_version_override: Option<String>,
     /// ow-tauri option: the macOS private header SPI prototype (D.8.3).
     pub mac_private_header_api: bool,
+    /// Ad guests are transparent from creation (default `true`), so a slot
+    /// without an ad shows the app's own container background and an
+    /// interstitial's dim shows the app behind it, as the in-page guest of
+    /// ow-electron does (B.3.4). Windows and Linux use the webview's
+    /// transparent background; macOS also clears the `WKWebView` background
+    /// (`drawsBackground`, a private key-value key Tauri's own transparent
+    /// webviews use, and the public `underPageBackgroundColor`) without
+    /// Tauri's `macos-private-api` feature. `false` keeps opaque guests.
+    pub transparent_guests: bool,
     /// User-gesture window for guest top-level navigation.
     pub gesture_window_ms: u64,
     /// Guest reloads after crashes, per element; `None` = no cap, as
@@ -124,6 +137,7 @@ impl Default for AdsConfig {
             request_shaping: true,
             ow_version_override: None,
             mac_private_header_api: false,
+            transparent_guests: true,
             gesture_window_ms: 1500,
             max_recoveries: None,
             load_error_retry_ms: 5000,
@@ -882,6 +896,7 @@ mod tests {
           "uid": null,
           "packagesBackend": "none",
           "ads": { "testAd": false, "requestShaping": true, "owVersionOverride": null, "macPrivateHeaderApi": false,
+                   "transparentGuests": true,
                    "gestureWindowMs": 1500, "maxRecoveries": null, "loadErrorRetryMs": 5000,
                    "guestLimits": { "eventsPerSecond": 50, "eventBurst": 100, "bytesPerSecond": 262144, "externalOpensPerMinute": 20 } },
           "analytics": { "hostLabel": "tauri", "hostVersion": null, "muidStrategy": "machine-id", "userSwitch": false },
@@ -897,6 +912,14 @@ mod tests {
         }"#;
         let cfg: Config = serde_json::from_str(text).unwrap();
         assert_eq!(cfg, Config::default());
+    }
+
+    #[test]
+    fn guests_are_transparent_by_default() {
+        assert!(Config::default().ads.transparent_guests);
+        let cfg: Config =
+            serde_json::from_str(r#"{ "ads": { "transparentGuests": false } }"#).unwrap();
+        assert!(!cfg.ads.transparent_guests);
     }
 
     #[test]
@@ -1001,15 +1024,25 @@ mod tests {
 
     #[test]
     fn scope_templates() {
+        // An absolute path needs a drive or UNC prefix on Windows.
+        let absolute = if cfg!(windows) {
+            r"C:\abs\path"
+        } else {
+            "/abs/path"
+        };
         for ok in [
             "$PICTURES/Overwolf/$APPNAME",
             "$USERDATA",
             "$TEMP/x",
-            "/abs/path",
+            absolute,
         ] {
             validate_scope_template(ok).unwrap();
         }
         assert!(validate_scope_template("$PICTURESX").is_err());
+        assert_eq!(
+            validate_scope_template("/abs/path").is_ok(),
+            cfg!(not(windows))
+        );
     }
 
     #[test]

@@ -347,6 +347,7 @@ impl<R: Runtime> Host<R> {
             });
         let blank = Url::parse("about:blank").map_err(|_| Error::backend("about:blank"))?;
         let ua = self.user_agent();
+        let transparent = self.info.config.ads.transparent_guests;
         #[cfg_attr(
             not(windows),
             expect(unused_mut, reason = "Windows adds the ads environment")
@@ -355,6 +356,8 @@ impl<R: Runtime> Host<R> {
             .user_agent(&ua)
             .initialization_script(script)
             .focused(false)
+            // Transparent from creation, before the first paint (B.3.4).
+            .transparent(transparent)
             .on_new_window(self.guest_new_window_handler(label.clone()));
         #[cfg(windows)]
         {
@@ -369,6 +372,9 @@ impl<R: Runtime> Host<R> {
             let _ = webview.hide();
         }
         let _ = crate::platform::webview::set_muted(&webview, true);
+        if transparent {
+            self.clear_guest_background(&webview);
+        }
         let reports: Arc<dyn GuestReports> = Arc::new(Reports(Arc::downgrade(self)));
         if let Err(err) = crate::platform::webview::install_guest_hooks(
             &webview,
@@ -435,6 +441,24 @@ impl<R: Runtime> Host<R> {
         // The first navigation may already be allowed (D.6.5).
         self.ads_tick(now);
         Ok(label)
+    }
+
+    /// Clears what the builder's `transparent` flag leaves of a new guest's
+    /// background (B.3.4). Lab trace: `transparent`, then
+    /// `transparent-native` with the platform's result.
+    fn clear_guest_background(self: &Arc<Self>, webview: &Webview<R>) {
+        let label = webview.label().to_owned();
+        self.guest_record(
+            "wc-events.jsonl",
+            || json!({ "kind": "transparent", "label": label, "type": "owadview" }),
+        );
+        let native = label.clone();
+        let _ = crate::platform::webview::clear_background(webview, move |cleared| {
+            crate::lab::record(
+                "wc-events.jsonl",
+                || json!({ "kind": "transparent-native", "label": native, "type": "owadview", "applied": cleared }),
+            );
+        });
     }
 
     /// The browser arguments of the ads environment (A.1.1).

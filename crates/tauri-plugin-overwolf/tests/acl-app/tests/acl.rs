@@ -976,6 +976,43 @@ fn adview_guest_lifecycle_crash_and_recovery_cap() {
     invoke(&app, "bw-1", "adview_unmount", json!({ "elementId": "e1" })).unwrap();
 }
 
+/// The native steps the host took for the guest `label`, by lab `kind`.
+fn native_steps(app: &App<MockRuntime>, label: &str) -> Vec<Value> {
+    app.overwolf()
+        .test_guest_trace()
+        .into_iter()
+        .filter(|e| e["label"] == label && e.get("kind").is_some())
+        .collect()
+}
+
+/// AF-10: guests are transparent from creation unless
+/// `ads.transparentGuests` is off.
+#[test]
+fn guests_are_transparent_unless_configured_off() {
+    let (app, _) = app("guest-transparent");
+    main_and_window(&app);
+    let guest = invoke(&app, "bw-1", "adview_mount", mount_body("e1")).unwrap()["guestLabel"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let kinds: Vec<Value> = native_steps(&app, &guest)
+        .into_iter()
+        .map(|e| e["kind"].clone())
+        .collect();
+    assert_eq!(kinds, [json!("transparent")]);
+
+    let (app, _) = app_with(
+        "guest-opaque",
+        json!({ "ads": { "transparentGuests": false } }),
+    );
+    main_and_window(&app);
+    let guest = invoke(&app, "bw-1", "adview_mount", mount_body("e1")).unwrap()["guestLabel"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(native_steps(&app, &guest).is_empty());
+}
+
 #[test]
 fn adview_update_command_and_window_close() {
     let (app, _) = app("guest-update");
