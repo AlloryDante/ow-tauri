@@ -28,9 +28,11 @@ import {
   packageRuntimeLog,
   sameElement,
   sentOsClick,
+  shapingOf,
   withoutPackageRuntime,
   withoutPointerEvents,
   within,
+  wireRequests,
 } from './parity-diff.mjs';
 
 test('normalise replaces host labels, versions and volatile values', () => {
@@ -711,4 +713,79 @@ test('a burst due while ow-tauri created guest webviews is variance', () => {
   const d = { section: 'host-request', field: 'timing', guestCreation: false };
   assert.equal(classify({ ...d, duringGuestCreation: true }).class, 'variance');
   assert.equal(classify({ ...d, duringGuestCreation: false }).class, 'BUG');
+});
+
+test("the guests' wire records give the request shaping to compare", () => {
+  const lib =
+    'https://content.overwolf.com/libs/ads/latest/owads.min.js?uid=u&phase=7&window=index';
+  const records = [
+    {
+      method: 'Network.requestWillBeSent',
+      requestId: '1',
+      url: 'https://www.overwolf.com/monsdk/electron/latest/adview.html',
+      resourceType: 'Document',
+    },
+    {
+      method: 'Network.requestWillBeSentExtraInfo',
+      requestId: '1',
+      headers: { Referer: 'https://www.overwolf.com/u' },
+    },
+    {
+      method: 'Network.requestWillBeSent',
+      requestId: '2',
+      url: 'https://ads.example/a.js?x=1',
+      resourceType: 'Script',
+    },
+    {
+      method: 'Network.requestWillBeSentExtraInfo',
+      requestId: '2',
+      headers: { Origin: 'https://www.overwolf.com' },
+    },
+    {
+      method: 'Network.requestWillBeSent',
+      requestId: '3',
+      url: 'https://ads.example/b.png?y=2',
+      resourceType: 'Image',
+    },
+    { method: 'Network.requestWillBeSentExtraInfo', requestId: '3', headers: {} },
+    { method: 'Network.requestWillBeSentExtraInfo', requestId: '9', headers: {} },
+  ];
+  const netlog = [
+    {
+      url: lib,
+      sentHeaders: [
+        'Referer: https://www.overwolf.com/',
+        'x-ow-uid: u',
+        'x-ow-phase: 7',
+        'x-ow-window: index',
+      ],
+    },
+  ];
+  const wire = wireRequests(records, netlog);
+  assert.equal(wire.length, 4);
+  const s = shapingOf(wire);
+  assert.equal(s.subresources, 2);
+  assert.equal(s.withOrigin, 1);
+  assert.deepEqual(s.withoutOrigin, ['https://ads.example/b.png']);
+  assert.deepEqual(s.adLibrary, {
+    'x-ow-uid': 'u',
+    'x-ow-phase': '7',
+    'x-ow-window': 'index',
+    origin: null,
+    referer: 'https://www.overwolf.com/',
+  });
+  // A recorded ad library request wins over the net log.
+  const own = wireRequests(
+    [
+      { method: 'Network.requestWillBeSent', requestId: '4', url: lib, resourceType: 'Script' },
+      {
+        method: 'Network.requestWillBeSentExtraInfo',
+        requestId: '4',
+        headers: { 'X-OW-UID': 'v' },
+      },
+    ],
+    netlog,
+  );
+  assert.equal(shapingOf(own).adLibrary['x-ow-uid'], 'v');
+  assert.equal(shapingOf([]).adLibrary, null);
 });

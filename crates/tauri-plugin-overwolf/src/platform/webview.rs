@@ -326,6 +326,59 @@ pub(crate) enum HookTarget {
     App,
 }
 
+/// The Chrome `DevTools` protocol events a lab trace records for each guest
+/// request (Windows): the request (URL, type) and the headers that went out,
+/// after the request shaping handler (D.8.3).
+#[cfg_attr(not(any(windows, test)), expect(dead_code, reason = "Windows only"))]
+const WIRE_EVENTS: [&str; 2] = [
+    "Network.requestWillBeSent",
+    "Network.requestWillBeSentExtraInfo",
+];
+
+/// One `guest-network.jsonl` line of the lab trace for the protocol event
+/// `method` with parameters `params` in guest `label`, in the shape of
+/// ow-electron's `cdp-network.jsonl`: `requestId`, `url` and `resourceType`
+/// from `requestWillBeSent`, the sent `headers` from either event. Cookie
+/// values are reduced to their names.
+#[cfg_attr(not(any(windows, test)), expect(dead_code, reason = "Windows only"))]
+pub(crate) fn wire_record(
+    label: &str,
+    method: &str,
+    params: &serde_json::Value,
+) -> serde_json::Value {
+    let request = &params["request"];
+    let headers = if method == WIRE_EVENTS[1] {
+        &params["headers"]
+    } else {
+        &request["headers"]
+    };
+    let headers: serde_json::Map<String, serde_json::Value> = headers
+        .as_object()
+        .map(|h| {
+            h.iter()
+                .map(|(name, value)| {
+                    let value = if name.eq_ignore_ascii_case("cookie") {
+                        serde_json::json!(crate::lab::cookie_names(
+                            value.as_str().unwrap_or_default()
+                        ))
+                    } else {
+                        value.clone()
+                    };
+                    (name.clone(), value)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    serde_json::json!({
+        "label": label,
+        "method": method,
+        "requestId": params["requestId"],
+        "url": request["url"],
+        "resourceType": params["type"],
+        "headers": headers,
+    })
+}
+
 /// Installs the per-guest platform hooks: on Windows the request shaping
 /// handler (D.8.3), `ProcessFailed` and `NavigationCompleted`; on Linux
 /// `web-process-terminated` and `load-failed`. macOS reports crashes through
@@ -1356,11 +1409,12 @@ mod windows_impl {
         COREWEBVIEW2_PROCESS_FAILED_REASON_TERMINATED, COREWEBVIEW2_WEB_ERROR_STATUS,
         COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED, COREWEBVIEW2_WEB_RESOURCE_CONTEXT,
         COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
-        COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL, ICoreWebView2_2, ICoreWebView2_8,
-        ICoreWebView2_22, ICoreWebView2Controller, ICoreWebView2Environment2,
+        COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL, ICoreWebView2, ICoreWebView2_2,
+        ICoreWebView2_8, ICoreWebView2_22, ICoreWebView2Controller, ICoreWebView2Environment2,
         ICoreWebView2ProcessFailedEventArgs2,
     };
     use webview2_com::{
+        CallDevToolsProtocolMethodCompletedHandler, DevToolsProtocolEventReceivedEventHandler,
         NavigationCompletedEventHandler, ProcessFailedEventHandler,
         WebResourceRequestedEventHandler, take_pwstr,
     };
@@ -1626,6 +1680,42 @@ mod windows_impl {
         })
     }
 
+    /// Lab trace only: records each request of the guest as it went out
+    /// ([`super::WIRE_EVENTS`], [`super::wire_record`]) in
+    /// `guest-network.jsonl`, so the lab can compare the request shaping
+    /// (D.8) with ow-electron's own records.
+    fn trace_wire(core: &ICoreWebView2, label: &str) -> windows::core::Result<()> {
+        // SAFETY: COM calls on the webview's own thread with valid out
+        // pointers; the handlers live as long as the webview.
+        unsafe {
+            core.CallDevToolsProtocolMethod(
+                &HSTRING::from("Network.enable"),
+                &HSTRING::from("{}"),
+                &CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(()))),
+            )?;
+            for method in super::WIRE_EVENTS {
+                let receiver = core.GetDevToolsProtocolEventReceiver(&HSTRING::from(method))?;
+                let label = label.to_owned();
+                let mut token = 0_i64;
+                receiver.add_DevToolsProtocolEventReceived(
+                    &DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_, args| {
+                        let Some(args) = args else { return Ok(()) };
+                        let mut json = PWSTR::null();
+                        args.ParameterObjectAsJson(&raw mut json)?;
+                        let json = take_pwstr(json);
+                        crate::lab::record("guest-network.jsonl", || {
+                            let params = serde_json::from_str(&json).unwrap_or_default();
+                            super::wire_record(&label, method, &params)
+                        });
+                        Ok(())
+                    })),
+                    &raw mut token,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn install(
         controller: &ICoreWebView2Controller,
         target: HookTarget,
@@ -1638,6 +1728,9 @@ mod windows_impl {
         let _ = unsafe {
             (|| -> windows::core::Result<()> {
                 let core = controller.CoreWebView2()?;
+                if target == HookTarget::Guest && crate::lab::trace_on() {
+                    let _ = trace_wire(&core, &label);
+                }
                 if let Some(shaping) = shaping {
                     let filter = HSTRING::from("*");
                     if let Ok(w22) = core.cast::<ICoreWebView2_22>() {
@@ -1723,6 +1816,32 @@ mod windows_impl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wire_records_take_the_sent_headers_and_only_cookie_names() {
+        let sent = serde_json::json!({
+            "requestId": "7",
+            "type": "Script",
+            "request": {
+                "url": "https://content.example/lib.js",
+                "headers": { "Referer": "https://www.example/" }
+            }
+        });
+        let r = wire_record("owad-bw-1-1", WIRE_EVENTS[0], &sent);
+        assert_eq!(r["requestId"], "7");
+        assert_eq!(r["url"], "https://content.example/lib.js");
+        assert_eq!(r["resourceType"], "Script");
+        assert_eq!(r["headers"]["Referer"], "https://www.example/");
+        let extra = serde_json::json!({
+            "requestId": "7",
+            "headers": { "Origin": "https://www.example", "Cookie": "a=1; b=2" }
+        });
+        let r = wire_record("owad-bw-1-1", WIRE_EVENTS[1], &extra);
+        assert_eq!(r["method"], "Network.requestWillBeSentExtraInfo");
+        assert_eq!(r["url"], serde_json::Value::Null);
+        assert_eq!(r["headers"]["Origin"], "https://www.example");
+        assert_eq!(r["headers"]["Cookie"], serde_json::json!(["a", "b"]));
+    }
 
     /// Regression (Windows lab): `showInactive()` showed the window on the
     /// main thread inside Tauri's invoke handler; the window's show message

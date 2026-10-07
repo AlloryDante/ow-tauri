@@ -243,6 +243,135 @@ function adDocuments(runDir) {
     .map((r) => ({ url: r.url, headers: headerMap(r.sentHeaders), hostOnly: !!r.hostHeadersOnly }));
 }
 
+const AD_LIBRARY = /^https:\/\/content\.overwolf\.com\/libs\/ads\/[^?]*\/owads\.min\.js\?/;
+const SHAPED_ORIGIN = 'https://www.overwolf.com';
+
+/**
+ * The ad guests' requests as they went out (CONTRACT D.8): ow-electron's
+ * DevTools records of its `owadview` guests (`cdp-network.jsonl`), and on
+ * ow-tauri the Windows lab trace of each guest (`guest-network.jsonl`, the
+ * same events from WebView2). Each request: its URL, resource type and
+ * sent headers (lower-case names). `null` when the host recorded none (an
+ * older capture, or ow-tauri off Windows). ow-electron's ad library request
+ * carries no DevTools header record, so its net log entry stands in.
+ *
+ * @param {string} runDir
+ * @param {string} host
+ */
+export function guestWire(runDir, host) {
+  const file = join(runDir, host === 'tauri' ? 'guest-network.jsonl' : 'cdp-network.jsonl');
+  if (!existsSync(file)) return null;
+  const records = readJsonl(file).filter((r) => host === 'tauri' || r.label === 'owadview');
+  return wireRequests(
+    records,
+    host === 'tauri' ? [] : (readJson(join(runDir, 'netlog-requests.json')) ?? []),
+  );
+}
+
+/**
+ * Joins `requestWillBeSent` (URL, type) with `requestWillBeSentExtraInfo`
+ * (sent headers) by request id; net log entries fill in the ad library.
+ *
+ * @param {{method: string, requestId?: string, url?: string, resourceType?: string, headers?: Record<string, unknown>}[]} records
+ * @param {{url: string, sentHeaders?: string[]}[]} netlog
+ */
+export function wireRequests(records, netlog) {
+  const sent = new Map();
+  for (const r of records)
+    if (r.method === 'Network.requestWillBeSent' && typeof r.url === 'string')
+      sent.set(r.requestId, { url: r.url, type: r.resourceType ?? null });
+  const out = [];
+  for (const r of records) {
+    if (r.method !== 'Network.requestWillBeSentExtraInfo') continue;
+    const req = sent.get(r.requestId);
+    if (!req) continue;
+    const headers = Object.fromEntries(
+      Object.entries(r.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]),
+    );
+    out.push({ ...req, headers });
+  }
+  if (!out.some((r) => AD_LIBRARY.test(r.url)))
+    for (const n of netlog.filter((x) => AD_LIBRARY.test(x.url)).slice(0, 1))
+      out.push({
+        url: n.url,
+        type: 'Script',
+        headers: Object.fromEntries(headerMap(n.sentHeaders)),
+      });
+  return out;
+}
+
+/**
+ * The shaping fields of a guest's requests (CONTRACT D.8.2): how many
+ * subresources (not documents, not the ad library) carried
+ * `Origin: https://www.overwolf.com`, and the first ad library request's
+ * `x-ow-*`, `Origin` and `Referer`.
+ *
+ * @param {ReturnType<typeof wireRequests>} wire
+ */
+export function shapingOf(wire) {
+  const sub = wire.filter((r) => r.type !== 'Document' && !AD_LIBRARY.test(r.url));
+  const lib = wire.find((r) => AD_LIBRARY.test(r.url));
+  const pick = (h, k) => (h && typeof h[k] === 'string' ? h[k] : null);
+  return {
+    subresources: sub.length,
+    withOrigin: sub.filter((r) => r.headers.origin === SHAPED_ORIGIN).length,
+    withoutOrigin: sub
+      .filter((r) => r.headers.origin !== SHAPED_ORIGIN)
+      .map((r) => r.url.replace(/\?.*/, ''))
+      .slice(0, 5),
+    adLibrary: lib
+      ? Object.fromEntries(
+          ['x-ow-uid', 'x-ow-phase', 'x-ow-window', 'origin', 'referer'].map((k) => [
+            k,
+            pick(lib.headers, k),
+          ]),
+        )
+      : null,
+  };
+}
+
+function compareRequestShaping(e, t, out) {
+  if (!e.guestWire || !t.guestWire) return;
+  const a = shapingOf(e.guestWire);
+  const b = shapingOf(t.guestWire);
+  if (a.subresources > 0 && a.withOrigin === a.subresources && b.withOrigin !== b.subresources)
+    out.push({
+      section: 'request-shaping',
+      key: 'subresource Origin',
+      field: 'missing',
+      electron: `${a.withOrigin} of ${a.subresources}`,
+      tauri: `${b.withOrigin} of ${b.subresources}`,
+      why: `guest subresources left without Origin: ${SHAPED_ORIGIN} (CONTRACT D.8.2), e.g. ${b.withoutOrigin.join(', ')}`,
+    });
+  if (a.subresources > 0 && b.subresources === 0)
+    out.push({
+      section: 'request-shaping',
+      key: 'subresources',
+      field: 'not-recorded',
+      electron: a.subresources,
+      tauri: 0,
+    });
+  if (a.adLibrary && b.adLibrary) {
+    for (const [k, v] of Object.entries(a.adLibrary))
+      if (b.adLibrary[k] !== v)
+        out.push({
+          section: 'request-shaping',
+          key: `ad library ${k}`,
+          field: 'header',
+          electron: v,
+          tauri: b.adLibrary[k],
+        });
+  } else if (a.adLibrary || b.adLibrary) {
+    out.push({
+      section: 'request-shaping',
+      key: 'ad library',
+      field: 'not-recorded',
+      electron: !!a.adLibrary,
+      tauri: !!b.adLibrary,
+    });
+  }
+}
+
 function cmpDocuments(runDir) {
   const all = readJson(join(runDir, 'netlog-requests.json')) ?? [];
   return all
@@ -495,6 +624,7 @@ export function loadCapture(runDir) {
     hostRequests: hostRequests(runDir),
     guestCreation: guestCreationSpans(readJsonl(join(runDir, 'wc-events.jsonl'))),
     adDocuments: adDocuments(runDir),
+    guestWire: guestWire(runDir, meta.host ?? 'electron'),
     cmpDocuments: cmpDocuments(runDir),
     cmpPages: readJsonl(join(runDir, 'cmp-pages.jsonl')),
     hasIpc: existsSync(join(runDir, 'ipc.jsonl')),
@@ -2002,6 +2132,7 @@ export function diffCaptures(electronDir, tauriDir, { tolerance = 1500, burst = 
   compareActions(e, t, raw);
   compareHostRequests(e, t, raw, tolerance, burst);
   compareAdDocuments(e, t, raw);
+  compareRequestShaping(e, t, raw);
   compareCmp(e, t, raw);
   compareConsentCookies(e, t, raw);
   compareStateFile(e, t, raw);
