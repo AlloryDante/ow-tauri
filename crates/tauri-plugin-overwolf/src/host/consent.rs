@@ -134,8 +134,8 @@ impl<R: Runtime> Host<R> {
         self.with_core(|c| c.consent.gate_open)
     }
 
-    /// `RunEvent::Ready`: the first `cmp-eu-only` request and startup
-    /// window of this launch (D.6.1, D.6.2).
+    /// `main_ready` (or its 10 s fallback): the first `cmp-eu-only` request
+    /// and startup window of this launch (D.6.1, D.6.2).
     pub(crate) fn start_consent(self: &Arc<Self>) {
         let first = self.with_core(|c| !std::mem::replace(&mut c.consent.started, true));
         if first {
@@ -231,7 +231,7 @@ impl<R: Runtime> Host<R> {
 
     /// The `cmp.js` shim with this launch's configuration (D.6.6).
     fn cmp_script(&self) -> String {
-        let ad_optimization = self.ow_tauri.get().ad_optimization.unwrap_or(false);
+        let ad_optimization = crate::consent::ad_optimization(self.ow_tauri.get().ad_optimization);
         crate::ads::splice_config(CMP_JS, CMP_CONFIG_TOKEN, &cmp_config(ad_optimization))
             .unwrap_or_else(|| {
                 self.log(LogLevel::Error, "cmp.js has no configuration token");
@@ -509,7 +509,7 @@ impl<R: Runtime> Host<R> {
         if new {
             self.spawn_round(round);
         } else {
-            // A call before `RunEvent::Ready` starts the first round.
+            // A call before `main_ready` starts the first round.
             self.start_consent();
         }
         if !already {
@@ -764,6 +764,16 @@ mod tests {
         assert!(!in_cmp_scope(
             &Url::parse("https://evil.example/monsdk/electron/").unwrap()
         ));
+    }
+
+    /// Regression (Windows lab): ow-electron's consent page read
+    /// `getIsAdOptimizationEnabled()` as `true` on Windows; ow-tauri
+    /// answered `false` on every platform.
+    #[test]
+    fn ad_optimization_defaults_per_platform_until_stored() {
+        assert_eq!(crate::consent::ad_optimization(None), cfg!(windows));
+        assert!(!crate::consent::ad_optimization(Some(false)));
+        assert!(crate::consent::ad_optimization(Some(true)));
     }
 
     #[test]

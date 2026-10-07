@@ -123,6 +123,18 @@ function paymentOptions(raw: object): Record<string, unknown> {
 }
 
 /**
+ * `app.overwolf.enableAdsOptimization` for the host platform (snapshot
+ * `platform`, Node's spelling): `true` on Windows only [OBS].
+ *
+ * @param platform - the snapshot's `platform`
+ * @returns the value ow-electron has on that platform
+ * @internal
+ */
+export function adsOptimizationDefault(platform: unknown): boolean {
+  return platform === 'win32';
+}
+
+/**
  * The `app.overwolf` implementation. One instance per main webview, shared by
  * `ow-tauri/main` (`overwolf`) and `ow-tauri/electron` (`app.overwolf`).
  */
@@ -132,12 +144,13 @@ export class Overwolf implements OverwolfApi {
   /** ow-electron's internal settings object [OBS]. */
   readonly __settings__: OverwolfSettings;
   /**
-   * Present on ow-electron's object and always `false`, also after
-   * `disableAdsOptimization()` [OBS]; not in its typings.
+   * Present on ow-electron's object, not in its typings: `true` on Windows
+   * and `false` elsewhere, already at module load [OBS: Windows lab, macOS
+   * lab]; `disableAdsOptimization()` leaves it unchanged on macOS [OBS].
    *
    * @internal
    */
-  readonly enableAdsOptimization: boolean = false;
+  readonly enableAdsOptimization: boolean;
   readonly #kernel: FacadeKernel;
   #adsOptimization: AdsOptimizationSettings = Object.freeze({});
 
@@ -147,6 +160,7 @@ export class Overwolf implements OverwolfApi {
    */
   constructor(kernel: FacadeKernel) {
     this.#kernel = kernel;
+    this.enableAdsOptimization = adsOptimizationDefault(kernel.state.get('platform'));
     this.packages = new PackageManager(kernel);
     this.__settings__ = createSettings(
       () => this.#adsOptimization,

@@ -6,7 +6,12 @@ import { BrowserWindow, app } from '../electron/index.js';
 import { OwTauriError } from '../shared/errors.js';
 import { mockHost, setHostContext, settle, type MockHost } from '../testing/index.js';
 import { overwolf, whenHostReady } from './index.js';
-import { NOT_READY_MESSAGE, Overwolf, PAYMENT_ID_MANDATORY } from './overwolf.js';
+import {
+  adsOptimizationDefault,
+  NOT_READY_MESSAGE,
+  Overwolf,
+  PAYMENT_ID_MANDATORY,
+} from './overwolf.js';
 import { syntheticEvent } from './packages.js';
 
 let host: MockHost | undefined;
@@ -85,12 +90,25 @@ describe('app.overwolf synchronous members (B.1.1, B.1.6)', () => {
     expect(overwolf.phasePercent).toBe(0);
   });
 
+  // Regression (Windows lab): ow-electron's value is true on Windows.
+  it('has enableAdsOptimization true on Windows only', () => {
+    expect(adsOptimizationDefault('win32')).toBe(true);
+    expect(adsOptimizationDefault('darwin')).toBe(false);
+    expect(adsOptimizationDefault('linux')).toBe(false);
+    expect(adsOptimizationDefault(undefined)).toBe(false);
+    host = mockHost({ snapshot: { platform: 'win32' } });
+    expect(new Overwolf(kernel).enableAdsOptimization).toBe(true);
+    host = mockHost({ snapshot: { platform: 'darwin' } });
+    expect(new Overwolf(kernel).enableAdsOptimization).toBe(false);
+  });
+
   it('has the members ow-electron has beyond its typings [OBS]', async () => {
     host = mockHost();
     const api = overwolf as unknown as Record<string, unknown>;
-    expect(api['enableAdsOptimization']).toBe(false);
+    const before = api['enableAdsOptimization'];
+    expect(typeof before).toBe('boolean');
     overwolf.disableAdsOptimization();
-    expect(api['enableAdsOptimization']).toBe(false);
+    expect(api['enableAdsOptimization']).toBe(before);
     expect(overwolf.assureOWElectronIsReady.length).toBe(0);
     expect(overwolf.overrideAdViewUrl.length).toBe(1);
     expect(overwolf.storeEmailHashes.length).toBe(1);

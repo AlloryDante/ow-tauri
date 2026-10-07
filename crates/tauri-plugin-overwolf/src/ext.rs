@@ -428,7 +428,7 @@ impl<R: Runtime> Overwolf<R> {
         self.0.now()
     }
 
-    /// As `RunEvent::Ready`: starts this launch's consent round (D.6.1).
+    /// As `main_ready`: starts this launch's consent round (D.6.1).
     pub fn test_start_consent(&self) {
         self.0.start_consent();
     }

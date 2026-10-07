@@ -408,6 +408,24 @@ pub struct CmpEventData {
     pub enabled: Option<bool>,
 }
 
+/// The ad-optimisation answer before a consent page stored one (D.6.6,
+/// `app.overwolf.enableAdsOptimization`): ow-electron answers `true` on
+/// Windows and `false` on macOS, already at module load, before any
+/// request [OBS: Windows lab, macOS lab]. Linux follows macOS [DEC].
+pub const AD_OPTIMIZATION_DEFAULT: bool = cfg!(windows);
+
+/// The stored ad-optimisation toggle, or [`AD_OPTIMIZATION_DEFAULT`].
+///
+/// ```
+/// use tauri_plugin_overwolf::consent::{ad_optimization, AD_OPTIMIZATION_DEFAULT};
+/// assert!(ad_optimization(Some(true)));
+/// assert_eq!(ad_optimization(None), AD_OPTIMIZATION_DEFAULT);
+/// ```
+#[must_use]
+pub fn ad_optimization(stored: Option<bool>) -> bool {
+    stored.unwrap_or(AD_OPTIMIZATION_DEFAULT)
+}
+
 /// The `cmp.js` configuration (D.6.6).
 ///
 /// ```

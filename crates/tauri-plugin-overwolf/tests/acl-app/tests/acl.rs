@@ -1532,6 +1532,64 @@ fn request_names(requests: &Requests) -> Vec<String> {
         .collect()
 }
 
+/// Regression (Windows lab): the `cmp-eu-only` request left at
+/// `RunEvent::Ready`, 90 to 280 ms ahead of the startup analytics that
+/// ow-electron sends in the same burst. It now leaves with them at
+/// `main_ready`, and the startup consent window follows its answer.
+#[test]
+fn the_consent_request_leaves_with_the_startup_analytics() {
+    let requests = Arc::new(Requests::default());
+    let mut context = ow_tauri_acl_tests::context();
+    context.config_mut().plugins.0.insert(
+        "overwolf".into(),
+        json!({ "state": { "appDataDir": temp_dir("consent-at-main-ready") } }),
+    );
+    let app = mock_builder()
+        .plugin(
+            Builder::new()
+                .manifest_json(ow_tauri_acl_tests::manifest())
+                .companion_plugins(false)
+                .main_webview(false)
+                .skip_os_queries()
+                .skip_updater_os_steps()
+                .analytics_transport(Arc::clone(&requests) as _)
+                .argv(vec!["acl-fixture".into()])
+                .build(),
+        )
+        .build(context)
+        .unwrap();
+    main_and_window(&app);
+    let urls = || -> Vec<String> {
+        requests
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.url.clone())
+            .collect()
+    };
+    assert!(urls().is_empty(), "nothing leaves before main_ready");
+    invoke(&app, "ow-main", "main_ready", json!({})).unwrap();
+    let ow = app.overwolf();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !ow
+        .test_hidden_consent_windows()
+        .contains(&"ow-cmp-startup".to_owned())
+    {
+        assert!(Instant::now() < deadline, "no startup window");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let urls = urls();
+    assert!(
+        urls.iter().any(|u| u.contains("cmp-eu-only")),
+        "cmp-eu-only left: {urls:?}"
+    );
+    assert!(
+        urls.iter().any(|u| u.contains("_app_start")),
+        "with the startup analytics: {urls:?}"
+    );
+}
+
 /// Regression (lab diff, `sizes` with seven slots): guests attaching at
 /// once on several threads. One poll started the window's visible period;
 /// the others saw it visible and sent their 400025 before the first had

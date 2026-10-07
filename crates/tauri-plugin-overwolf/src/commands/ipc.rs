@@ -108,6 +108,9 @@ pub(crate) async fn main_ready<R: Runtime>(
         );
     }
     host.log(LogLevel::Info, "main_ready");
+    // D.6.1, D.6.2: the launch's consent request leaves with the startup
+    // analytics, as ow-electron sends them together once the app is ready.
+    host.start_consent();
     host.start_analytics();
     Ok(())
 }

@@ -405,8 +405,6 @@ fn on_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
             }
         }
         RunEvent::Exit => host.on_exit(),
-        // D.6.1, D.6.2: the consent request and startup window of the launch.
-        RunEvent::Ready => host.start_consent(),
         RunEvent::WindowEvent { label, event, .. } => window_event(&host, label, event),
         #[cfg(target_os = "macos")]
         RunEvent::Reopen {

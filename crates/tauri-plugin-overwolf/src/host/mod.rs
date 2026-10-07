@@ -428,6 +428,7 @@ impl<R: Runtime> Host<R> {
                 LogLevel::Warn,
                 "main_ready did not arrive within 10 s; starting analytics and packages anyway",
             );
+            self.start_consent();
             self.start_analytics();
         }
         self.poll_visibility();

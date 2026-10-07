@@ -1948,7 +1948,7 @@ the ads data store, and through `consent` messages to running guests (D.5)
 #### D.6.1 Startup consent window
 
 On **every launch** the host creates the webview window `ow-cmp-startup`
-as soon as the `cmp-eu-only` request (D.6.2), started at `RunEvent::Ready`,
+as soon as the `cmp-eu-only` request (D.6.2), started at `main_ready`,
 has completed, whatever its outcome (a response of any status, an invalid
 body, a dropped connection) [OBS]:
 
@@ -1987,7 +1987,8 @@ every case, so ow-tauri runs it too.
 
 #### D.6.2 `isCMPRequired()`
 
-- At `RunEvent::Ready` the host sends one
+- At `main_ready` (or its 10 s fallback, E.2), together with the startup
+  analytics, the host sends one
   `GET https://features.overwolf.com/experiments/cmp-eu-only` with the host
   request headers of E.1 plus `cache-control: no-cache` [OBS]. The observed
   response is `{"params":[]}`.
@@ -2107,7 +2108,7 @@ frozen functions with `length` 0; the page gets no `window.overwolf` [OBS]:
 | `window.cmp.saveConsent(value)` | `cmp_event saveConsent { consent }` (a TCData object is reduced to its `tcString`; `""` is sent and clears the value, D.6.2; any other value without a consent string is dropped); Rust stores `cmp.cmpString` and `cmp.timeStamp` = now in seconds (F.2) |
 | `window.cmp.saveUnifiedConsent(value)` | `cmp_event saveUnifiedConsent { consent }`; Rust stores `cmp.unifiedConsentString`, URL-encoded (F.2) |
 | `window.privacy.enableAdOptimization(enabled)` | `cmp_event enableAdOptimization { enabled }`; stored as `adOptimization` in `ow-tauri.json`; returns a resolved promise |
-| `window.privacy.getIsAdOptimizationEnabled()` | resolves the stored value, default `false` (ow-electron answered `false` [OBS]); whether `enableAdOptimization(true)` changes ow-electron's answer: **Unknown (R3-8)** |
+| `window.privacy.getIsAdOptimizationEnabled()` | resolves the stored value; before one is stored, `true` on Windows and `false` elsewhere (ow-electron answered `true` on Windows [OBS: Windows lab] and `false` on macOS [OBS]; the same value as `app.overwolf.enableAdsOptimization`, which ow-electron has at module load, before any request); whether `enableAdOptimization(true)` changes ow-electron's answer: **Unknown (R3-8)** |
 | `window.close()` | `cmp_event close`; Rust closes the window |
 
 The argument shapes of `saveConsent` and `saveUnifiedConsent` come from the
@@ -2365,13 +2366,16 @@ priority: u=4, i
 **Order and timing.** In ow-electron #1, #2, #3, the #4 Counter, 400022 and
 400023 go out in that order within about 100 ms of Electron's `ready`; #5
 follows when the first window is shown, 1 to 3 s later [OBS]. In ow-tauri,
-#2 starts at `RunEvent::Ready` (the startup consent window follows its
-response, D.6.1), and the analytics sequence (#1, #3, #4, 400022, 400023) starts at
+#2 and the analytics sequence (#1, #3, #4, 400022, 400023) start together at
 `main_ready` (A.2.1), which is the point where the app's top-level code has
-run, as Electron's `ready` is for an ow-electron app. This keeps
+run, as Electron's `ready` is for an ow-electron app; the startup consent
+window follows #2's response (D.6.1). Starting #2 earlier, at
+`RunEvent::Ready`, put it 90 to 280 ms ahead of the rest of the burst on
+Windows, where the main page loads after the webview exists [OBS: Windows
+lab]. This keeps
 `disableAnonymousAnalytics()` called at module load effective, as in
 ow-electron. If `main_ready` never arrives, the sequence starts after 10 s
-with a warning.
+with a warning, and #2 with it.
 
 **Second launch:** #1 and 400022 are not sent; everything else is unchanged
 [OBS].

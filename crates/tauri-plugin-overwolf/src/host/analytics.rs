@@ -267,10 +267,10 @@ impl<R: Runtime> Host<R> {
     }
 
     /// Writes `firstLaunch: true` to `ow-electron.json` once per launch,
-    /// on a first launch only. `RunEvent::Ready` calls it before the startup
+    /// on a first launch only. The consent start calls it before the startup
     /// consent flow can save `cmp`, so the file's keys come in ow-electron's
     /// order (`firstLaunch`, then `cmp`, observed); the analytics start calls
-    /// it again in case `Ready` never came.
+    /// it again in case consent never started.
     pub(crate) fn record_first_launch(&self) {
         {
             let mut core = self.analytics.lock();
