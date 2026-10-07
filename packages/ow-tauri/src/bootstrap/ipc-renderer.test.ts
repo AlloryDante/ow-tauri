@@ -388,6 +388,29 @@ describe('remoteInvokeError', () => {
     expect(error.message).toBe("Error invoking remote method 'c': boom");
     expect(error.data).toMatchObject({ name: 'Error', message: 'boom' });
   });
+
+  it('prints like the plain Error Electron rejects with, and keeps its class and code', () => {
+    const remote = remoteInvokeError('c', {
+      code: 'ipc-remote-error',
+      message: 'bad',
+      data: { name: 'TypeError', message: 'bad', text: 'TypeError: bad' },
+    });
+    const missing = remoteInvokeError('c', {
+      code: 'ipc-no-handler',
+      message: "No handler registered for 'c'",
+    });
+    expect(String(remote)).toBe("Error: Error invoking remote method 'c': TypeError: bad");
+    expect(String(missing)).toBe(
+      "Error: Error invoking remote method 'c': Error: No handler registered for 'c'",
+    );
+    for (const error of [remote, missing]) {
+      expect(error).toBeInstanceOf(OwTauriError);
+      expect(error.name).toBe('Error');
+    }
+    expect([remote.code, missing.code]).toEqual(['ipc-remote-error', 'ipc-no-handler']);
+    // Failures Electron has no counterpart for keep the class name.
+    expect(remoteInvokeError('c', { code: 'ipc-timeout', message: 't' }).name).toBe('OwTauriError');
+  });
 });
 
 describe('maxMessageBytesFrom (C.5)', () => {

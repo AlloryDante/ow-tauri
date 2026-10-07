@@ -110,6 +110,19 @@ export function encodeMessageArgs(args: readonly unknown[], maxBytes: number): O
 }
 
 /**
+ * Names an invoke rejection `Error`, as Electron's is a plain `Error`: its
+ * string form and console line then start with `Error: Error invoking`, as
+ * in Electron. It stays an {@link OwTauriError} with its `code`.
+ *
+ * @param error - the rejection
+ * @returns the same error
+ */
+function electronNamed(error: OwTauriError): OwTauriError {
+  error.name = 'Error';
+  return error;
+}
+
+/**
  * Builds the error a renderer sees for a failed invoke (CONTRACT C.2 step 6, C.8).
  *
  * @param channel - the invoked channel
@@ -121,7 +134,9 @@ export function remoteInvokeError(channel: string, wire: OverwolfErrorWire): OwT
   const options = wire.data === undefined ? undefined : { data: wire.data };
   switch (wire.code) {
     case 'ipc-no-handler':
-      return new OwTauriError('ipc-no-handler', `${prefix}Error: ${wire.message}`, options);
+      return electronNamed(
+        new OwTauriError('ipc-no-handler', `${prefix}Error: ${wire.message}`, options),
+      );
     case 'ipc-remote-error': {
       const data = (typeof wire.data === 'object' && wire.data !== null ? wire.data : {}) as Record<
         string,
@@ -131,9 +146,11 @@ export function remoteInvokeError(channel: string, wire: OverwolfErrorWire): OwT
       const message = typeof data['message'] === 'string' ? data['message'] : wire.message;
       // `text` is the thrown value's toString(), Electron's exact wording.
       const text = typeof data['text'] === 'string' ? data['text'] : `${name}: ${message}`;
-      return new OwTauriError('ipc-remote-error', `${prefix}${text}`, {
-        data: { ...data, name, message },
-      });
+      return electronNamed(
+        new OwTauriError('ipc-remote-error', `${prefix}${text}`, {
+          data: { ...data, name, message },
+        }),
+      );
     }
     default:
       return new OwTauriError(wire.code, `${prefix}${wire.message}`, options);

@@ -82,6 +82,18 @@ export interface IpcMainEvent extends IpcMainEventBase {
 }
 
 /**
+ * Electron's main-process line for an invoke that failed (no handler, or the
+ * handler threw or rejected), printed before the renderer gets the
+ * rejection: `Error occurred in handler for '<channel>':` and the error.
+ *
+ * @param channel - the channel
+ * @param error - what the handler threw, or the no-handler error
+ */
+function handlerFailed(channel: string, error: unknown): void {
+  console.error(`Error occurred in handler for '${channel}':`, error);
+}
+
+/**
  * Electron's `ipcMain` and `webContents.ipc` (CONTRACT B.2.3): a Node-style
  * emitter of `(event, ...args)` for `ipcRenderer.send`, plus
  * `handle` / `handleOnce` / `removeHandler` for `ipcRenderer.invoke`.
@@ -374,14 +386,12 @@ export class IpcServer {
     const handler =
       this.#scoped.get(windowId)?.handlerFor(channel) ?? this.ipcMain.handlerFor(channel);
     if (!handler) {
+      const message = `No handler registered for '${channel}'`;
+      handlerFailed(channel, new Error(message));
       this.#reply(target, {
         id,
         ok: false,
-        error: {
-          code: 'ipc-no-handler',
-          message: `No handler registered for '${channel}'`,
-          data: { channel },
-        },
+        error: { code: 'ipc-no-handler', message, data: { channel } },
       });
       return;
     }
@@ -390,6 +400,7 @@ export class IpcServer {
       const decoded = decodeArgs(args);
       result = await handler(this.#invokeEvent(windowId, sender), ...decoded);
     } catch (error) {
+      handlerFailed(channel, error);
       this.#reply(target, { id, ok: false, error: remoteError(error) });
       return;
     }

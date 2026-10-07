@@ -97,6 +97,29 @@ describe('ipcMain.handle (C.2)', () => {
     ]);
   });
 
+  it("prints Electron's main-process line when an invoke fails", async () => {
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const thrown = new TypeError('bad input');
+      ipcMain.handle('throws', () => {
+        throw thrown;
+      });
+      invoke(1, 'missing');
+      invoke(2, 'throws');
+      await settle();
+      expect(printed.mock.calls).toEqual([
+        [
+          "Error occurred in handler for 'missing':",
+          new Error("No handler registered for 'missing'"),
+        ],
+        ["Error occurred in handler for 'throws':", thrown],
+      ]);
+      ipcMain.removeHandler('throws');
+    } finally {
+      printed.mockRestore();
+    }
+  });
+
   it('replies ipc-remote-error with name and message when the handler throws or rejects', async () => {
     ipcMain.handle('throws', () => {
       throw new TypeError('bad input');

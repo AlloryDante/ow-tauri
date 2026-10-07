@@ -428,18 +428,32 @@ describe('discovery and attach (B.3.1)', () => {
     expect(callsOf('adview_mount')).toHaveLength(0);
   });
 
-  it('logs when the engine refuses a shadow root', async () => {
+  it('logs once per page when the engine refuses a shadow root', async () => {
     await startRuntime();
-    const el = createAd();
-    el.attachShadow = () => {
+    const refuse = () => {
       throw new DOMException('not supported', 'NotSupportedError');
     };
+    const el = createAd();
+    el.attachShadow = refuse;
     document.body.append(el);
     await tick();
     expect(callsOf('adview_mount')).toHaveLength(1);
-    expect(services.logs).toContain(
-      'debug: <owadview> shadow root is not available on this engine',
-    );
+    // Every later ad is refused too: no new attempt, no new line.
+    const second = createAd();
+    let attempts = 0;
+    second.attachShadow = () => {
+      attempts += 1;
+      return refuse();
+    };
+    document.body.append(second);
+    await tick();
+    expect(callsOf('adview_mount')).toHaveLength(2);
+    expect(attempts).toBe(0);
+    expect(
+      services.logs.filter(
+        (l) => l === 'debug: <owadview> shadow root is not available on this engine',
+      ),
+    ).toHaveLength(1);
   });
 });
 

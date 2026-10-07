@@ -222,6 +222,8 @@ export class AdviewRuntime implements FacadeOwadview {
   #sheet: CSSStyleSheet | undefined;
   #layout: MutationObserver | undefined;
   #layoutObserved = false;
+  /** The engine refused a shadow root once; it refuses every later one too. */
+  #noShadow = false;
   #started = false;
   #scheduled = false;
   #poll: ReturnType<typeof setInterval> | undefined;
@@ -891,13 +893,15 @@ export class AdviewRuntime implements FacadeOwadview {
 
   #attachShadow(entry: Entry): void {
     const el = entry.el;
-    if (el.shadowRoot) return;
+    if (el.shadowRoot || this.#noShadow) return;
     let root: ShadowRoot;
     try {
       root = el.attachShadow({ mode: 'open' });
     } catch {
       // Engines allow shadow roots only on valid custom element names and a
-      // fixed list of HTML elements; `owadview` is neither.
+      // fixed list of HTML elements; `owadview` is neither. Said once per
+      // page: ow-electron says nothing, and every later ad would repeat it.
+      this.#noShadow = true;
       this.#services.log('debug', '<owadview> shadow root is not available on this engine');
       return;
     }
