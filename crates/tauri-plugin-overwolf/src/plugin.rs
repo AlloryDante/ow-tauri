@@ -606,6 +606,27 @@ mod tests {
         );
     }
 
+    /// `setUserEmailHashes()` stores `eHashes` in `ow-electron.json`, as
+    /// ow-electron does (observed). The writer alone is tested in `state`;
+    /// this covers the host wiring.
+    #[test]
+    fn email_hashes_are_stored_in_ow_electron_json() {
+        let probe = tauri::plugin::Builder::<MockRuntime>::new("probe").build();
+        let app = app("ehashes", probe);
+        let host = host_of(app.handle()).unwrap();
+        let mut hashes = serde_json::Map::new();
+        for (k, v) in [("sha1", "s1"), ("md5", "m5"), ("sha256", "s256")] {
+            hashes.insert(k.into(), v.into());
+        }
+        host.send_email_hashes(Some(&hashes));
+        let text = std::fs::read_to_string(host.ow_electron.path()).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            json["eHashes"],
+            serde_json::json!({ "sha1": "s1", "md5": "m5", "sha256": "s256" })
+        );
+    }
+
     #[test]
     fn crash_reports_are_counted_once() {
         let probe = tauri::plugin::Builder::<MockRuntime>::new("probe").build();
