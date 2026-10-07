@@ -232,18 +232,24 @@ mod tests {
 
     #[test]
     fn macos_layout() {
+        // Joins use the host's separator, so compare as paths: every OS's
+        // layout is computed on every host.
         let p = electron_paths(&base(), "Example App", TargetOs::Macos);
+        let path = |key: &str| Path::new(&p[key]);
         assert_eq!(
-            p["userData"],
-            "/Users/u/Library/Application Support/Example App"
+            path("userData"),
+            Path::new("/Users/u/Library/Application Support/Example App")
         );
         assert_eq!(p["sessionData"], p["userData"]);
-        assert_eq!(p["logs"], "/Users/u/Library/Logs/Example App");
+        assert_eq!(path("logs"), Path::new("/Users/u/Library/Logs/Example App"));
         assert_eq!(
-            p["crashDumps"],
-            "/Users/u/Library/Application Support/Example App/Crashpad"
+            path("crashDumps"),
+            Path::new("/Users/u/Library/Application Support/Example App/Crashpad")
         );
-        assert_eq!(p["appPath"], "/Applications/X.app/Contents/Resources/app");
+        assert_eq!(
+            path("appPath"),
+            Path::new("/Applications/X.app/Contents/Resources/app")
+        );
         assert_eq!(p.len(), 15);
     }
 
@@ -255,7 +261,7 @@ mod tests {
             ..BaseDirs::default()
         };
         let p = electron_paths(&b, "A", TargetOs::Linux);
-        assert_eq!(p["logs"], "/home/u/.config/A/logs");
+        assert_eq!(Path::new(&p["logs"]), Path::new("/home/u/.config/A/logs"));
         assert!(!p.contains_key("music"));
         assert!(!p.contains_key("appPath"));
     }

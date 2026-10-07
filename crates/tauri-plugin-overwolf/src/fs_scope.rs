@@ -388,9 +388,16 @@ mod tests {
             Some(PathBuf::from("/t/App/x"))
         );
         assert_eq!(expand_template("$USERDATAX", &dirs), None);
+        // An absolute path needs a drive or UNC prefix on Windows.
+        let (abs, expanded) = if cfg!(windows) {
+            (r"C:\abs\$APPNAME", r"C:\abs\App")
+        } else {
+            ("/abs/$APPNAME", "/abs/App")
+        };
+        assert_eq!(expand_template(abs, &dirs), Some(PathBuf::from(expanded)));
         assert_eq!(
-            expand_template("/abs/$APPNAME", &dirs),
-            Some(PathBuf::from("/abs/App"))
+            expand_template("/abs/$APPNAME", &dirs).is_some(),
+            cfg!(not(windows))
         );
         assert_eq!(expand_template("rel", &dirs), None);
     }
