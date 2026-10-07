@@ -243,6 +243,12 @@ pub(crate) fn setup<R: Runtime>(
         warnings.push("ow-electron.json is not valid JSON; it is left untouched".into());
     }
     let utm_params = shared.state.utm_params.clone();
+    // Ad guests carry the consent stored at launch (D.2).
+    let launch_consent = shared
+        .state
+        .cmp
+        .and_then(|c| c.unified_consent_string)
+        .unwrap_or_default();
 
     let os = TargetOs::current();
     let base = base_dirs(app, app_data.clone());
@@ -384,6 +390,7 @@ pub(crate) fn setup<R: Runtime>(
             &manifest.product_name,
             &manifest.version,
             &label,
+            crate::platform::safari_version(),
         ),
         label,
         app_version: manifest.version.clone(),
@@ -399,7 +406,7 @@ pub(crate) fn setup<R: Runtime>(
     let transport = options
         .transport
         .clone()
-        .unwrap_or_else(|| Arc::new(crate::analytics::transport::ReqwestTransport::new()));
+        .unwrap_or_else(|| Arc::new(crate::analytics::transport::HyperTransport::new()));
     let user_enabled =
         !config.analytics.user_switch || stored.analytics_user_enabled != Some(false);
     let analytics = super::analytics::AnalyticsHost::new(
@@ -425,6 +432,7 @@ pub(crate) fn setup<R: Runtime>(
             muid_v2,
             phase_percent: phase,
             utm_params,
+            launch_consent,
             state_dir,
             fs_scope,
             identity,

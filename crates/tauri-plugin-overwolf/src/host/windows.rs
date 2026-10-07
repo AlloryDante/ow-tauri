@@ -267,7 +267,10 @@ impl<R: Runtime> Host<R> {
         {
             b = b.additional_browser_args(&self.info.browser_args);
         }
+        // Lab windows are built hidden and shown invisible (feature `lab`).
+        b = crate::lab::window_builder(b, visible);
         let window = b.build().map_err(Error::from)?;
+        crate::lab::after_build(&window, visible);
         self.install_app_hooks(window.as_ref());
         if let Some(z) = o.web_preferences.as_ref().and_then(|w| w.zoom_factor) {
             let _ = window.set_zoom(z);
@@ -391,6 +394,7 @@ impl<R: Runtime> Host<R> {
     /// Destroys window `id` without a `close` event.
     pub(crate) fn destroy_window(self: &Arc<Self>, id: u32) {
         if let Some(window) = self.app.get_window(&ui_label(id)) {
+            self.ads_window_closing(id);
             if let Err(err) = window.destroy() {
                 self.log(
                     LogLevel::Warn,
@@ -535,7 +539,9 @@ impl<R: Runtime> Host<R> {
             if let Some(w) = self.app.get_window(&ui_label(id))
                 && w.is_visible().unwrap_or(false)
             {
-                let _ = w.set_focus();
+                if crate::lab::may_focus() {
+                    let _ = w.set_focus();
+                }
                 return;
             }
         }

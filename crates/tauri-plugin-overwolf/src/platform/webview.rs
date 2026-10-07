@@ -159,6 +159,17 @@ pub(crate) fn load_shaped<R: Runtime>(
     webview.navigate(url.clone()).is_ok()
 }
 
+/// The header fields the plugin itself puts on the ad document request
+/// (D.8.3), as `Name: value` lines in order; the platform adds the rest.
+pub(crate) fn document_header_fields(shaping: Option<&Shaping>) -> Vec<String> {
+    shaping.map_or_else(Vec::new, |s| {
+        vec![
+            format!("Referer: {}", s.referer),
+            format!("Origin: {}", s.origin),
+        ]
+    })
+}
+
 /// Platform reports from a webview that Tauri does not deliver.
 pub(crate) trait GuestReports: Send + Sync + 'static {
     /// The webview's render process ended (`reason` is Electron's spelling).
@@ -245,6 +256,88 @@ pub(crate) fn default_store_cookies(
     macos::default_store_cookies(done);
 }
 
+/// Lab trace: every cookie of the default `WKWebsiteDataStore` with its
+/// attributes, as the ow-electron harness records them. Call it on the
+/// main thread; `done` runs there later.
+#[cfg(all(target_os = "macos", feature = "lab"))]
+pub(crate) fn default_store_cookie_details(
+    done: impl FnOnce(Vec<serde_json::Value>) + Send + 'static,
+) {
+    macos::default_store_cookie_details(done);
+}
+
+/// The height of the window's area above the part web content may use, in
+/// logical pixels: on macOS, the title bar when the window's content view
+/// extends under it (as on macOS 26), where `WKWebView` insets the page by
+/// the overlap. 0 elsewhere. An ad guest is placed relative to the
+/// embedder's page, which starts below this line (B.3.4).
+pub(crate) fn content_inset_top<R: Runtime>(window: &tauri::Window<R>) -> f64 {
+    #[cfg(target_os = "macos")]
+    {
+        let Ok(ptr) = window.ns_window() else {
+            return 0.0;
+        };
+        let address = ptr as usize;
+        if objc2::MainThreadMarker::new().is_some() {
+            return macos::content_inset_top(address);
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        if window
+            .run_on_main_thread(move || {
+                let _ = tx.send(macos::content_inset_top(address));
+            })
+            .is_err()
+        {
+            return 0.0;
+        }
+        rx.recv_timeout(std::time::Duration::from_millis(500))
+            .unwrap_or(0.0)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window;
+        0.0
+    }
+}
+
+/// The displays as the OS names them (`NSScreen.localizedName` with each
+/// screen's frame, top-left origin, on macOS); empty elsewhere, where
+/// Tauri's monitor names are already the OS names.
+pub(crate) fn screen_names<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Vec<crate::screen::OsScreenName> {
+    #[cfg(target_os = "macos")]
+    {
+        if objc2::MainThreadMarker::new().is_some() {
+            return macos::screen_names();
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        if app
+            .run_on_main_thread(move || {
+                let _ = tx.send(macos::screen_names());
+            })
+            .is_err()
+        {
+            return Vec::new();
+        }
+        rx.recv_timeout(std::time::Duration::from_millis(500))
+            .unwrap_or_default()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Vec::new()
+    }
+}
+
+/// Where the page of a webview at `webview_y` (logical, in its window)
+/// starts: the platform insets a page whose webview reaches above the
+/// window's content inset ([`content_inset_top`]) down to that line.
+///
+pub(crate) fn page_origin_y(webview_y: f64, inset_top: f64) -> f64 {
+    webview_y.max(inset_top)
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
     use std::ffi::c_void;
@@ -257,6 +350,66 @@ mod macos {
     use objc2_foundation::{NSArray, NSHTTPCookie, NSMutableURLRequest, NSString, NSURL};
 
     use crate::host::cookies::StoredCookie;
+
+    /// `NSWindow.contentView.frame` top minus `contentLayoutRect` top, in
+    /// window coordinates (points).
+    pub(super) fn content_inset_top(address: usize) -> f64 {
+        use objc2_foundation::NSRect;
+        if address == 0 {
+            return 0.0;
+        }
+        // SAFETY: `address` is the live `NSWindow*` Tauri handed out for this
+        // window, used on the main thread.
+        let window: &AnyObject = unsafe { &*(address as *const AnyObject) };
+        // SAFETY: public NSWindow properties (macOS 10.10+).
+        let layout: NSRect = unsafe { msg_send![window, contentLayoutRect] };
+        // SAFETY: as above.
+        let view: Option<Retained<AnyObject>> = unsafe { msg_send![window, contentView] };
+        let Some(view) = view else { return 0.0 };
+        // SAFETY: `frame` of an NSView, in its superview's (the window's)
+        // coordinates.
+        let frame: NSRect = unsafe { msg_send![&*view, frame] };
+        let top = frame.origin.y + frame.size.height;
+        let layout_top = layout.origin.y + layout.size.height;
+        (top - layout_top).max(0.0)
+    }
+
+    /// `NSScreen.screens` with `localizedName` (macOS 10.15+) and `frame`
+    /// flipped to a top-left origin against the primary (first) screen.
+    pub(super) fn screen_names() -> Vec<crate::screen::OsScreenName> {
+        use objc2_foundation::NSRect;
+        // SAFETY: a public AppKit class method, on the main thread (the
+        // caller's contract).
+        let screens: Option<Retained<NSArray<AnyObject>>> =
+            unsafe { msg_send![class!(NSScreen), screens] };
+        let Some(screens) = screens else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut primary_height = None;
+        for screen in &screens {
+            // SAFETY: public NSScreen properties.
+            let frame: NSRect = unsafe { msg_send![&*screen, frame] };
+            let responds: bool =
+                // SAFETY: NSObject's respondsToSelector:.
+                unsafe { msg_send![&*screen, respondsToSelector: sel!(localizedName)] };
+            let name: Option<Retained<NSString>> = if responds {
+                // SAFETY: checked above (macOS 10.15+).
+                unsafe { msg_send![&*screen, localizedName] }
+            } else {
+                None
+            };
+            let top = *primary_height.get_or_insert(frame.size.height);
+            out.push(crate::screen::OsScreenName {
+                x: frame.origin.x,
+                y: top - (frame.origin.y + frame.size.height),
+                width: frame.size.width,
+                height: frame.size.height,
+                name: name.map(|n| n.to_string()).unwrap_or_default(),
+            });
+        }
+        out
+    }
 
     /// `-[WKHTTPCookieStore getAllCookies:]` on the default data store.
     pub(super) fn default_store_cookies(done: impl FnOnce(Vec<StoredCookie>) + Send + 'static) {
@@ -286,6 +439,56 @@ mod macos {
         });
         // SAFETY: `getAllCookies:` takes a block `void (^)(NSArray<NSHTTPCookie *> *)`,
         // which WebKit copies.
+        let () = unsafe { msg_send![&*cookie_store, getAllCookies: &*block] };
+    }
+
+    /// Every cookie of the default store with its attributes (lab trace).
+    #[cfg(feature = "lab")]
+    pub(super) fn default_store_cookie_details(
+        done: impl FnOnce(Vec<serde_json::Value>) + Send + 'static,
+    ) {
+        // SAFETY: as in `default_store_cookies`.
+        let store: Option<Retained<AnyObject>> =
+            unsafe { msg_send![class!(WKWebsiteDataStore), defaultDataStore] };
+        let Some(store) = store else { return };
+        // SAFETY: as in `default_store_cookies`.
+        let cookie_store: Option<Retained<AnyObject>> =
+            unsafe { msg_send![&*store, httpCookieStore] };
+        let Some(cookie_store) = cookie_store else {
+            return;
+        };
+        let done = Mutex::new(Some(done));
+        let block = block2::RcBlock::new(move |cookies: NonNull<NSArray<NSHTTPCookie>>| {
+            // SAFETY: WebKit passes a valid array for the duration of the call.
+            let cookies = unsafe { cookies.as_ref() };
+            let list = cookies
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "name": c.name().to_string(),
+                        "value": c.value().to_string(),
+                        "domain": c.domain().to_string(),
+                        "path": c.path().to_string(),
+                        "secure": c.isSecure(),
+                        "httpOnly": c.isHTTPOnly(),
+                        "session": c.isSessionOnly(),
+                        "sameSite": c.sameSitePolicy().map(|p| p.to_string()),
+                        "expirationDate": c
+                            .expiresDate()
+                            .filter(|_| !c.isSessionOnly())
+                            .map(|d| d.timeIntervalSince1970()),
+                    })
+                })
+                .collect();
+            if let Some(done) = done
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+            {
+                done(list);
+            }
+        });
+        // SAFETY: as in `default_store_cookies`.
         let () = unsafe { msg_send![&*cookie_store, getAllCookies: &*block] };
     }
 
@@ -622,6 +825,20 @@ mod windows_impl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression (parity lab, macOS 26): a window's content view reaches
+    /// under the title bar and `WKWebView` insets the page below it; guests
+    /// placed at the webview's own origin overlapped the title bar and their
+    /// page lost the overlap (a 300 x 250 slot reported 300 x 226).
+    #[test]
+    fn guests_are_placed_below_the_content_inset() {
+        // An app window's webview fills the window from its top edge.
+        assert!((page_origin_y(0.0, 32.0) - 32.0).abs() < f64::EPSILON);
+        // No inset (title bar outside the content view, other platforms).
+        assert!(page_origin_y(0.0, 0.0).abs() < f64::EPSILON);
+        // A webview already below the line is not moved.
+        assert!((page_origin_y(100.0, 32.0) - 100.0).abs() < f64::EPSILON);
+    }
 
     #[test]
     fn webview2_statuses_map_to_chromium_errors() {

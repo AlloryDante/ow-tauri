@@ -67,6 +67,9 @@ pub(crate) struct Info {
     pub(crate) muid_v2: String,
     pub(crate) phase_percent: u8,
     pub(crate) utm_params: Option<Value>,
+    /// `cmp.unifiedConsentString` of `ow-electron.json` at launch: the
+    /// `consent` and `consentFull` of every ad guest (D.2).
+    pub(crate) launch_consent: String,
     pub(crate) state_dir: StateDir,
     pub(crate) fs_scope: FsScope,
     pub(crate) app_origin: Url,

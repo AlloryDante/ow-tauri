@@ -165,6 +165,30 @@ impl<R: Runtime> GuestReports for Reports<R> {
     }
 }
 
+/// Where the embedder's page starts in its window (logical): the embedder
+/// webview's position, moved below the window's content inset when the
+/// platform insets the page there (macOS 26 title bar). Guest rectangles
+/// are page coordinates, so this is their offset.
+/// Without `os_queries` (mock runtime tests) the native window is not
+/// asked: a mock window has no real handle.
+fn page_offset<R: Runtime>(
+    embedder: &Webview<R>,
+    window: &tauri::Window<R>,
+    scale: f64,
+    os_queries: bool,
+) -> (f64, f64) {
+    let (x, y) = embedder
+        .position()
+        .map(|p| p.to_logical::<f64>(scale))
+        .map_or((0.0, 0.0), |p| (p.x, p.y));
+    let inset = if os_queries {
+        crate::platform::webview::content_inset_top(window)
+    } else {
+        0.0
+    };
+    (x, crate::platform::webview::page_origin_y(y, inset))
+}
+
 impl<R: Runtime> Host<R> {
     /// macOS: a web content process of an ad guest or consent window ended
     /// (the app forwards `on_web_content_process_terminate`, A.5).
@@ -272,10 +296,7 @@ impl<R: Runtime> Host<R> {
         }
         let window = embedder.window();
         let scale = window.scale_factor().unwrap_or(1.0);
-        let offset = embedder
-            .position()
-            .map(|p| p.to_logical::<f64>(scale))
-            .map_or((0.0, 0.0), |p| (p.x, p.y));
+        let offset = page_offset(embedder, &window, scale, self.options.os_queries);
         let (x, y, w, h) = logical_rect(&mount.rect, scale, offset);
         let label = self.with_core(|c| {
             c.ads.next += 1;
@@ -304,6 +325,7 @@ impl<R: Runtime> Host<R> {
                 || self.info.manifest.build_overwolf.disable_ad_optimization,
             muid_v2: &self.info.muid_v2,
             phase_percent: self.info.phase_percent,
+            consent: &self.info.launch_consent,
             system_info,
             attributes: &mount.attributes,
             slot_id: &label,
@@ -391,6 +413,21 @@ impl<R: Runtime> Host<R> {
         self.with_core(|c| {
             c.ads.guests.insert(label.clone(), guest);
         });
+        crate::lab::record("wc-events.jsonl", || {
+            json!({
+                "kind": "created",
+                "label": label,
+                "type": "owadview",
+                "embedder": embedder_label,
+                "elementId": mount.element_id,
+                "visible": mount.visible,
+                "bounds": [x, y, w, h],
+            })
+        });
+        // A window shown since the last poll counts first: ow-electron sees
+        // `show` at once, so its first-visible-window heartbeat precedes the
+        // 400025 of a guest that attaches after (E.2 #5, #6; observed).
+        self.poll_visibility();
         self.analytics_guest_attached();
         self.host_event(&embedder_label, &mount.element_id, "did-attach", None);
         // The first navigation may already be allowed (D.6.5).
@@ -470,6 +507,10 @@ impl<R: Runtime> Host<R> {
         name: &str,
         data: Option<Value>,
     ) {
+        crate::lab::record(
+            "ipc.jsonl",
+            || json!({ "dir": "host->embedder", "via": "element-event", "embedder": embedder, "elementId": element_id, "name": name, "data": data }),
+        );
         let message = HostMessage::AdviewEvent {
             element_id: element_id.to_owned(),
             name: name.to_owned(),
@@ -481,6 +522,10 @@ impl<R: Runtime> Host<R> {
 
     /// Calls the shim's host function `function` in the guest `label`.
     fn guest_call(self: &Arc<Self>, label: &str, function: &str, arg: &Value) {
+        crate::lab::record(
+            "ipc.jsonl",
+            || json!({ "dir": "host->page", "via": "guest-call", "type": "owadview", "label": label, "function": function, "args": arg }),
+        );
         let key = self.with_core(|c| c.ads.guests.get(label).map(|g| g.host_key.clone()));
         if let (Some(key), Some(w)) = (key, self.app.get_webview(label)) {
             let _ = w.eval(host_call_script(&key, function, arg));
@@ -489,6 +534,10 @@ impl<R: Runtime> Host<R> {
 
     /// Delivers one host message to the guest `label` (D.5).
     fn guest_deliver(self: &Arc<Self>, label: &str, kind: &str, data: Option<&Value>) {
+        crate::lab::record("ipc.jsonl", || {
+            // As delivered (no `data` key when there is none).
+            json!({ "dir": "host->page", "via": "private-message", "type": "owadview", "label": label, "message": crate::ads::host_message(kind, data) })
+        });
         let key = self.with_core(|c| c.ads.guests.get(label).map(|g| g.host_key.clone()));
         if let (Some(key), Some(w)) = (key, self.app.get_webview(label)) {
             let _ = w.eval(deliver_script(&key, kind, data));
@@ -543,10 +592,7 @@ impl<R: Runtime> Host<R> {
             if let Some(wv) = &webview {
                 let window = embedder.window();
                 let scale = window.scale_factor().unwrap_or(1.0);
-                let offset = embedder
-                    .position()
-                    .map(|p| p.to_logical::<f64>(scale))
-                    .map_or((0.0, 0.0), |p| (p.x, p.y));
+                let offset = page_offset(embedder, &window, scale, self.options.os_queries);
                 let (x, y, w, h) = logical_rect(&rect, scale, offset);
                 let _ = wv.set_position(LogicalPosition::new(x, y));
                 let _ = wv.set_size(LogicalSize::new(w, h));
@@ -609,6 +655,10 @@ impl<R: Runtime> Host<R> {
     /// Closes one guest webview and forgets it.
     pub(crate) fn close_guest(self: &Arc<Self>, label: &str) {
         let removed = self.with_core(|c| c.ads.guests.remove(label).is_some());
+        crate::lab::record(
+            "wc-events.jsonl",
+            || json!({ "kind": "closed", "label": label, "type": "owadview", "known": removed }),
+        );
         if removed && let Some(w) = self.app.get_webview(label) {
             let _ = w.close();
         }
@@ -693,6 +743,10 @@ impl<R: Runtime> Host<R> {
         if !started {
             return;
         }
+        crate::lab::record(
+            "wc-events.jsonl",
+            || json!({ "kind": "reload", "label": label, "type": "owadview" }),
+        );
         if cfg!(windows) {
             if let Some(w) = self.app.get_webview(label) {
                 let _ = w.reload();
@@ -727,7 +781,18 @@ impl<R: Runtime> Host<R> {
             .map(|e| self.embedder_window_name(&e))
             .unwrap_or_default();
         let shaping = self.shaping(&window_name);
-        if !crate::platform::webview::load_shaped(&webview, &url, shaping.as_ref()) {
+        let shaped = crate::platform::webview::load_shaped(&webview, &url, shaping.as_ref());
+        crate::lab::record("shaped-requests.jsonl", || {
+            json!({
+                "label": label,
+                "url": url.as_str(),
+                "method": "GET",
+                "via": if shaped && !cfg!(windows) { "loadRequest" } else { "navigate" },
+                "hostHeaders": crate::platform::webview::document_header_fields(shaping.as_ref()),
+                "windowName": window_name,
+            })
+        });
+        if !shaped {
             let _ = webview.navigate(url);
         }
     }
@@ -830,6 +895,10 @@ impl<R: Runtime> Host<R> {
                 (g.embedder.clone(), g.element_id.clone())
             })
         });
+        crate::lab::record(
+            "wc-events.jsonl",
+            || json!({ "kind": "did-fail-load", "label": label, "type": "owadview", "errorCode": error_code, "description": description, "url": url }),
+        );
         if let Some((embedder, element_id)) = target {
             self.host_event(
                 &embedder,
@@ -860,6 +929,10 @@ impl<R: Runtime> Host<R> {
         let Some((embedder, element_id, secs, recover)) = decision else {
             return;
         };
+        crate::lab::record(
+            "wc-events.jsonl",
+            || json!({ "kind": "render-process-gone", "label": label, "type": "owadview", "reason": reason.as_str(), "exitCode": exit_code, "sessionTS": secs, "recover": recover }),
+        );
         self.host_event(
             &embedder,
             &element_id,
@@ -984,6 +1057,10 @@ impl<R: Runtime> Host<R> {
         if !valid_event_name(&event.name) {
             return Err(Error::invalid_argument("Invalid event name."));
         }
+        crate::lab::record(
+            "ipc.jsonl",
+            || json!({ "dir": "page->host", "via": "adview_event", "type": "owadview", "label": label, "channel": event.name, "data": event.data }),
+        );
         let (data, bytes) = match event.data {
             Some(d) => {
                 let (v, n) = cap_event_data(d);
@@ -1137,6 +1214,20 @@ impl<R: Runtime> Host<R> {
         self.set_embedder_hidden(id, false);
     }
 
+    /// The embedder window `id` is about to be destroyed: its guests'
+    /// documents become hidden first, as in ow-electron (observed), without
+    /// a `window-hidden` message.
+    pub(crate) fn ads_window_closing(self: &Arc<Self>, id: u32) {
+        for l in self.guests_of_window(id) {
+            self.with_core(|c| {
+                if let Some(g) = c.ads.guests.get_mut(&l) {
+                    g.embedder_hidden = true;
+                }
+            });
+            self.sync_visibility(&l, false);
+        }
+    }
+
     fn set_embedder_hidden(self: &Arc<Self>, id: u32, hidden: bool) {
         for l in self.guests_of_window(id) {
             let changed = self.with_core(|c| {
@@ -1174,7 +1265,8 @@ impl<R: Runtime> Host<R> {
     }
 
     /// `set_user_email_hashes` (A.2.2): an `eHashes` message to every
-    /// existing guest; ignored after `disable_ads_fpd`.
+    /// existing guest, and the hashes stored in `ow-electron.json` as
+    /// ow-electron does (observed); ignored after `disable_ads_fpd`.
     pub(crate) fn send_email_hashes(self: &Arc<Self>, hashes: Option<&Map<String, Value>>) {
         let Some(h) = hashes else { return };
         let get = |k: &str| {
@@ -1193,6 +1285,9 @@ impl<R: Runtime> Host<R> {
                 "setUserEmailHashes() after disableAdsFPD() is ignored",
             );
             return;
+        }
+        if let Err(err) = self.ow_electron.write_e_hashes(&sha1, &md5, &sha256) {
+            self.log(LogLevel::Warn, &format!("eHashes not stored: {err}"));
         }
         let mut m = Map::new();
         m.insert("sha1".into(), sha1.into());

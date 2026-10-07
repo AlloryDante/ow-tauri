@@ -640,6 +640,10 @@ pub struct GuestFacts<'a> {
     pub muid_v2: &'a str,
     /// `phasePercent`.
     pub phase_percent: u8,
+    /// `consent` and `consentFull`: the URL-encoded unified consent string
+    /// stored at launch (`cmp%3D...`), or `""` before the first consent, as
+    /// in ow-electron (observed).
+    pub consent: &'a str,
     /// `systemInfo`.
     pub system_info: Value,
     /// The element's attributes at mount.
@@ -662,7 +666,8 @@ pub struct GuestFacts<'a> {
 /// let facts = GuestFacts {
 ///     muid: "m", uid: "u", name: "App", ow_version: "tauri-2.12.1", version: "1.0.0",
 ///     window_name: "index", window_title: "App", window_focused: false, test_ad: true,
-///     disable_optimization: false, muid_v2: "m", phase_percent: 7, system_info: json!({}),
+///     disable_optimization: false, muid_v2: "m", phase_percent: 7, consent: "",
+///     system_info: json!({}),
 ///     attributes: &attributes, slot_id: "owad-bw-1-1",
 /// };
 /// let c = guest_config(&facts, true);
@@ -697,8 +702,8 @@ pub fn guest_config(facts: &GuestFacts<'_>, visible: bool) -> Value {
     put("windowTitle", facts.window_title.into());
     put("windowFocused", facts.window_focused.into());
     put("testAd", facts.test_ad.into());
-    put("consent", "".into());
-    put("consentFull", "".into());
+    put("consent", facts.consent.into());
+    put("consentFull", facts.consent.into());
     put("slotSize", a.slotsize.clone().into());
     put(
         "containerId",
@@ -824,6 +829,26 @@ pub fn gone_data(reason: GoneReason, exit_code: i64) -> Value {
     Value::Object(m)
 }
 
+/// A host message as the guest receives it (D.5): `{ type }`, plus `data`
+/// only when there is some (ow-electron sends `window-hidden` without a
+/// `data` key (observed)).
+///
+/// ```
+/// use serde_json::json;
+/// use tauri_plugin_overwolf::ads::host_message;
+/// assert_eq!(host_message("window-hidden", None), json!({ "type": "window-hidden" }));
+/// assert_eq!(host_message("consent", Some(&json!("x"))), json!({ "type": "consent", "data": "x" }));
+/// ```
+#[must_use]
+pub fn host_message(kind: &str, data: Option<&Value>) -> Value {
+    let mut m = Map::new();
+    m.insert("type".into(), kind.into());
+    if let Some(d) = data {
+        m.insert("data".into(), d.clone());
+    }
+    Value::Object(m)
+}
+
 /// The JavaScript that delivers a host message to the guest (D.5).
 /// `host_key` is the guest's random host API property (`hostKey` of its
 /// configuration).
@@ -838,12 +863,7 @@ pub fn gone_data(reason: GoneReason, exit_code: i64) -> Value {
 /// ```
 #[must_use]
 pub fn deliver_script(host_key: &str, kind: &str, data: Option<&Value>) -> String {
-    let mut m = Map::new();
-    m.insert("type".into(), kind.into());
-    if let Some(d) = data {
-        m.insert("data".into(), d.clone());
-    }
-    host_call_script(host_key, "deliver", &Value::Object(m))
+    host_call_script(host_key, "deliver", &host_message(kind, data))
 }
 
 /// The JavaScript that calls a shim-internal host function (D.5) on the
@@ -984,6 +1004,7 @@ mod tests {
             disable_optimization: true,
             muid_v2: "m2",
             phase_percent: 80,
+            consent: "cmp%3DCQ%26ac%3D2~1",
             system_info: json!({"gpus": [], "cpu": "x", "displays": []}),
             attributes: &attributes,
             slot_id: "owad-bw-1-1",
@@ -1020,6 +1041,9 @@ mod tests {
             ]
         );
         assert_eq!(c["containerId"], "12345678901234567890");
+        // The consent stored at launch (regression: always "").
+        assert_eq!(c["consent"], "cmp%3DCQ%26ac%3D2~1");
+        assert_eq!(c["consentFull"], "cmp%3DCQ%26ac%3D2~1");
         assert_eq!(c["unit"], "live-unit", "live mode passes the unit through");
         assert_eq!(
             c["settings"],
