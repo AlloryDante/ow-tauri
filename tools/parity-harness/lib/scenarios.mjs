@@ -916,6 +916,62 @@ export const SCENARIOS = {
     },
   },
 
+  'ipc-probe': {
+    describe:
+      "Guest IPC diagnosis: at 8 s each ad guest posts one request to the host's IPC endpoint (ow-tauri: the invoke URL; ow-electron has none) and queries the local network permission states; at 14 s the outcome is read back (guest-eval). Shows whether a remote guest page can reach the host on this platform.",
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 20 },
+    config: {
+      actions: [
+        {
+          at: 8000,
+          do: 'guest-eval',
+          label: 'ipc probe start',
+          code: `(() => {
+  const w = window;
+  const r = (w.__ipcProbe = {
+    origin: location.origin,
+    internals: typeof w.__TAURI_INTERNALS__,
+    ipcPostMessage: typeof (w.ipc && w.ipc.postMessage),
+    webviewPostMessage: typeof (w.chrome && w.chrome.webview && w.chrome.webview.postMessage),
+  });
+  const t0 = performance.now();
+  try {
+    r.url = w.__TAURI_INTERNALS__.convertFileSrc('plugin:overwolf|ipc_probe', 'ipc');
+  } catch (e) {
+    r.url = null;
+    r.urlError = String(e);
+  }
+  if (r.url) {
+    r.fetch = 'pending';
+    fetch(r.url, { method: 'POST', body: '{}', headers: { 'Content-Type': 'application/json' } }).then(
+      (res) => { r.fetch = { status: res.status, tauriResponse: res.headers.get('Tauri-Response'), ms: Math.round(performance.now() - t0) }; },
+      (e) => { r.fetch = { error: String(e), ms: Math.round(performance.now() - t0) }; },
+    );
+  }
+  for (const name of ['local-network-access', 'loopback-network', 'local-network']) {
+    try {
+      navigator.permissions.query({ name }).then(
+        (s) => { r[name] = s.state; },
+        (e) => { r[name] = 'unsupported: ' + e.name; },
+      );
+    } catch (e) {
+      r[name] = 'throws: ' + e.name;
+    }
+  }
+  return { started: true };
+})()`,
+        },
+        {
+          at: 14000,
+          do: 'guest-eval',
+          label: 'ipc probe result',
+          code: `window.__ipcProbe ?? null`,
+        },
+        { at: 15000, do: 'probe-guests', label: 'ipc-probe+15s' },
+      ],
+    },
+  },
+
   'owadtestad-live': {
     describe:
       'L11 (live, 1 load): a 300x250 slot on a profile where owAdTestAd was set (run owadtestad first with the same --home profile:<name>); reads the stored value and the ad library options. Needs --mode live --live-ok --max-live-loads 1.',
