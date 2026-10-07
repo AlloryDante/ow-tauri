@@ -1,0 +1,114 @@
+name: Windows lab
+
+# The ad-format parity lab on Windows (AD-FORMATS-SPEC section 6 item 14,
+# section 7): every scenario runs on ow-electron and then on ow-tauri on the
+# same runner, both with TEST ads only, and the two captures are compared
+# (tools/parity-harness/parity-diff.mjs) along with the Windows lab checks
+# L1-W (transparency), L2 (z-order), L3-W (input pass-through) and L5 (mute).
+# See tools/parity-harness/ci/windows-lab.mjs.
+#
+# Rules: test ads only (the lab never passes --mode live); the app identity
+# is the harness's neutral default (formula uid); windows may show on the
+# runner's desktop, which is nobody's screen (run.mjs --ci-visible).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'packages/ow-tauri/**'
+      - 'tools/parity-harness/**'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/windows-lab.yml'
+  workflow_dispatch:
+    inputs:
+      scenarios:
+        description: 'Comma-separated scenarios (A, cmp, messages, lab-layers, audio, sizes, ...) or "all"'
+        required: false
+        default: all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-lab-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    name: Build the Tauri harness app (lab feature)
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tools/parity-harness/tauri-app/src-tauri -> target
+      - name: install (ow-tauri workspace only)
+        run: npm ci --workspace ow-tauri --include-workspace-root --no-audit --no-fund
+      - name: build ow-tauri
+        run: npm run build --workspace ow-tauri
+      - name: build the harness app (web assets, then cargo build with the lab feature)
+        run: node tools/parity-harness/tauri-app/build.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-lab-harness-exe
+          path: tools/parity-harness/tauri-app/src-tauri/target/debug/ow-tauri-parity-harness.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  lab:
+    name: Lab shard ${{ matrix.shard }}/4 (test ads)
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    runs-on: windows-2025
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: tools/parity-harness
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/parity-harness/package-lock.json
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-lab-harness-exe
+          path: tools/parity-harness/tauri-app/src-tauri/target/debug
+      - name: install the harness (ow-electron and ow-cli, latest dist-tag)
+        run: npm ci --workspaces=false --no-audit --no-fund
+      - name: ow-electron binary
+        shell: bash
+        run: |
+          node -e "require('fs').accessSync(require('@overwolf/ow-electron'))" \
+            || node node_modules/@overwolf/ow-electron/install.js
+          node -e "console.log(require('@overwolf/ow-electron/package.json').version)"
+      - name: lab (ow-electron, then ow-tauri, per scenario; parity-diff; Windows checks)
+        env:
+          SCENARIOS: ${{ inputs.scenarios || 'all' }}
+        run: node ci/windows-lab.mjs --shard ${{ matrix.shard }}/4 --scenarios "$env:SCENARIOS"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: windows-lab-captures-${{ matrix.shard }}
+          path: |
+            tools/parity-harness/captures/
+            !tools/parity-harness/captures/.tools/
+          if-no-files-found: warn
+          retention-days: 14
