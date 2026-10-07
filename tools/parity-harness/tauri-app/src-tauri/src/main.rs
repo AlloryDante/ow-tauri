@@ -222,6 +222,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             harness_window,
         ]);
 
+    // The invisible lab app never comes to the front: activated at launch,
+    // it would take the keyboard from the app the user is typing in.
+    #[cfg(target_os = "macos")]
+    let builder = builder.activate_ignoring_other_apps(!tauri_plugin_overwolf::lab_invisible());
+
     // macOS reports a crashed web content process only through this hook.
     #[cfg(target_os = "macos")]
     let builder = builder.on_web_content_process_terminate(|webview| {
