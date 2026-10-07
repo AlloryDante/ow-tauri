@@ -252,6 +252,17 @@ jobs:
           npm run build --workspace ow-tauri
           npm run build --workspace examples/packages-sample
           cargo build --manifest-path examples/packages-sample/src-tauri/Cargo.toml --locked
+      - name: ad showcase (lint, types, unit tests, both stages, Rust app with and without the lab)
+        if: steps.gate.outputs.ported == 'true'
+        shell: bash
+        run: |
+          npm run lint --workspace examples/ad-showcase
+          npm run typecheck --workspace examples/ad-showcase
+          npm test --workspace examples/ad-showcase
+          npm run build --workspace examples/ad-showcase
+          cargo fmt --manifest-path examples/ad-showcase/src-tauri/Cargo.toml -- --check
+          cargo clippy --manifest-path examples/ad-showcase/src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+          cargo clippy --manifest-path examples/ad-showcase/src-tauri/Cargo.toml --all-targets --features lab --locked -- -D warnings
 
   latest:
     name: Newest stable Rust + newest tauri 2.x (${{ matrix.os }})
