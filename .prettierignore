@@ -6,6 +6,9 @@ coverage/
 packages/*/docs-out/
 Cargo.lock
 package-lock.json
+# Written by tauri-plugin's build script (permissions schema, ACL test app).
+crates/tauri-plugin-overwolf/permissions/schemas/
+crates/tauri-plugin-overwolf/tests/acl-app/gen/
 # Built by `npm run build:injected --workspace ow-tauri` (minified, committed).
 crates/tauri-plugin-overwolf/js/
 
