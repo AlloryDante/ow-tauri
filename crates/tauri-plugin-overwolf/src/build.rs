@@ -706,7 +706,7 @@ pub fn nsis_installer_hooks(
 }
 
 /// Reads `package_json` and writes [`nsis_installer_hooks`] to `out`, only
-/// when the content changed. Call it from the app's build script and point
+/// when the content changed, creating its folder when missing. Call it from the app's build script and point
 /// `bundle.windows.nsis.installerHooks` at `out`.
 ///
 /// It resolves the manifest as [`embed_manifest`] does for the running
@@ -804,6 +804,15 @@ fn write(path: &Path, bytes: &[u8]) -> Result<(), BuildError> {
     // Only rewrite on change, so Cargo does not rebuild needlessly.
     if std::fs::read(path).is_ok_and(|old| old == bytes) {
         return Ok(());
+    }
+    // Generated files are usually git-ignored, so their folder may not
+    // exist in a fresh checkout.
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|source| BuildError::Io {
+            action: "creating",
+            path: parent.to_path_buf(),
+            source,
+        })?;
     }
     std::fs::write(path, bytes).map_err(|source| BuildError::Io {
         action: "writing",
@@ -1178,7 +1187,8 @@ mod tests {
 
         // The NSIS hooks of a signed release name the signed uid (registry
         // key, state folder, Counter app_id); debug builds the computed one.
-        let hooks = dir.join("hooks.nsh");
+        // The file is generated, so its folder may not exist yet.
+        let hooks = dir.join("windows").join("hooks.nsh");
         write_nsis_installer_hooks_to(
             &dir.join("package.json"),
             None,
