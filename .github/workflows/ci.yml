@@ -58,8 +58,14 @@ jobs:
         run: |
           cargo clippy -p tauri-plugin-overwolf --all-targets --no-default-features --locked -- -D warnings
           cargo clippy -p tauri-plugin-overwolf --all-targets --no-default-features --features embed-resource --locked -- -D warnings
+      # Doctests run per package: rustdoc links them with every native search
+      # path of the whole build, and on Windows the ACL test app's tauri-build
+      # output (a placeholder msvcrt.lib for the static C runtime) breaks
+      # links that are not its own.
       - name: test
-        run: cargo test --workspace --all-features --locked
+        run: cargo test --workspace --all-targets --all-features --locked
+      - name: doctests
+        run: cargo test -p tauri-plugin-overwolf --doc --all-features --locked
       - name: doc
         run: cargo doc --workspace --no-deps --all-features --locked
       - name: mingw-w64 (GNU cross-link of the OWE resource)
@@ -273,8 +279,11 @@ jobs:
         run: cargo update
       - name: clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - name: test
-        run: cargo test --workspace --all-features
+      - name: test (doctests per package, see the rust job)
+        shell: bash
+        run: |
+          cargo test --workspace --all-targets --all-features
+          cargo test -p tauri-plugin-overwolf --doc --all-features
 
   soak:
     name: Main webview liveness soak (${{ matrix.os }})
