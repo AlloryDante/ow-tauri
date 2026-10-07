@@ -918,7 +918,7 @@ export const SCENARIOS = {
 
   'ipc-probe': {
     describe:
-      "Guest IPC diagnosis: at 8 s each ad guest posts one request to the host's IPC endpoint (ow-tauri: the invoke URL; ow-electron has none) and queries the local network permission states; at 14 s the outcome is read back (guest-eval). Shows whether a remote guest page can reach the host on this platform.",
+      "Guest IPC diagnosis: at 8 s each ad guest posts one request to the host's IPC endpoint (ow-tauri: the invoke URL; ow-electron has none), sends one adview_event through Tauri's invoke and queries the local network permission states; at 14 s the outcome is read back (guest-eval). Shows whether a remote guest page can reach the host on this platform.",
     defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 20 },
     config: {
       actions: [
@@ -947,6 +947,13 @@ export const SCENARIOS = {
       (res) => { r.fetch = { status: res.status, tauriResponse: res.headers.get('Tauri-Response'), ms: Math.round(performance.now() - t0) }; },
       (e) => { r.fetch = { error: String(e), ms: Math.round(performance.now() - t0) }; },
     );
+    r.invoke = 'pending';
+    Promise.resolve()
+      .then(() => w.__TAURI_INTERNALS__.invoke('plugin:overwolf|adview_event', { name: 'ipc-probe', data: null }))
+      .then(
+        (v) => { r.invoke = { ok: true, value: v ?? null, ms: Math.round(performance.now() - t0) }; },
+        (e) => { r.invoke = { error: typeof e === 'string' ? e : JSON.stringify(e) ?? String(e), ms: Math.round(performance.now() - t0) }; },
+      );
   }
   for (const name of ['local-network-access', 'loopback-network', 'local-network']) {
     try {
