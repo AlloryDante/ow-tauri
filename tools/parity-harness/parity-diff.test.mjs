@@ -19,6 +19,9 @@ import {
   loadedBefore,
   matchesOwnSpan,
   normalise,
+  PACKAGE_RUNTIME_FILE,
+  PACKAGE_RUNTIME_REQUEST,
+  withoutPackageRuntime,
   withoutPointerEvents,
 } from './parity-diff.mjs';
 
@@ -519,4 +522,35 @@ test('extra guest loads the ad page asked for after hidden are variance', () => 
   };
   assert.equal(classify({ ...d, hiddenReload: true }).class, 'variance');
   assert.equal(classify({ ...d, hiddenReload: false }).class, 'BUG');
+});
+
+test("ow-electron's package manager traffic on Windows is a documented deviation", () => {
+  for (const key of [
+    'GET https://analyticsnew.overwolf.com/analytics/Counter electron_pm_launch',
+    'GET https://analyticsnew.overwolf.com/analytics/Counter electron_pm_loaded',
+    'GET https://analyticsnew.overwolf.com/analytics/Counter electron_cs_error',
+    'POST https://tracking.overwolf.com/tracking/InsertStats 400029',
+    'POST https://tracking.overwolf.com/tracking/InsertStats 400037',
+    'POST https://tracking.overwolf.com/tracking/InsertStats 400043',
+  ])
+    assert.ok(PACKAGE_RUNTIME_REQUEST.test(key), key);
+  for (const key of [
+    'POST https://tracking.overwolf.com/tracking/InsertStats 400025',
+    'GET https://analyticsnew.overwolf.com/analytics/Counter electron_app_launch',
+  ])
+    assert.ok(!PACKAGE_RUNTIME_REQUEST.test(key), key);
+  assert.ok(PACKAGE_RUNTIME_FILE.test('logs\\owpm.log'));
+  assert.ok(PACKAGE_RUNTIME_FILE.test('logs/owpm.log'));
+  assert.ok(!PACKAGE_RUNTIME_FILE.test('logs/main.log'));
+  assert.deepEqual(withoutPackageRuntime({ firstLaunch: true, 'owepm.enabled': true }), {
+    firstLaunch: true,
+  });
+  assert.equal(
+    classify({ section: 'host-request', field: 'missing', packageRuntime: true }).class,
+    'intended:deviation',
+  );
+  assert.equal(
+    classify({ section: 'host-request', field: 'missing', packageRuntime: false }).class,
+    'BUG',
+  );
 });

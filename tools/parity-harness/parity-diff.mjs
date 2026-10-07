@@ -79,6 +79,20 @@ export function normalise(text) {
  * (`<PNNS>/<ver>`), a `Tauri/<tv>` token and no `Electron/` token. The
  * engine part may differ (WebKit); anything else is not the host label.
  */
+/**
+ * Traffic of ow-electron's package manager (OWEPM), which it starts on
+ * Windows: its launch and loaded counters, the dev-credentials error and
+ * the tracking stats that carry its version (400037, 400043) or the
+ * missing credentials (400029). ow-tauri has no package runtime
+ * (CONTRACT H).
+ */
+export const PACKAGE_RUNTIME_REQUEST =
+  /\/(Counter electron_pm_[a-z_]+|Counter electron_cs_error|InsertStats 4000(29|37|43))$/;
+
+/** The package manager's own state: its log and its switch in ow-electron.json. */
+export const PACKAGE_RUNTIME_FILE = /(^|[\\/])owpm\.log$/;
+const PACKAGE_RUNTIME_KEY = 'owepm.enabled';
+
 export function labelledUserAgent(electron, tauri) {
   if (typeof electron !== 'string' || typeof tauri !== 'string') return false;
   const platform = /^Mozilla\/5\.0 \([^)]*\)/.exec(electron)?.[0];
@@ -497,6 +511,11 @@ const WEBVIEW_OWN = [
  */
 const RULES = [
   {
+    when: (d) => d.packageRuntime === true,
+    cls: 'intended:deviation',
+    why: "ow-electron's package manager (OWEPM), which it starts on Windows: its launch counters, tracking stats, log and owepm.enabled switch; ow-tauri has no package runtime (CONTRACT H)",
+  },
+  {
     when: (d) =>
       d.section === 'element-event' && d.field === 'count' && (d.occludedReload || d.hiddenReload),
     cls: 'variance',
@@ -743,6 +762,7 @@ function compareHostRequests(e, t, out, tolerance, burst) {
         field: 'missing',
         electron: 'sent',
         tauri: 'not sent',
+        packageRuntime: PACKAGE_RUNTIME_REQUEST.test(ek[i]),
       });
     }
   }
@@ -1171,6 +1191,13 @@ function compareConsentCookies(e, t, out) {
   }
 }
 
+/** `value` without the package manager's switch (an object's own key). */
+export function withoutPackageRuntime(value) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
+  const { [PACKAGE_RUNTIME_KEY]: _ignored, ...rest } = value;
+  return rest;
+}
+
 /** Key structure of a JSON text, with volatile values normalised. */
 function jsonShape(text) {
   try {
@@ -1201,6 +1228,7 @@ function compareStateFile(e, t, out) {
           field: 'missing-file',
           electron: f,
           tauri: null,
+          packageRuntime: PACKAGE_RUNTIME_FILE.test(f),
         });
     if (a.text === null || b.text === null) continue;
     const sa = jsonShape(a.text);
@@ -1212,6 +1240,7 @@ function compareStateFile(e, t, out) {
         field: 'content',
         electron: sa,
         tauri: sb,
+        packageRuntime: stable(withoutPackageRuntime(sa)) === stable(sb),
       });
     // Byte format: whitespace and key order (values normalised).
     const fmt = (s) => normalise(s).replace(/"(timeStamp)":\d+/g, '"$1":<n>');
