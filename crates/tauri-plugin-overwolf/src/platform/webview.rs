@@ -472,6 +472,13 @@ pub(crate) fn without_app_activation<T>(create: impl FnOnce() -> T) -> T {
 
 /// A stage of a window's minimize, as the OS reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    not(any(target_os = "macos", feature = "test-util")),
+    expect(
+        dead_code,
+        reason = "only the macOS observer and the test hooks report a stage"
+    )
+)]
 pub(crate) enum MinimizeStage {
     /// The minimize started: on macOS the window is reported neither
     /// visible nor minimized while it animates into the Dock.
