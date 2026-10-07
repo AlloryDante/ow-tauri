@@ -28,3 +28,11 @@ Thumbs.db
 /tools/parity-harness/node_modules/
 /tools/parity-harness/captures/
 /tools/parity-harness/local.identity.json
+
+# Ad showcase: staged builds (they can hold the local identity), the local
+# identity itself, lab output and generated Tauri files
+/examples/ad-showcase/.stage/
+/examples/ad-showcase/identity.local.json
+/examples/ad-showcase/e2e/out/
+/examples/ad-showcase/src-tauri/gen/
+/examples/ad-showcase/src-tauri/windows/hooks.nsh
