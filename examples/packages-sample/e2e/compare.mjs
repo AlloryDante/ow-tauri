@@ -8,8 +8,12 @@
 // Each action's output (page console, errors, unhandled rejections, alerts,
 // main-process log lines and console) is normalised: host names and
 // versions, window ids, app URLs, absolute paths, numbers in timings and
-// ad-content details are replaced by placeholders. Ad events are compared
-// as the set of event names per slot. What remains is listed per page.
+// ad-content details are replaced by placeholders. Lines are compared with
+// their counts (a line printed twice on one host and once on the other is a
+// difference), ad events as event names per slot with their counts. The
+// state records (what the page, its ads and its windows look like after a
+// step) and each step's window list are compared too. What remains is listed
+// per page.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -48,6 +52,12 @@ const ENGINE = [
 ];
 export const engineFolds = { count: 0 };
 
+/**
+ * Differences the port makes on purpose (CHANGES-FROM-UPSTREAM.md), folded
+ * before the comparison: #9 gives each `<owadview>` its own DOM id.
+ */
+const PORT_CHANGES = [[/"id":"(?:mainAd|owadview-container2?-adview)"/g, '"id":"<adview id>"']];
+
 /** Volatile or host-labelled parts of a line. */
 export function normalise(text) {
   let line = String(text);
@@ -56,10 +66,12 @@ export function normalise(text) {
     if (next !== line) engineFolds.count += 1;
     line = next;
   }
+  for (const [pattern, replacement] of PORT_CHANGES) line = line.replace(pattern, replacement);
   return line
+    .replace(/data:[^\s"')]+/g, 'data:<url>')
+    .replace(/(file|tauri|https?):\/\/[^\s"')]*?(\/renderer\/|\/browser\/|\/osr\/|\/exclusive\/)/g, '<app>$2')
     .replace(/ow-(electron|tauri) v[\w.+-]+/g, 'ow-<host> v<ver>')
     .replace(/\b(electron|tauri)\b/gi, '<host>')
-    .replace(/(file|tauri|https?):\/\/[^\s"')]*?(\/renderer\/|\/browser\/|\/osr\/|\/exclusive\/)/g, '<app>$2')
     .replace(/\/(Users|private|var)\/[^\s"',)]+/g, '<path>')
     .replace(/"?(id|windowId|webContentsId)"?\s*[:=]\s*\d+/g, '$1:<n>')
     .replace(/\b\d{10,13}\b/g, '<ts>')
@@ -88,15 +100,51 @@ function lines(step) {
 }
 
 function adEvents(step) {
-  const names = new Set();
+  const names = [];
   for (const p of step.events ?? []) {
     if (p.kind !== 'console') continue;
     const m = AD_EVENT.exec(p.text);
     if (!m) continue;
     const slot = /- (ad\d) (\d+x\d+)/.exec(p.text);
-    names.add(`${slot ? slot[1] : 'perf'}:${m[1] ?? m[2] ?? m[3] ?? 'house_ad'}`);
+    names.push(`${slot ? slot[1] : 'perf'}:${m[1] ?? m[2] ?? m[3] ?? 'house_ad'}`);
   }
-  return [...names].sort();
+  return names.sort();
+}
+
+/** The window list of a step, normalised (`[url, visible]` per window). */
+function windowsOf(step) {
+  return (step.windows ?? []).map((w) => `${normalise(w.url)} ${w.visible ? 'shown' : 'hidden'}`).sort();
+}
+
+/** `items` as a count map. */
+function counted(items) {
+  const map = new Map();
+  for (const item of items) map.set(item, (map.get(item) ?? 0) + 1);
+  return map;
+}
+
+/** Entries of `a` that `b` has fewer times, as `line` or `line (xN)`. */
+function surplus(a, b) {
+  const out = [];
+  for (const [item, n] of a) {
+    const m = b.get(item) ?? 0;
+    if (n > m) out.push(m === 0 && n === 1 ? item : `${item} (x${n} vs x${m})`);
+  }
+  return out;
+}
+
+/** State records, keyed by what they describe and their order. */
+function statesOf(records) {
+  const seen = new Map();
+  const out = new Map();
+  for (const r of records) {
+    if (r.kind !== 'state') continue;
+    const base = [r.page, r.what, r.layout].filter(Boolean).join(' | ');
+    const n = seen.get(base) ?? 0;
+    seen.set(base, n + 1);
+    out.set(n ? `${base} #${n + 1}` : base, { page: r.page, value: normalise(JSON.stringify(r.value ?? null)) });
+  }
+  return out;
 }
 
 function load(dir) {
@@ -108,12 +156,12 @@ function load(dir) {
     const prev = steps.get(key);
     if (prev) {
       prev.lines.push(...lines(r));
-      for (const e of adEvents(r)) if (!prev.ads.includes(e)) prev.ads.push(e);
+      prev.ads.push(...adEvents(r));
     } else {
-      steps.set(key, { page: r.page, key, lines: lines(r), ads: adEvents(r), result: r.result });
+      steps.set(key, { page: r.page, key, lines: lines(r), ads: adEvents(r), windows: windowsOf(r), result: r.result });
     }
   }
-  const states = records.filter((r) => r.kind === 'state' || r.kind === 'boot');
+  const states = statesOf(records);
   const summary = existsSync(join(dir, 'summary.json')) ? JSON.parse(readFileSync(join(dir, 'summary.json'), 'utf8')) : {};
   return { dir, name: basename(dir), records, steps, states, summary };
 }
@@ -128,28 +176,44 @@ for (const page of pages) {
   for (const key of keys.filter((k) => k.startsWith(`${page} |`))) {
     const a = A.steps.get(key);
     const b = B.steps.get(key);
-    const la = new Set(a?.lines ?? []);
-    const lb = new Set(b?.lines ?? []);
-    const onlyA = [...la].filter((l) => !lb.has(l));
-    const onlyB = [...lb].filter((l) => !la.has(l));
+    const la = counted(a?.lines ?? []);
+    const lb = counted(b?.lines ?? []);
+    const onlyA = surplus(la, lb);
+    const onlyB = surplus(lb, la);
     const adsA = a?.ads ?? [];
     const adsB = b?.ads ?? [];
-    const adsOnlyA = adsA.filter((e) => !adsB.includes(e));
-    const adsOnlyB = adsB.filter((e) => !adsA.includes(e));
+    const adsOnlyA = surplus(counted(adsA), counted(adsB));
+    const adsOnlyB = surplus(counted(adsB), counted(adsA));
+    const winA = (a?.windows ?? []).join('; ');
+    const winB = (b?.windows ?? []).join('; ');
+    const windowsDiffer = Boolean(a && b) && winA !== winB;
     rows.push({
       key,
       in: a && b ? 'both' : a ? A.name : B.name,
-      same: Boolean(a && b) && !onlyA.length && !onlyB.length && !adsOnlyA.length && !adsOnlyB.length,
+      same:
+        Boolean(a && b) &&
+        !onlyA.length &&
+        !onlyB.length &&
+        !adsOnlyA.length &&
+        !adsOnlyB.length &&
+        !windowsDiffer,
       onlyA,
       onlyB,
       adsOnlyA,
       adsOnlyB,
       adsA,
       adsB,
+      windows: windowsDiffer ? { a: winA, b: winB } : undefined,
     });
   }
   result.pages.push({ page, rows });
 }
+const stateKeys = [...new Set([...A.states.keys(), ...B.states.keys()])];
+result.states = stateKeys.map((key) => {
+  const a = A.states.get(key);
+  const b = B.states.get(key);
+  return { key, a: a?.value, b: b?.value, same: Boolean(a && b) && a.value === b.value };
+});
 
 const md = [];
 md.push(`# ${A.name} vs ${B.name}`, '');
@@ -176,7 +240,15 @@ for (const p of result.pages) {
     if (r.adsOnlyA.length || r.adsOnlyB.length) {
       md.push(`  - ad events ${A.name}: ${r.adsA.join(', ') || '-'}; ${B.name}: ${r.adsB.join(', ') || '-'}`);
     }
+    if (r.windows) md.push(`  - windows ${A.name}: ${r.windows.a || '-'}; ${B.name}: ${r.windows.b || '-'}`);
   }
+}
+const stateDiff = result.states.filter((s) => !s.same);
+md.push('', `## States (${result.states.length - stateDiff.length} of ${result.states.length} the same)`, '');
+for (const s of stateDiff) {
+  md.push(`- \`${s.key}\``);
+  md.push(`  - ${A.name}: ${(s.a ?? '(missing)').slice(0, 300)}`);
+  md.push(`  - ${B.name}: ${(s.b ?? '(missing)').slice(0, 300)}`);
 }
 writeFileSync(join(aDir, 'compare.json'), JSON.stringify(result, null, 2));
 writeFileSync(join(aDir, 'compare.md'), md.join('\n') + '\n');

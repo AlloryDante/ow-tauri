@@ -224,7 +224,8 @@ function skipped(control) {
  *   - `checkUpdates(feedUrl)`: configures the host's `autoUpdater` as the
  *     sample does, but against `feedUrl`, and resolves what it reported
  *   - `quit()`: quits the app
- *   - `config`: `{ feedUrl, adWaitMs, settleMs, performanceWaitMs }`
+ *   - `config`: `{ feedUrl, adWaitMs, settleMs, performanceWaitMs }`, and
+ *     for the idle run `{ idleMs, idleSampleMs, idleLayout }`
  */
 async function runSteps(host) {
   const config = { adWaitMs: 8000, settleMs: 1200, performanceWaitMs: 10000, ...host.config };
@@ -314,6 +315,11 @@ async function runSteps(host) {
     windows: host.windows(),
     main: mainOut(),
   });
+
+  if (config.idleMs) {
+    await idleRun();
+    return;
+  }
 
   // ---------------------------------------------------------- Logger (/)
   await step('logger', 'navigate', '#/', () => call("window.__e2e.go('#/')"));
@@ -417,6 +423,40 @@ async function runSteps(host) {
   record({ kind: 'done', ms: Date.now() - started });
   await sleep(500);
   host.quit();
+
+  /**
+   * The idle run (`config.idleMs`): starts every slot of one Ads Tester
+   * layout (`config.idleLayout`, else the first), leaves the ads running for
+   * `idleMs`, recording a sample every `idleSampleMs` (the page's and the
+   * main process's output since the last one), then removes the ads and
+   * closes the app. The runner samples the processes' memory meanwhile.
+   */
+  async function idleRun() {
+    const every = config.idleSampleMs || 30000;
+    await step('idle', 'navigate', '#/ads-tester', () => call("window.__e2e.go('#/ads-tester')"));
+    const layouts = await call("[...document.querySelectorAll('#layout-select option')].map((o) => o.value)");
+    const layout = config.idleLayout || (Array.isArray(layouts) ? layouts[0] : undefined);
+    await step('idle', 'select-layout', layout, () => call(`window.__e2e.set('#layout-select', ${JSON.stringify(layout)})`), 400);
+    const wrappers = await call("document.querySelectorAll('.ad-wrapper').length");
+    for (let i = 0; i < wrappers; i += 1) {
+      await step('idle', 'startAd', `${layout} #${i + 1}`, () => call(`window.__e2e.click('.ad-wrapper #startAdButton', ${i})`), 100);
+    }
+    const idleStart = Date.now();
+    for (let n = 1; Date.now() - idleStart < config.idleMs; n += 1) {
+      await step('idle', 'sample', String(n), async () => ({
+        elapsedMs: Date.now() - idleStart,
+        adviews: await call('window.__e2e.adviews()'),
+        windows: host.windows().length,
+      }), every);
+    }
+    for (let i = 0; i < wrappers; i += 1) {
+      await step('idle', 'removeAd', `${layout} #${i + 1}`, () => call(`window.__e2e.click('.ad-wrapper #stopAdButton', ${i})`), 300);
+    }
+    await step('idle', 'click', 'Close App', () => call("window.__e2e.click('.window-actions .close-btn')"), 2000);
+    record({ kind: 'done', ms: Date.now() - started });
+    await sleep(500);
+    host.quit();
+  }
 
   /**
    * Acts once on every control of the page under `root`: clicks each

@@ -24,13 +24,21 @@ node e2e/run.mjs --host tauri --run-id tauri-2 --no-build
 node e2e/run.mjs --host electron --upstream-dir /path/to/upstream-sample --run-id electron-1
 
 node e2e/compare.mjs e2e/out/tauri-1 e2e/out/electron-1   # writes compare.md into the first run
+
+# Idle run: start every slot of one Ads Tester layout, leave the ads running
+# for 5 minutes, then close the app (memory, queues and leaks over time).
+node e2e/run.mjs --host tauri --run-id idle-1 --no-build --idle-ms 300000 --idle-layout tower-right
 ```
 
 Output goes to `e2e/out/<run-id>/` (git-ignored): `e2e.jsonl` (one record
 per action), `summary.json`, `window-monitor.jsonl`, `blocked.jsonl`, the
-app's `stdout.log` / `stderr.log`, the local update feed's requests and, on
-ow-tauri, the plugin's lab trace (`host-requests.jsonl`, `ipc.jsonl`,
-`windows.jsonl`, ...).
+app's `stdout.log` / `stderr.log`, the local update feed's requests,
+`proc-samples.jsonl` (the memory of the app and of every process it owns,
+every `--sample-ms`, 10 s by default) and, on ow-tauri, the plugin's lab
+trace (`host-requests.jsonl`, `ipc.jsonl`, `windows.jsonl`, ...), including
+`plugin-log.jsonl` (every plugin log line, whatever the logging setting) and
+`core-stats.jsonl` (the sizes of the plugin's IPC queues and tables every
+10 s: over an idle run none of them may keep growing).
 
 ## What it does
 
@@ -71,9 +79,27 @@ ow-tauri, the plugin's lab trace (`host-requests.jsonl`, `ipc.jsonl`,
 4. **Watch** the app's windows with the window monitor
    (`CGWindowListCopyWindowInfo` through `tools/parity-harness/lib/window-monitor.swift`;
    no screen capture): the app is killed the moment one of its windows is
-   visible, and `summary.json` records `everVisible`.
+   visible, and `summary.json` records `everVisible`. The runner also
+   checks every second that the app is never the frontmost app (it would
+   take the keyboard from the app the user is typing in; `everFront`).
 5. **Clean up**: the app's whole process group is killed on every exit
-   path (done, timeout, safety kill, Ctrl-C).
+   path (done, timeout, safety kill, Ctrl-C). WebKit's web content,
+   networking and GPU processes are XPC services outside that group: the
+   runner finds them by their responsible process (`proc-owner.swift`) and
+   records any still running 10 s after the app quit in `summary.json`
+   (`leftProcesses`). A run passes only when it is `done`, never visible,
+   never in front and leaves no process behind.
+
+## Comparing runs
+
+`compare.mjs` lists, per action, the output lines (with their counts), the
+ad events per slot (with their counts) and the window list that differ
+between the two runs, then every state record that differs (the page's
+`<owadview>` elements, the window state after the header buttons, the window
+list after Close App, ...). It folds differences that are the JavaScript
+engine's (V8 and JavaScriptCore word errors differently) and the port's
+documented changes (CHANGES-FROM-UPSTREAM.md #9: each `<owadview>` has its
+own DOM id).
 
 ## Lab identity
 

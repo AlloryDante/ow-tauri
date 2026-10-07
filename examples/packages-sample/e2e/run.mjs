@@ -5,6 +5,8 @@
 //   node e2e/run.mjs [--host tauri|electron] [--run-id ID] [--no-build]
 //                    [--upstream-dir DIR] [--identity FILE] [--timeout S]
 //                    [--ad-wait MS] [--build-only]
+//                    [--idle-ms MS [--idle-sample-ms MS] [--idle-layout L]]
+//                    [--sample-ms MS]
 //
 // --host tauri (default): builds the ported sample (webpack, plus the main
 //   bundle with e2e/tauri-driver.js in front, and a debug Tauri build with
@@ -18,6 +20,12 @@
 // a local update feed, the window monitor (CGWindowListCopyWindowInfo; the
 // app is killed the moment one of its windows becomes visible) and a kill
 // of the whole process group on every exit path. Output: e2e/out/<run-id>/.
+//
+// --idle-ms: instead of the full pass, start every slot of one Ads Tester
+//   layout and leave the ads running that long (the idle run, steps.js).
+// --sample-ms (default 10000): how often the memory of the app and of every
+//   process it owns (WebKit's XPC services included) goes to
+//   proc-samples.jsonl. After the app quits, none of them may be left.
 
 import { spawn, spawnSync } from 'node:child_process';
 import {
@@ -54,6 +62,10 @@ const { values: opts } = parseArgs({
     identity: { type: 'string' },
     timeout: { type: 'string', default: '900' },
     'ad-wait': { type: 'string', default: '8000' },
+    'idle-ms': { type: 'string' },
+    'idle-sample-ms': { type: 'string' },
+    'idle-layout': { type: 'string' },
+    'sample-ms': { type: 'string', default: '10000' },
   },
 });
 
@@ -254,6 +266,67 @@ function windowMonitorBinary() {
   return binary;
 }
 
+// ------------------------------------------------------- process sampling
+// WebKit's web content, networking and GPU processes are XPC services that
+// launchd starts: they are not in the app's process group, so they are found
+// by their responsible process (proc-owner.swift). An app started from a
+// terminal is not responsible for itself (the terminal's app is), so its
+// WebKit processes are the ones of that same responsible process that
+// started after the launch (`before`: the WebKit pids seen at launch).
+// Another WebKit app launched from the same terminal during the run would
+// be counted too; the samples name every process.
+function procOwnerBinary() {
+  const binary = join(outRoot, '.tools', 'proc-owner');
+  if (existsSync(binary)) return binary;
+  mkdirSync(dirname(binary), { recursive: true });
+  sh('swiftc', ['-O', join(here, 'proc-owner.swift'), '-o', binary]);
+  return binary;
+}
+function processList() {
+  return spawnSync('ps', ['-axo', 'pid=,ppid=,rss=,comm='], { encoding: 'utf8' })
+    .stdout.split('\n')
+    .map((l) => /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/.exec(l))
+    .filter(Boolean)
+    .map((m) => ({
+      pid: Number(m[1]),
+      ppid: Number(m[2]),
+      rssKb: Number(m[3]),
+      name: m[4].split('/').pop(),
+    }));
+}
+const isWebKit = (p) => p.name.startsWith('com.apple.WebKit.');
+function webKitPids() {
+  return new Set(processList().filter(isWebKit).map((p) => p.pid));
+}
+function ownedProcesses(probe, appPid, before, appOwner) {
+  const ps = processList();
+  const owners = new Map(
+    spawnSync(probe, ps.map((p) => String(p.pid)), { encoding: 'utf8' })
+      .stdout.split('\n')
+      .filter(Boolean)
+      .map((l) => l.split(' ').map(Number)),
+  );
+  const owner = appOwner ?? owners.get(appPid);
+  return {
+    owner,
+    procs: ps.filter(
+      (p) =>
+        p.pid === appPid ||
+        p.ppid === appPid ||
+        owners.get(p.pid) === appPid ||
+        (isWebKit(p) && !before.has(p.pid) && owner !== undefined && owners.get(p.pid) === owner),
+    ),
+  };
+}
+// The pid of the frontmost app (the one that has the keyboard), or null.
+function frontPid() {
+  const asn = spawnSync('lsappinfo', ['front'], { encoding: 'utf8' }).stdout.trim();
+  if (!asn) return null;
+  const info = spawnSync('lsappinfo', ['info', '-only', 'pid', asn], { encoding: 'utf8' }).stdout;
+  const m = /"pid"\s*=\s*(\d+)/.exec(info);
+  return m ? Number(m[1]) : null;
+}
+
 // --------------------------------------------------------------------- run
 const readJsonl = (file) =>
   existsSync(file)
@@ -281,6 +354,11 @@ async function main() {
   const feed = await startFeed();
   const feedUrl = `http://127.0.0.1:${feed.address().port}`;
   const config = { runDir, feedUrl, adWaitMs: Number(opts['ad-wait']) };
+  if (opts['idle-ms']) {
+    config.idleMs = Number(opts['idle-ms']);
+    if (opts['idle-sample-ms']) config.idleSampleMs = Number(opts['idle-sample-ms']);
+    if (opts['idle-layout']) config.idleLayout = opts['idle-layout'];
+  }
   env.OW_SAMPLE_E2E_CONFIG = JSON.stringify(config);
   const meta = { runId, host: opts.host, startedAt: new Date().toISOString(), feedUrl };
   if (tauri) {
@@ -309,6 +387,9 @@ async function main() {
   }
   writeFileSync(join(runDir, 'meta.json'), JSON.stringify(meta, null, 2));
 
+  const procOwner = procOwnerBinary();
+  const webKitBefore = webKitPids();
+  let appOwner;
   log(`launching ${opts.host}: ${exe} ${args.join(' ')}`);
   const child = spawn(exe, args, { env, cwd: runDir, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   running.add(child);
@@ -317,6 +398,25 @@ async function main() {
   const monitorFile = join(runDir, 'window-monitor.jsonl');
   const mon = spawn(monitor, [String(child.pid), monitorFile, '25'], { stdio: 'ignore', detached: true });
   running.add(mon);
+  const samplesFile = join(runDir, 'proc-samples.jsonl');
+  const sample = () => {
+    const { owner, procs } = ownedProcesses(procOwner, child.pid, webKitBefore, appOwner);
+    appOwner ??= owner;
+    appendFileSync(
+      samplesFile,
+      JSON.stringify({ t: Date.now(), totalKb: procs.reduce((n, p) => n + p.rssKb, 0), procs }) + '\n',
+    );
+  };
+  const sampler = setInterval(sample, Number(opts['sample-ms']));
+  // The invisible app must never be the frontmost app: it would take the
+  // keyboard from the app the user is typing in.
+  let everFront = false;
+  const frontWatch = setInterval(() => {
+    if (!everFront && frontPid() === child.pid) {
+      everFront = true;
+      log('WARNING: the app became the frontmost app');
+    }
+  }, 1000);
 
   const e2eFile = join(runDir, 'e2e.jsonl');
   const timeoutMs = Number(opts.timeout) * 1000;
@@ -371,6 +471,8 @@ async function main() {
     }
   }
   const exit = await exited;
+  clearInterval(sampler);
+  clearInterval(frontWatch);
   killTree(child, 'SIGKILL');
   running.delete(child);
   // Let the monitor write its end record.
@@ -395,6 +497,7 @@ async function main() {
     exit,
     safetyKill,
     everVisible: monitorEnd ? monitorEnd.everVisible : null,
+    everFront,
     steps: steps.length,
     stepsWithErrors: problems,
     blocked: readJsonl(join(runDir, 'blocked.jsonl')).length,
@@ -406,7 +509,18 @@ async function main() {
   // The whole process group is gone (the app, its helpers, the monitor).
   const left = spawnSync('pgrep', ['-g', String(child.pid)], { encoding: 'utf8' }).stdout.trim();
   if (left) log(`WARNING: processes left in the app's group: ${left}`);
-  process.exitCode = verdict === 'done' && summary.everVisible === false ? 0 : 1;
+  // And no process the app owned (WebKit's XPC services) outlives it; they
+  // exit shortly after their client, so wait up to 10 s.
+  let owned = [];
+  for (let i = 0; i < 20; i += 1) {
+    owned = ownedProcesses(procOwner, child.pid, webKitBefore, appOwner).procs;
+    if (!owned.length) break;
+    await new Promise((ok) => setTimeout(ok, 500));
+  }
+  summary.leftProcesses = owned;
+  writeFileSync(join(runDir, 'summary.json'), JSON.stringify(summary, null, 2));
+  if (owned.length) log(`WARNING: processes the app owned are still running: ${JSON.stringify(owned)}`);
+  process.exitCode = verdict === 'done' && summary.everVisible === false && !everFront && !owned.length ? 0 : 1;
 }
 
 main().catch((error) => {

@@ -292,6 +292,38 @@ impl Router {
         }
     }
 
+    /// The sizes of every buffer and table, for the lab's `core-stats.jsonl`
+    /// (a growing number over an idle run is a leak).
+    #[cfg_attr(
+        not(feature = "plugin"),
+        expect(dead_code, reason = "only the plugin's host records it")
+    )]
+    pub(crate) fn lab_stats(&self) -> Value {
+        let peers: serde_json::Map<String, Value> = self
+            .peers
+            .iter()
+            .map(|(label, p)| {
+                (
+                    label.clone(),
+                    serde_json::json!({
+                        "outbox": p.outbox.len(),
+                        "inboundHeld": p.inbound.held_len(),
+                        "inFlight": p.in_flight,
+                    }),
+                )
+            })
+            .collect();
+        serde_json::json!({
+            "peers": peers,
+            "startup": self.startup.len(),
+            "pending": self.pending.len(),
+            "retired": self.retired.len(),
+            "outbound": self.outbound.len(),
+            "outboundHeld": self.outbound.values().map(Reorder::held_len).sum::<usize>(),
+            "logs": self.logs.len(),
+        })
+    }
+
     // ----- retirement -------------------------------------------------------
 
     fn retire(&mut self, id: u64, window_id: u32) {

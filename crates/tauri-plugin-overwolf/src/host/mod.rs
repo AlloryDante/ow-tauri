@@ -51,6 +51,8 @@ const TICK: Duration = Duration::from_millis(250);
 const SLOW_EVERY: u64 = 8;
 /// `main_ready` fallback (A.2.1).
 const MAIN_READY_FALLBACK_MS: u64 = 10_000;
+/// Ticks between two lab `core-stats.jsonl` records (10 s).
+const LAB_STATS_EVERY: u64 = 40;
 /// `window_eval` result timeout.
 pub(crate) const EVAL_TIMEOUT_MS: u64 = 30_000;
 
@@ -193,6 +195,25 @@ impl Core {
         self.router.push(MAIN_LABEL, message);
     }
 
+    /// The sizes of the host's tables and queues, for the lab's
+    /// `core-stats.jsonl`: over an idle run none of them may keep growing.
+    fn lab_stats(&self, windows: &[u32]) -> Value {
+        serde_json::json!({
+            "router": self.router.lab_stats(),
+            "windows": windows.len(),
+            "sinks": self.sinks.len(),
+            "urls": self.urls.len(),
+            "closeRequests": self.close_requests.len(),
+            "evals": self.evals.len(),
+            "adGuests": self.ads.guests.len(),
+            "consentWaiters": self.consent.waiters.len(),
+            "consentHidden": self.consent.hidden.len(),
+            "consentResolved": self.consent.resolved.len(),
+            "browserOpens": self.browser_opens.len(),
+            "restartStaleWindows": self.restart_stale_windows.len(),
+        })
+    }
+
     /// Applies state patches and queues the `state` message for `ow-main`
     /// when anything changed.
     pub(crate) fn patch(&mut self, patches: Vec<(String, Value)>) {
@@ -241,6 +262,10 @@ impl<R: Runtime> Host<R> {
 
     /// Writes one log line (and mirrors it to the `log` crate).
     pub(crate) fn log(&self, level: LogLevel, message: &str) {
+        crate::lab::record(
+            "plugin-log.jsonl",
+            || serde_json::json!({ "level": level.as_str(), "message": message }),
+        );
         match level {
             LogLevel::Debug => log::debug!(target: "ow-tauri", "{message}"),
             LogLevel::Info => log::info!(target: "ow-tauri", "{message}"),
@@ -337,7 +362,7 @@ impl<R: Runtime> Host<R> {
     /// timeouts, the `main_ready` fallback and the slow polls.
     pub(crate) fn tick(self: &Arc<Self>) {
         let now = self.now();
-        let (closes, evals, quit, slow, warn_ready) = self.with_core(|c| {
+        let (closes, evals, quit, slow, warn_ready, stats) = self.with_core(|c| {
             c.ticks += 1;
             c.router.tick(now);
             let expired: Vec<u64> = c
@@ -369,8 +394,21 @@ impl<R: Runtime> Host<R> {
             if warn_ready {
                 c.main_ready_warned = true;
             }
-            (closes, evals, quit, c.ticks % SLOW_EVERY == 0, warn_ready)
+            let stats = (c.ticks % LAB_STATS_EVERY == 0 && crate::lab::trace_on())
+                .then(|| c.lab_stats(&windows));
+            (
+                closes,
+                evals,
+                quit,
+                c.ticks % SLOW_EVERY == 0,
+                warn_ready,
+                stats,
+            )
         });
+        if let Some(mut stats) = stats {
+            stats["nativeWebviews"] = self.app.webviews().len().into();
+            crate::lab::record("core-stats.jsonl", || stats);
+        }
         for e in evals {
             let _ = e.tx.send(Err(Error::ipc_timeout(
                 "executeJavaScript did not report a result within 30 s.",
