@@ -232,15 +232,18 @@ fn matches_size(_window: &tauri::WebviewWindow) -> f64 {
     440.0
 }
 
-/// Whether the guest webview still exists and can evaluate script right now.
+/// Whether the guest webview and its window still exist right now. Eval-free
+/// on purpose: this runs inline in the `CloseRequested` handler and again from
+/// a main-thread-posted check, where blocking on an eval callback (which the
+/// WebView2 message loop delivers on that same main thread) would deadlock.
+/// Presence in the webview manager plus a live native window is the signal for
+/// "the guest is still there and can still receive `evaluateJavaScript`".
 fn probe_guest_alive(app: &tauri::AppHandle, label: &str) -> Value {
     let present = app.webviews().contains_key(label);
-    let alive = if present {
-        eval(app, label, "(typeof window.__alive === 'function' ? window.__alive() : 'no-fn')")
-    } else {
-        Value::Null
-    };
-    json!({ "present": present, "evalResult": alive })
+    let window = app.get_window(AUX);
+    let window_present = window.is_some();
+    let window_visible = window.and_then(|w| w.is_visible().ok());
+    json!({ "guestPresent": present, "windowPresent": window_present, "windowVisible": window_visible })
 }
 
 /// Shape regex for the Windows default WebView2 UA (reduced UA), DESIGN §4.10.
