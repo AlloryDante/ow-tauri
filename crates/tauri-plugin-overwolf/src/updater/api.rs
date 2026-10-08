@@ -226,6 +226,10 @@ impl Update {
     /// # Errors
     ///
     /// `verification` or `io`.
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "frozen interface: installing consumes the download (W3)"
+    )]
     pub fn install(&self, downloaded: DownloadedUpdate) -> Result<()> {
         let DownloadedUpdate { _private: () } = downloaded;
         Err(unavailable())
