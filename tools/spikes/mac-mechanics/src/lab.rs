@@ -436,3 +436,22 @@ pub fn remove_user_scripts_containing(controller: usize, marker: &str) -> (usize
         (n, removed, after)
     }
 }
+
+// ------------------------------------------------- main dispatch queue (A4)
+
+unsafe extern "C" {
+    static _dispatch_main_q: u8;
+    fn dispatch_async_f(queue: *const u8, context: *mut std::ffi::c_void, work: extern "C" fn(*mut std::ffi::c_void));
+}
+
+extern "C" fn run_boxed(ctx: *mut std::ffi::c_void) {
+    let f: Box<Box<dyn FnOnce()>> = unsafe { Box::from_raw(ctx.cast()) };
+    f();
+}
+
+/// `dispatch_async_f(dispatch_get_main_queue(), …)`: runs `f` on the main
+/// thread after the current run-loop work, without a thread hop.
+pub fn dispatch_main(f: Box<dyn FnOnce()>) {
+    let ctx = Box::into_raw(Box::new(f)).cast();
+    unsafe { dispatch_async_f(&raw const _dispatch_main_q, ctx, run_boxed) };
+}

@@ -42,7 +42,7 @@ jobs:
         run: |
           sw_vers > out-sw_vers.txt || true
           ./run-mac.sh out target/debug/mac-mechanics-spike
-          SPIKE_CLOSE_VARIANTS="late late close" ./run-mac.sh out-late target/debug/mac-mechanics-spike close
+          SPIKE_CLOSE_VARIANTS="late late gcd gcd gcd destroy destroy destroy close close close close close close close close close close" ./run-mac.sh out-late target/debug/mac-mechanics-spike close
           mv out-sw_vers.txt out/
       - name: Summary
         if: always()

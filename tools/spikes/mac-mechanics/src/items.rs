@@ -668,6 +668,7 @@ fn zoom(ctx: &Ctx) -> Value {
     let scale = main.scale_factor().unwrap_or(0.0);
     let mut rows = Vec::new();
     let mut ok_all = true;
+    let mut ok_width_all = true;
     for z in [1.0_f64, 0.8, 1.25, 1.0] {
         for wv in [main.as_ref(), &g] {
             let _ = wv.set_zoom(z);
@@ -684,16 +685,18 @@ fn zoom(ctx: &Ctx) -> Value {
             let est = if scale > 0.0 { dpr / scale } else { 0.0 };
             let iw = page["innerWidth"].as_f64().unwrap_or(0.0);
             let points_per_css = if iw > 0.0 { frame[0] / iw } else { 0.0 };
-            let ok = (est - z).abs() < 0.01 && (points_per_css - z).abs() < 0.02;
+            let ok = (est - z).abs() < 0.01;
+            let ok_width = (points_per_css - z).abs() < 0.02;
+            ok_width_all &= ok_width;
             ok_all &= ok;
             rows.push(json!({
                 "zoomSet": z, "webview": name, "pageZoomReadback": pz, "windowScaleFactor": scale, "backingScaleFactor": backing,
                 "page": page, "nativeFramePoints": frame,
-                "dprOverScaleFactor": est, "nativePointsPerCssPx": points_per_css, "formulaHolds": ok,
+                "dprOverScaleFactor": est, "nativePointsPerCssPx": points_per_css, "dprFormulaHolds": ok, "widthFormulaHolds": ok_width,
             }));
         }
     }
-    json!({ "rows": rows, "verdict": { "zoomEqualsDprOverScaleFactor": ok_all, "verified": ok_all } })
+    json!({ "rows": rows, "verdict": { "zoomEqualsDprOverScaleFactor": ok_all, "zoomEqualsNativeWidthOverInnerWidth": ok_width_all, "verified": ok_all } })
 }
 
 // ---------------------------------------------------------------- A4 close
@@ -741,6 +744,15 @@ fn close_probe() -> tauri::plugin::TauriPlugin<Wry> {
                             json!({ "t": t(), "who": "plugin on_event", "what": "tauri eval at CloseRequested", "guest": g, "queued": r }),
                         );
                     }
+                    // `gcd` variant: enqueue the check on the main dispatch queue from
+                    // inside the handler (no thread hop, no event-loop proxy).
+                    if label.contains("gcd") {
+                        let app = app.clone();
+                        let label = label.clone();
+                        let posted = t();
+                        lab::dispatch_main(Box::new(move || close_check(&app, &label, posted, guests)));
+                        return;
+                    }
                     // Primary mechanism: a check posted through the event-loop proxy from a helper thread.
                     let app = app.clone();
                     let label = label.clone();
@@ -754,10 +766,23 @@ fn close_probe() -> tauri::plugin::TauriPlugin<Wry> {
                         let _ = app.run_on_main_thread(move || close_check(&app2, &label, posted, guests));
                     });
                 }
-                WindowEvent::Destroyed => push(
-                    &CLOSE_LOG,
-                    json!({ "t": t(), "who": "plugin on_event", "event": "Destroyed", "label": label }),
-                ),
+                WindowEvent::Destroyed => {
+                    push(&CLOSE_LOG, json!({ "t": t(), "who": "plugin on_event", "event": "Destroyed", "label": label }));
+                    // Hide delivered at Destroyed through the retained handles (first-wins partner of the check).
+                    let guests: Vec<(String, usize)> = CLOSE_GUESTS
+                        .lock()
+                        .map(|g| g.iter().filter(|(w, _, _)| w == label).map(|(_, g, wk)| (g.clone(), *wk)).collect())
+                        .unwrap_or_default();
+                    for (g, wk) in guests {
+                        let attached = unsafe {
+                            let s: *mut AnyObject = msg_send![obj(wk), superview];
+                            !s.is_null()
+                        };
+                        let (tx, _rx) = std::sync::mpsc::channel();
+                        lab::eval_native(wk, "(window.__beacon('at-destroyed-native', document.visibilityState), 1)", tx);
+                        push(&CLOSE_LOG, json!({ "t": t(), "who": "plugin on_event", "what": "native eval at Destroyed", "guest": g, "wkAttached": attached }));
+                    }
+                }
                 _ => {}
             }
         })
@@ -925,6 +950,32 @@ fn close(ctx: &Ctx) -> Value {
     }
     let lates: Vec<&Value> = variants.iter().filter(|v| v["variant"] == "late").collect();
     let late_summary: Vec<Value> = lates.iter().map(|v| json!({ "checkAfterDestroyed": v["postedCheck"]["destroyedEventBeforeCheck"], "window": v["postedCheck"]["window"], "nativeEvalFromRetainedHandleReached": v["summary"]["beaconCheckNative"] })).collect();
+    let gcds: Vec<&Value> = variants.iter().filter(|v| v["variant"] == "gcd").collect();
+    let gcd_summary = json!({
+        "runs": gcds.len(),
+        "checkBeforeDestroyed": gcds.iter().filter(|v| v["postedCheck"]["destroyedEventBeforeCheck"] == false).count(),
+        "closeCertainSeen": gcds.iter().filter(|v| v["postedCheck"]["window"]["isVisible"].get("Err").is_some() || v["postedCheck"]["window"]["present"] == false).count(),
+        "nativeEvalReachedBoth": gcds.iter().filter(|v| v["summary"]["beaconCheckNative"].as_array().is_some_and(|a| a.len() == 2)).count(),
+    });
+    // Hide at `Destroyed` (retained handle): did it reach both pages before their own visibilitychange?
+    let destroyed_runs: Vec<Value> = variants
+        .iter()
+        .filter(|v| !matches!(v["variant"].as_str(), Some("prevent" | "tray")))
+        .map(|v| {
+            let b = v["beacons"].as_array().cloned().unwrap_or_default();
+            let first_vis = b
+                .iter()
+                .filter(|x| x["k"] == "visibilitychange")
+                .filter_map(|x| x["t"].as_u64())
+                .min();
+            let hides: Vec<&Value> = b.iter().filter(|x| x["k"] == "at-destroyed-native").collect();
+            let before = hides.len() == 2
+                && hides
+                    .iter()
+                    .all(|x| x["v"] == "visible" && first_vis.is_none_or(|f| x["t"].as_u64().unwrap_or(u64::MAX) <= f));
+            json!({ "variant": v["variant"], "bothBeforePageHidden": before })
+        })
+        .collect();
     let closes: Vec<&Value> = variants.iter().filter(|v| v["variant"] == "close").collect();
     let check_before_destroyed = closes
         .iter()
@@ -940,6 +991,8 @@ fn close(ctx: &Ctx) -> Value {
         .count();
     json!({ "variants": variants, "verdict": {
         "closeRuns": closes.len(),
+        "hideAtDestroyed": { "runs": destroyed_runs.len(), "bothGuestsVisibleBeforeTheirOwnHide": destroyed_runs.iter().filter(|r| r["bothBeforePageHidden"] == true).count() },
+        "gcdMainQueueCheck": gcd_summary,
         "lateCheck(posted 100 ms after CloseRequested)": late_summary,
         "postedCheckRanBeforeDestroyed": check_before_destroyed,
         "postedCheckSawCloseCertain(isVisible Err or window absent)": window_gone_signal,
