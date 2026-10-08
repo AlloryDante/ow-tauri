@@ -1274,7 +1274,10 @@ async fn recreate_guest<R: Runtime>(core: &Arc<Core<R>>, label: &str) {
     let prelude = match snapshot_outcome(answer.as_deref()) {
         Snapshot::TooBig => {
             log::debug!(target: LOG_TARGET, "{label}: sessionStorage too large to carry; reloading in place");
-            with_guest(core, label, |g| g.generations.go_live(generation));
+            with_guest(core, label, |g| {
+                g.generations.go_live(generation);
+                g.recreates.forget_last();
+            });
             navigate_guest(core, label);
             return;
         }

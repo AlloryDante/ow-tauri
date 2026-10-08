@@ -216,6 +216,21 @@ impl RecreateLimiter {
         self.recreates.push(now_ms);
         true
     }
+
+    /// Takes back the last counted recreate: one that reloaded in place
+    /// after all (a `sessionStorage` too large to carry, ruling 8) spends
+    /// neither the hourly budget nor the interval.
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::ads::RecreateLimiter;
+    /// let mut l = RecreateLimiter::new(30_000, 30);
+    /// assert!(l.try_recreate(1_000));
+    /// l.forget_last();
+    /// assert!(l.try_recreate(2_000));
+    /// ```
+    pub fn forget_last(&mut self) {
+        self.recreates.pop();
+    }
 }
 
 /// The native webview generations of one guest (DESIGN §4.4.6.3): a
@@ -676,6 +691,15 @@ mod tests {
         assert!(l.try_recreate(3_600_000));
         let mut never = RecreateLimiter::new(0, 0);
         assert!(!never.try_recreate(0));
+        // A recreate taken back spends nothing.
+        let mut back = RecreateLimiter::new(30_000, 1);
+        assert!(back.try_recreate(0));
+        back.forget_last();
+        assert!(back.try_recreate(1));
+        assert!(!back.try_recreate(30_001), "the hourly cap of one");
+        back.forget_last();
+        back.forget_last();
+        assert!(back.try_recreate(2), "taking back nothing is harmless");
     }
 
     /// DESIGN §4.4.6.3: generation ids.
