@@ -24,8 +24,8 @@
 // --idle-ms: instead of the full pass, start every slot of one Ads Tester
 //   layout and leave the ads running that long (the idle run, steps.js).
 // --sample-ms (default 10000): how often the memory of the app and of every
-//   process it owns (WebKit's XPC services included) goes to
-//   proc-samples.jsonl. After the app quits, none of them may be left.
+//   process it owns (WebKit's XPC services included; RSS and physical
+//   footprint) goes to proc-samples.jsonl. After the app quits, none of them may be left.
 
 import { spawn, spawnSync } from 'node:child_process';
 import {
@@ -318,6 +318,22 @@ function ownedProcesses(probe, appPid, before, appOwner) {
     ),
   };
 }
+// The physical footprint of each pid in KiB (what Activity Monitor shows as
+// Memory: resident and compressed pages the process owns). RSS alone drops
+// whenever macOS compresses pages under memory pressure, so a growth
+// comparison reads the footprint.
+function footprintKb(pids) {
+  const out = new Map();
+  if (!pids.length) return out;
+  const args = ['-l', '1', '-stats', 'pid,mem', ...pids.flatMap((p) => ['-pid', String(p)])];
+  const text = spawnSync('top', args, { encoding: 'utf8' }).stdout ?? '';
+  const unit = { B: 1 / 1024, K: 1, M: 1024, G: 1024 * 1024 };
+  for (const line of text.split('\n')) {
+    const m = /^(\d+)\s+([\d.]+)([BKMG])[+-]?\s*$/.exec(line.trim());
+    if (m) out.set(Number(m[1]), Math.round(Number(m[2]) * unit[m[3]]));
+  }
+  return out;
+}
 // The pid of the frontmost app (the one that has the keyboard), or null.
 function frontPid() {
   const asn = spawnSync('lsappinfo', ['front'], { encoding: 'utf8' }).stdout.trim();
@@ -402,9 +418,12 @@ async function main() {
   const sample = () => {
     const { owner, procs } = ownedProcesses(procOwner, child.pid, webKitBefore, appOwner);
     appOwner ??= owner;
+    const footprints = footprintKb(procs.map((p) => p.pid));
+    for (const p of procs) p.footprintKb = footprints.get(p.pid) ?? null;
+    const sum = (key) => procs.reduce((n, p) => n + (p[key] ?? 0), 0);
     appendFileSync(
       samplesFile,
-      JSON.stringify({ t: Date.now(), totalKb: procs.reduce((n, p) => n + p.rssKb, 0), procs }) + '\n',
+      JSON.stringify({ t: Date.now(), totalKb: sum('rssKb'), totalFootprintKb: sum('footprintKb'), procs }) + '\n',
     );
   };
   const sampler = setInterval(sample, Number(opts['sample-ms']));

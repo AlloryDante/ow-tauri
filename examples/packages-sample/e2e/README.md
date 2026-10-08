@@ -34,7 +34,8 @@ Output goes to `e2e/out/<run-id>/` (git-ignored): `e2e.jsonl` (one record
 per action), `summary.json`, `window-monitor.jsonl`, `blocked.jsonl`, the
 app's `stdout.log` / `stderr.log`, the local update feed's requests,
 `proc-samples.jsonl` (the memory of the app and of every process it owns,
-every `--sample-ms`, 10 s by default) and, on ow-tauri, the plugin's lab
+RSS and physical footprint, every `--sample-ms`, 10 s by default; compare
+growth by the footprint, since RSS drops whenever macOS compresses pages) and, on ow-tauri, the plugin's lab
 trace (`host-requests.jsonl`, `ipc.jsonl`, `windows.jsonl`, ...), including
 `plugin-log.jsonl` (every plugin log line, whatever the logging setting) and
 `core-stats.jsonl` (the sizes of the plugin's IPC queues and tables every
