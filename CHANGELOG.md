@@ -49,6 +49,10 @@ the npm package share one version number.
   49 % is hidden, both axes); `addAd` takes `slotId` and `slotStyle`.
 - Ad showcase lab: `--theme dark|light` for the stills, and in-process
   stills of each ow-electron ad guest with how much of it is painted.
+- CI: the macOS job requires that the Safari version is read from Safari's
+  `Info.plist` (`OW_TAURI_EXPECT_SAFARI`) and logs which plist it read.
+  Dependabot ignores React majors, which only `examples/packages-sample`
+  uses (it mirrors the upstream sample on React 18).
 
 - Upstream `ow-electron-packages-sample` imported verbatim at commit `8a27053`
   into `examples/packages-sample` (MIT, Overwolf Ltd.).

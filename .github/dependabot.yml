@@ -23,6 +23,17 @@ updates:
       # TypeDoc support (CONTRIBUTING.md, "Dependencies").
       - dependency-name: typescript
         update-types: ['version-update:semver-major', 'version-update:semver-minor']
+      # Only examples/packages-sample uses React: it mirrors the upstream
+      # Overwolf sample, which is on React 18, so React majors are ignored
+      # (examples/packages-sample/CHANGES-FROM-UPSTREAM.md).
+      - dependency-name: react
+        update-types: ['version-update:semver-major']
+      - dependency-name: react-dom
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@types/react'
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@types/react-dom'
+        update-types: ['version-update:semver-major']
 
   - package-ecosystem: github-actions
     directory: /

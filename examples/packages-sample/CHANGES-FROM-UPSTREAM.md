@@ -73,3 +73,6 @@ The numbering matches `docs/PORT-MAP.md` section 5.
 - The overlay `registerGames` id list in `src/browser/application.ts` keeps
   every id Overwolf wrote (parity with the upstream sample).
 - `crashReporter.start` stays; it is a documented no-op in ow-tauri.
+- React stays on major 18 (`react`, `react-dom` and their `@types`), as in
+  the upstream sample. Dependabot ignores React majors for this example
+  (`.github/dependabot.yml`); minor and patch updates still arrive.
