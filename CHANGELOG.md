@@ -9,6 +9,42 @@ the npm package share one version number.
 
 ### Added
 
+- Ported example: Overwolf's packages sample runs on ow-tauri
+  (`examples/packages-sample`), with every change listed in
+  `CHANGES-FROM-UPSTREAM.md`, an `.env.example`, and an end-to-end lab that
+  drives every page and button on both hosts.
+- Ad showcase (`examples/ad-showcase`): every `<owadview>` format from one
+  code base, built for ow-electron and for ow-tauri, with a lab that compares
+  the two.
+- `ow-tauri sign` and `ow-tauri sign-exe`: Overwolf signing for a Tauri
+  build (CONTRACT G.4). `embed_manifest` applies the signed output, links the
+  `OWEINTEGRITY/OWE` resource (feature `embed-resource`), gates unsigned
+  Windows release builds (`OW_TAURI_ALLOW_UNSIGNED` for local builds), and
+  warns about a missing `bundle.resources` mapping, a `signCommand` string
+  that starts with `npx`, and unset `updater.publisherNames`.
+- Updater client behind `autoUpdater`, and `write_nsis_installer_hooks` for
+  Overwolf's install and uninstall steps (CONTRACT I).
+- `ads.transparentGuests` (default `true`): ad guests are transparent from
+  creation, so an empty slot shows the app's container and an interstitial's
+  dim shows the app (CONTRACT B.3.4).
+- Interstitial (performance) ads: the guest stays above every other guest,
+  and input passes through it until `performance_ad_loaded` on Windows and
+  macOS (CONTRACT B.3.4).
+- `<owadview>` `setPageUrl()` and `sendCommand()` reach the running ad page
+  (CONTRACT B.3.3, D.5).
+- `navigation_in_page`: `webContents.getURL()` follows fragment and
+  `history` changes, and `did-navigate-in-page` fires (CONTRACT A.2.5, B.2.2).
+- `Overwolf::report_web_content_terminated`: one macOS hook for crashed
+  `ow-main`, ad guest, consent and window webviews (CONTRACT A.5).
+- Parity harness, Tauri edition: `parity-diff`, round-3 ad-format scenarios,
+  the 13-hour long run, and a Windows lab in CI that compares both hosts.
+- `docs/MIGRATION.md` (step-by-step guide, bundler recipes for webpack,
+  rolldown, Vite and esbuild, mapping tables), `docs/AD-FORMATS.md` (every
+  ad format), `docs/api/` (API reference index; `npm run docs:api` builds
+  typedoc and rustdoc), and `npm run check:links` with a `docs-links` CI job
+  that checks every relative link and anchor in the Markdown files.
+- OPEN-QUESTIONS: ad-format questions OQ-A1 to OQ-A10.
+
 - Upstream `ow-electron-packages-sample` imported verbatim at commit `8a27053`
   into `examples/packages-sample` (MIT, Overwolf Ltd.).
 - Cargo workspace with the `tauri-plugin-overwolf` crate scaffold.
@@ -80,6 +116,30 @@ the npm package share one version number.
 
 ### Changed
 
+- The test-mode `unit` guard is gone: `unit` passes through to the ad
+  library in test mode too, as ow-electron forwards it (ADR 0005 amended).
+- `ads.guestLimits.externalOpensPerMinute` defaults to 20 per guest
+  (was 5): Overwolf's ad QA clicks an ad five times and expects five
+  browser windows. Each open still needs its own user gesture.
+- `<owadview>`: its properties and methods are defined at attach, the
+  methods on an inserted prototype; event payloads are copied like
+  `Object.assign`; a second performance element is removed in the same task.
+  The element has no shadow root: engines refuse `attachShadow` on
+  `owadview`, on ow-electron too (CONTRACT B.3).
+- Analytics host requests carry no cookies and no `accept` header, the
+  WKWebView user agent carries Safari's product tokens, and a periodic
+  heartbeat follows ow-electron's 12-hour timing (CONTRACT E.1, E.2).
+- `app.overwolf.muid` is the install's `muidV2`; `eHashes` are stored in
+  `ow-electron.json`; guests get the consent string as it was at launch
+  (CONTRACT B.1.1, F.2, D.2).
+- Windows: guests hide natively while their window is minimized,
+  `showInactive()` does not activate the window, and ad guests navigate
+  with their document headers.
+- Contract, parity, architecture and port map brought in line with the
+  code and the lab results: the round-2 and round-3 results, the Windows
+  lab, the 13-hour run, known platform gaps (Linux guest overlap), and the
+  inner window size (`useContentSize`).
+- `README.md`: per-platform and ad-format matrices, a real quick start.
 - Parity revision of the contract: ow-tauri replicates what ow-electron does,
   as observed with the parity harness, and differs only in the host label
   (default `"tauri"`).
@@ -88,7 +148,8 @@ the npm package share one version number.
 - `analytics.muidStrategy` defaults to `machine-id` (ADR 0014);
   `ads.requestShaping` defaults to on (ADR 0013).
 - `<owadview>` events are plain `Event` objects with the data as own
-  properties; the element gets an open shadow root; `did-attach` and
+  properties; the element gets an open shadow root (later found to be
+  refused by the engines, see above); `did-attach` and
   `did-fail-load` carry ow-electron's properties (CONTRACT B.3).
 - `adview_mount` no longer waits for consent; each guest's first navigation
   waits for the startup consent window instead (CONTRACT D.6.5).
@@ -145,10 +206,7 @@ the npm package share one version number.
 - Configuration key `ads.legacyHostMessages` (the observed messages are
   always sent).
 - The consent cookie write from the ad shim (the consent page writes them).
-
-### Planned documentation
-
-`docs/MIGRATION.md`, `docs/api/`,
-`examples/packages-sample/CHANGES-FROM-UPSTREAM.md` and
-`examples/packages-sample/.env.example` (see CONTRIBUTING.md, "Documentation
-checklist").
+- The `allow-start-dragging` permission from the sample's capability (the
+  plugin's own `ow-tauri-ui-chrome` capability grants dragging), and
+  `app.security.freezePrototype` from the sample's configuration (Tauri
+  would inject it into ad guests and consent pages).

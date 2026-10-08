@@ -9,9 +9,11 @@ host label (`tauri` where ow-electron says `electron`).
 ow-tauri is vendor-neutral and MIT-licensed. It is written so that Overwolf can
 review it, re-run its parity checks and adopt it.
 
-> **Status: preview, ads system first.** The contract and architecture are
-> specified; the implementation is in progress. Nothing here is endorsed by
-> Overwolf yet. Gaming packages (GEP, overlay, recorder, utility, CRN) are
+> **Status: preview, ads system first.** The plugin, the npm package and both
+> examples are implemented and checked against ow-electron 42.11.4 in a lab
+> on macOS and Windows ([docs/PARITY.md](docs/PARITY.md#lab-checks)). Neither
+> the crate nor the npm package is published yet, and nothing here is
+> endorsed by Overwolf. Gaming packages (GEP, overlay, recorder, utility, CRN) are
 > **deferred**: `app.overwolf.packages` keeps its shape and reports packages
 > as unavailable, as ow-electron does where they are not available. As in
 > ow-electron, ads are live unless you start with `--test-ad` (or
@@ -61,6 +63,38 @@ The full member-by-member status is in [docs/CONTRACT.md](docs/CONTRACT.md);
 how each row is checked against ow-electron is in
 [docs/PARITY.md](docs/PARITY.md).
 
+### Per platform
+
+| Feature | Windows (WebView2) | macOS (WKWebView) | Linux (WebKitGTK) |
+|---|---|---|---|
+| Main process, windows, IPC, dialogs, screen, shell, files | yes | yes | yes |
+| `<owadview>` ads, test ads, consent | yes, lab-checked | yes, lab-checked; ad request headers on the ad document only | ads load; guests cannot overlap the page yet |
+| Ad request headers (`Referer`, `Origin`, `x-ow-*`) | every request | ad document only | ad document only |
+| Anonymous analytics, email hashes, uid, muid | yes | yes | yes |
+| Updates from Overwolf's feed | yes | self-hosted feed (Overwolf serves Windows setups only) | self-hosted feed, signed with `updater.pubkey` |
+| NSIS installer with Overwolf's install and uninstall steps | yes | n/a | n/a |
+| GEP, overlay, recorder, utility, CRN | deferred | deferred | deferred |
+
+The gaps are listed in
+[docs/PARITY.md](docs/PARITY.md#known-platform-gaps).
+
+### Ad formats
+
+| Format | How the app asks for it | Test mode | Status |
+|---|---|---|---|
+| Standard display (7 sizes) | `<owadview>` in a sized container | fills | same events as ow-electron |
+| Standard video | the same, 400x300 or 400x600 | plays a test video | same events, same mute timeline |
+| House ads | Dev Console set-up, no code | not served (on either host) | same configuration request |
+| High impact | `adstyle="high-impact-ad;"` | fills | same events |
+| Interstitial (performance) | `<owadview performance>` on `<body>` | fills | same DOM, input pass-through and end sequence (Windows, macOS) |
+| Reward | `adstyle="rewarded-ad;"`, at least 400x300 | plays a test video | same events, also across hides and shows |
+| In-stream | no `<owadview>` API | none | not supported on either host |
+
+How to use each format, and what to expect, is in
+[docs/AD-FORMATS.md](docs/AD-FORMATS.md). The
+[ad showcase](examples/ad-showcase/README.md) shows every format from one
+code base on both hosts.
+
 ## Repository layout
 
 ```
@@ -68,42 +102,50 @@ crates/tauri-plugin-overwolf/   Rust plugin: identity, state file, ads host, req
                                 shaping, consent, analytics, packages manager,
                                 updater, IPC router
 packages/ow-tauri/              npm package "ow-tauri": ./main, ./electron, ./renderer,
-                                and the "ow-tauri sign" CLI
+                                ./testing, typings and the "ow-tauri sign" CLI
 examples/packages-sample/       Overwolf's official ow-electron sample, ported
+examples/ad-showcase/           every ad format, built for ow-electron and ow-tauri
+                                from the same sources
 tools/parity-harness/           runs ow-electron and ow-tauri side by side and
                                 compares what they send
-docs/                           architecture, contract, parity, ADRs, open questions,
-                                port map
+docs/                           architecture, contract, parity, migration, ad formats,
+                                API reference index, ADRs, open questions, port map
 ```
 
 ## Quick start
 
-> Placeholder: the steps below become runnable as the implementation lands.
-> The full guide will live in `docs/MIGRATION.md`.
+The step-by-step guide is [docs/MIGRATION.md](docs/MIGRATION.md). In short,
+for an existing ow-electron app (ow-tauri is not published yet, so both
+halves come from a clone of this repository):
 
 ```sh
-# 1. Add the Rust plugin to your src-tauri crate
-cargo add tauri-plugin-overwolf
+# 1. JS runtime and Tauri CLI; remove @overwolf/ow-electron, -builder, electron-updater
+npm install --save-dev <clone>/ow-tauri-0.1.0.tgz @tauri-apps/cli@2.12.1 @tauri-apps/api@2.12.1
+#    (the tarball comes from `npm pack --workspace ow-tauri` in the clone)
 
-# 2. Add the JS runtime
-npm install ow-tauri
+# 2. Rust plugin in src-tauri/Cargo.toml, as a git or path dependency
+#    tauri = { version = "2.12.1", features = ["unstable"] }
+#    tauri-plugin-overwolf = { path = "<clone>/crates/tauri-plugin-overwolf" }
 
-# 3. Alias electron in your bundler (webpack example) and in tsconfig paths
+# 3. Alias electron in your bundler and in tsconfig paths
 #    resolve: { alias: { electron: 'ow-tauri/electron' } }
 
-# 4. Keep package.json "overwolf" and "build.overwolf" blocks as they are
+# 4. Keep package.json, including its "overwolf" and "build.overwolf" blocks
 
-# 5. Run with test ads (without it, ads are live, as in ow-electron)
-OW_TAURI_TEST_AD=1 npm run tauri dev
+# 5. Build your bundles, then run with test ads (without them, ads are live):
+#    package.json scripts: "start-ad": "tauri dev -- -- --test-ad"
+npm run build && npm run start-ad
 ```
 
-On Windows `cmd`, use `set OW_TAURI_TEST_AD=1` first. To pass `--test-ad` on
-the command line instead, put it in a package script (`"start-ad": "tauri dev
--- -- --test-ad"`): typed directly after `npm run tauri dev`, npm consumes one
-`--` and the switch would reach Cargo instead of the app.
+The [packages sample](examples/packages-sample/README.md) is a complete,
+ported app to copy from: its `src-tauri/` folder, webpack configs and
+`tsconfig.json` are the templates the guide uses.
 
 ## Documentation
 
+- [docs/MIGRATION.md](docs/MIGRATION.md): moving an ow-electron app to ow-tauri, step by step, with the API mapping tables
+- [docs/AD-FORMATS.md](docs/AD-FORMATS.md): every ad format, how to show it and what to expect
+- [docs/api/](docs/api/README.md): the API reference per area, and how to build it (`npm run docs:api`)
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): components, process model, data flows, security
 - [docs/CONTRACT.md](docs/CONTRACT.md): commands, events, JS API, IPC, guest shim, consent, request shaping, analytics, state file, manifest, signing, packages, updater; the package runtime design in Appendix P
 - [docs/PARITY.md](docs/PARITY.md): what parity with ow-electron means, how the harness proves it, and how to re-run it
@@ -112,10 +154,10 @@ the command line instead, put it in a package script (`"start-ad": "tauri dev
 - [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md): what is answered, what was decided, and what Overwolf still needs to confirm
 - [SECURITY.md](SECURITY.md): threat model and reporting
 
-Planned, tracked in [CONTRIBUTING.md](CONTRIBUTING.md#documentation-checklist):
-`docs/MIGRATION.md` (step-by-step guide and full mapping tables) and
-`docs/api/` (reference per area). A guide for package runtime authors waits
-for the packages work (CONTRACT Appendix P).
+- [CHANGELOG.md](CHANGELOG.md): what changed, release by release
+
+A guide for package runtime authors waits for the packages work (CONTRACT
+Appendix P).
 
 ## Requirements
 

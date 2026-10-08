@@ -1,12 +1,16 @@
 # ow-tauri (npm package)
 
-The JavaScript half of [ow-tauri](../../README.md). Three entry points:
+The JavaScript half of [ow-tauri](../../README.md). Four entry points, plus
+the typings and the `ow-tauri` CLI:
 
 | Import | Runs in | Gives you |
 |---|---|---|
 | `ow-tauri/main` | the hidden main webview | `app.overwolf`: the full ow-electron `OverwolfApi` mirror, including `packages` |
 | `ow-tauri/electron` | main webview and preload scripts | an Electron-compatible subset (`app`, `BrowserWindow`, `ipcMain`, `ipcRenderer`, `contextBridge`, ...) for a bundler alias `electron -> ow-tauri/electron` |
 | `ow-tauri/renderer` | UI windows | the `<owadview>` element runtime, plus `ipcRenderer` / `contextBridge` |
+| `ow-tauri/testing` | unit tests | a fake plugin for tests of code that uses ow-tauri (below) |
+| `ow-tauri/types` | TypeScript only | the `electron` and `@overwolf/ow-electron` declarations and the global `overwolf` namespace |
+| `npx ow-tauri sign`, `npx ow-tauri sign-exe` | the app's build | Overwolf signing for a Tauri build ([CONTRACT G.4](../../docs/CONTRACT.md#g4-signing)) |
 
 The surface is specified member by member in
 [docs/CONTRACT.md](../../docs/CONTRACT.md) section B.
@@ -15,10 +19,11 @@ Status: the IPC core (section C), the state cache, `ow-tauri/electron`
 (B.2), `ipcRenderer` / `contextBridge` and the `<owadview>` runtime (B.3) in
 `ow-tauri/renderer`, `app.overwolf` with its packages manager (B.1.1 to
 B.1.3), `files`, `whenHostReady` and the electron-updater compatible
-`autoUpdater` (I.5) in `ow-tauri/main`, `ow-tauri/testing` and the typings
-(B.4) are implemented. The plugin's `updater_*` commands behind
-`autoUpdater` are not implemented yet: until they are, its calls reject and
-emit `error`.
+`autoUpdater` (I.5) in `ow-tauri/main`, `ow-tauri/testing`, the typings
+(B.4) and the signing CLI (G.4) are implemented, and so are the plugin's
+`updater_*` commands behind `autoUpdater`. Moving an app over is described in
+[docs/MIGRATION.md](../../docs/MIGRATION.md); the API reference is built by
+`npm run docs` ([docs/api](../../docs/api/README.md)).
 
 ## Runtime and facades
 

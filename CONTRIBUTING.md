@@ -61,9 +61,15 @@ npm run lint
 npm run typecheck
 npm test
 npm run docs
+npm run check:links
 ```
 
-CI also runs cargo-deny, `npm audit`, a check that every `@overwolf/*`
+`npm run docs:api` builds both API references (typedoc and rustdoc, warnings
+are errors) and prints where they are; see [docs/api](docs/api/README.md).
+
+`npm run check:links` checks every relative link and heading anchor in the
+Markdown files with GitHub's slug rules (`scripts/check-links.mjs`, Node
+built-ins only); CI runs it in the `docs-links` job. CI also runs cargo-deny, `npm audit`, a check that every `@overwolf/*`
 package is on its `latest` dist-tag (`node scripts/check-overwolf-dist-tags.mjs`),
 an MSRV build, and, weekly, the newest stable Rust with the newest tauri 2.x
 and a main-webview liveness soak. CI also rebuilds
@@ -155,10 +161,13 @@ final review before a release checks the list.
 | `docs/adr/` | decision records | present |
 | `docs/OPEN-QUESTIONS.md` | questions for Overwolf with interim behaviour | present |
 | `docs/PORT-MAP.md` | the sample's port, file by file | present |
-| `docs/MIGRATION.md` | step-by-step guide: pre-flight audit (Node built-ins and Electron-only libraries, each with its replacement), bundler recipes (webpack, Vite, esbuild), typings (`tsconfig` paths), network (`fetch` and CORS, scoped HTTP), sync-to-async checklist, capability and CSP templates, debugging `ow-main`, what changes for users; full Electron to ow-tauri mapping tables | **to write** |
-| `docs/api/` | reference per area (main, electron, renderer, plugin Rust API): hand-written overviews that link to the generated references. TypeDoc writes to `packages/ow-tauri/docs-out/` (`npm run docs`) and rustdoc to `target/doc/`; both are generated, git-ignored and never committed | **to write** |
-| `examples/packages-sample/CHANGES-FROM-UPSTREAM.md` | every change against upstream `8a27053` | **to write** (with the port) |
-| `examples/packages-sample/.env.example` | dev-mode variable names, no values | **to write** (with the port) |
+| `docs/PARITY.md` | what parity means, the matrix, lab results, how to re-run the harness | present |
+| `docs/AD-FORMATS.md` | every ad format: how to show it, events, test and live mode, what not to expect | present |
+| `docs/MIGRATION.md` | step-by-step guide: pre-flight audit (Node built-ins and Electron-only libraries, each with its replacement), bundler recipes (webpack, rolldown, Vite, esbuild), typings (`tsconfig` paths), network (`fetch`, CORS, CSP `connect-src`), sync-to-async checklist, capability and CSP templates, signing, updates, CI, debugging `ow-main`, what changes for users; Electron, `app.overwolf`, `<owadview>` and CLI mapping tables | present |
+| `docs/api/` | reference per area (main, electron, renderer, testing, plugin Rust API): hand-written overviews that link to the specification and name the generated references. TypeDoc writes to `packages/ow-tauri/docs-out/` and rustdoc to `target/doc/` (`npm run docs:api`); both are generated, git-ignored and never committed | present |
+| `examples/packages-sample/CHANGES-FROM-UPSTREAM.md` | every change against upstream `8a27053` | present |
+| `examples/packages-sample/.env.example` | dev-mode and signing variable names, no values | present |
+| `examples/ad-showcase/README.md` | the showcase: how to run it on both hosts, lab results | present |
 | `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE` | | present |
 
 The package runtime interface for Overwolf has no separate guide while
