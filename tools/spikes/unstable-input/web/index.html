@@ -1,0 +1,140 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>unstable input spike</title>
+<style>
+  body { margin: 0; font: 14px system-ui, sans-serif; background: #fff; color: #111; }
+  main { width: 560px; padding: 6px 12px; box-sizing: border-box; }
+  label { display: block; margin: 3px 0 1px; font-size: 11px; color: #555; }
+  input, textarea, [contenteditable] { display: block; width: 520px; box-sizing: border-box;
+    font: 14px monospace; padding: 2px 4px; border: 1px solid #888; min-height: 24px; }
+  textarea { height: 40px; }
+  #mv, #mv2 { display: inline-block; width: 258px; }
+</style>
+</head>
+<body>
+<main>
+  <label for="input">input (plain)</label>
+  <input id="input" autocomplete="off" spellcheck="false">
+  <label for="textarea">textarea (plain)</label>
+  <textarea id="textarea" spellcheck="false"></textarea>
+  <label>contenteditable (plain)</label>
+  <div id="editable" contenteditable="true" spellcheck="false"></div>
+  <label>contenteditable, beforeinput cancelled + manual insert (Draft.js / Lexical style)</label>
+  <div id="rich" contenteditable="true" spellcheck="false"></div>
+  <label for="kp">input, keypress cancelled + manual insert (input-mask style)</label>
+  <input id="kp" autocomplete="off" spellcheck="false">
+  <label for="kd">input, keydown cancelled + manual insert (game chat / hotkey style)</label>
+  <input id="kd" autocomplete="off" spellcheck="false">
+  <label for="refocus">input, keydown handler blurs + refocuses it (re-render style)</label>
+  <input id="refocus" autocomplete="off" spellcheck="false">
+  <label>contenteditable replaced by a fresh node on the first key (placeholder swap, Draft.js style)</label>
+  <div id="remount-wrap"><div id="remount" contenteditable="true" spellcheck="false"></div></div>
+  <label for="mv">input that hands focus to a second input on the first key (command palette style)</label>
+  <input id="mv" autocomplete="off" spellcheck="false"><input id="mv2" autocomplete="off" spellcheck="false">
+  <label for="ta">type-anywhere search: focus on the page (button / body), the first key moves focus to this input (launcher style)</label>
+  <button id="tabtn">launcher tile</button><input id="ta" autocomplete="off" spellcheck="false" style="display:inline-block;width:400px">
+</main>
+<script>
+(() => {
+  const log = [];
+  const cps = (s) => [...s].map((c) => 'U+' + c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0'));
+  const valueOf = (el) => ('value' in el && el.tagName !== 'DIV') ? el.value : el.innerText.replace(/\n$/, '');
+  const ids = ['input', 'textarea', 'editable', 'rich', 'kp', 'kd', 'refocus', 'remount', 'mv', 'mv2', 'ta', 'tabtn'];
+  const watch = (el, id) => {
+    for (const type of ['keydown', 'keypress', 'keyup', 'beforeinput', 'input',
+      'compositionstart', 'compositionupdate', 'compositionend']) {
+      el.addEventListener(type, (e) => {
+        log.push({ t: Math.round(performance.now()), id, type, key: e.key, code: e.code,
+          inputType: e.inputType, data: e.data, composing: e.isComposing,
+          prevented: e.defaultPrevented });
+      }, true);
+    }
+  };
+  for (const id of ids) watch(document.getElementById(id), id);
+  // Insert text at the caret of a contenteditable.
+  const insertAtCaret = (text) => {
+    const sel = getSelection();
+    if (!sel.rangeCount) return;
+    const r = sel.getRangeAt(0);
+    r.deleteContents();
+    const node = document.createTextNode(text);
+    r.insertNode(node);
+    r.setStartAfter(node); r.collapse(true);
+    sel.removeAllRanges(); sel.addRange(r);
+  };
+  document.getElementById('rich').addEventListener('beforeinput', (e) => {
+    if (e.inputType === 'insertText' && e.data) { e.preventDefault(); insertAtCaret(e.data); }
+  });
+  const kp = document.getElementById('kp');
+  kp.addEventListener('keypress', (e) => {
+    if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      kp.setRangeText(e.key, kp.selectionStart, kp.selectionEnd, 'end');
+    }
+  });
+  const kd = document.getElementById('kd');
+  kd.addEventListener('keydown', (e) => {
+    if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.isComposing) {
+      e.preventDefault();
+      kd.setRangeText(e.key, kd.selectionStart, kd.selectionEnd, 'end');
+    }
+  });
+  const refocus = document.getElementById('refocus');
+  refocus.addEventListener('keydown', () => { refocus.blur(); refocus.focus(); });
+  const armRemount = (el) => el.addEventListener('keydown', () => {
+    if (el.textContent !== '' || el.dataset.swapped) return;
+    const fresh = el.cloneNode(false);
+    fresh.dataset.swapped = '1';
+    el.replaceWith(fresh);
+    watch(fresh, 'remount');
+    fresh.focus();
+  });
+  armRemount(document.getElementById('remount'));
+  const mv = document.getElementById('mv'), mv2 = document.getElementById('mv2');
+  mv.addEventListener('keydown', () => { if (mv.value === '' && document.activeElement === mv) mv2.focus(); });
+  const ta = document.getElementById('ta'), tabtn = document.getElementById('tabtn');
+  document.addEventListener('keydown', (e) => {
+    const a = document.activeElement;
+    if ((a === tabtn || a === document.body) && e.key.length === 1 && ta.dataset.armed) ta.focus();
+  });
+  // SPIKE_MITIGATE=js (location.hash #mitigate-js): cancel control-character
+  // text insertion, as an app could ship against tauri#10194.
+  if (location.hash === '#mitigate-js') {
+    document.addEventListener('beforeinput', (e) => {
+      if ((e.inputType === 'insertText' || e.inputType === 'insertReplacementText') && e.data && /^[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]+$/.test(e.data)) e.preventDefault();
+    }, true);
+  }
+  window.__spike = {
+    ready: true,
+    prep(id) {
+      if (id === 'remount') {
+        const cur = document.getElementById('remount');
+        const fresh = document.createElement('div');
+        fresh.id = 'remount'; fresh.contentEditable = 'true'; fresh.spellcheck = false;
+        cur.replaceWith(fresh); watch(fresh, 'remount'); armRemount(fresh);
+      }
+      if (id === 'mv') mv2.value = '';
+      const el = document.getElementById(id);
+      if ('value' in el && el.tagName !== 'DIV') el.value = ''; else el.textContent = '';
+      log.length = 0;
+      ta.dataset.armed = id === 'ta' ? '1' : '';
+      const target = id === 'ta' ? tabtn : el;
+      target.focus();
+      const r = target.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2, dpr: devicePixelRatio,
+        inner: [innerWidth, innerHeight], active: document.activeElement && document.activeElement.id,
+        hasFocus: document.hasFocus() };
+    },
+    read(id) {
+      const el = document.getElementById(id);
+      const v = id === 'mv' ? el.value + '|' + mv2.value : valueOf(el);
+      return { value: v, cps: cps(v), active: document.activeElement && document.activeElement.id,
+        hasFocus: document.hasFocus(), log: log.slice() };
+    },
+  };
+})();
+</script>
+</body>
+</html>

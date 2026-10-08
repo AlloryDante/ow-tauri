@@ -1,0 +1,39 @@
+# Spike: does Tauri's `unstable` feature (needed for `Window::add_child`,
+# i.e. ad guests as child webviews) break text input in the app's own
+# windows? Not part of the root workspace; never published or bundled.
+#
+#   cargo build                      # stable: no `unstable`, no child webview
+#   cargo build --features unstable  # SPIKE_MODE=unstable-nochild | unstable-child
+#
+# See README.md.
+[workspace]
+
+[package]
+name = "unstable-input-spike"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+[features]
+unstable = ["tauri/unstable"]
+
+[dependencies]
+tauri = { version = "2.12.1", features = [] }
+serde_json = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSGeometry", "NSRange", "NSString", "NSObject"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = [
+  "Win32_Foundation",
+  "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+tauri-build = { version = "2.7.1", features = [] }

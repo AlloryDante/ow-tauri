@@ -1,0 +1,81 @@
+name: Spike - unstable input
+
+# Spike (manual only): does Tauri's `unstable` feature (needed for
+# Window::add_child, i.e. ad guests as child webviews) change how text input
+# behaves in the app's own pages on Windows? Runs tools/spikes/unstable-input
+# three ways (stable build; unstable build without a child webview; unstable
+# build with one blank local child webview, not an ad) and types into six
+# kinds of text field with SendInput. Windows may show on the runner's
+# desktop, which is nobody's screen. No ads are loaded.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  windows:
+    name: Spike on windows-2025
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: tools/spikes/unstable-input
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tools/spikes/unstable-input -> target
+      - name: Build (stable, then unstable)
+        shell: pwsh
+        run: |
+          $env:CARGO_TARGET_DIR = "target/stable"; cargo build --locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:CARGO_TARGET_DIR = "target/unstable"; cargo build --locked --features unstable
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Keyboard layout US-International (dead keys)
+        shell: pwsh
+        run: |
+          $l = New-WinUserLanguageList en-US
+          $l[0].InputMethodTips.Clear()
+          $l[0].InputMethodTips.Add('0409:00020409')
+          Set-WinUserLanguageList $l -Force
+          Set-WinDefaultInputMethodOverride -InputTip '0409:00020409'
+          New-Item -ItemType Directory -Force out | Out-Null
+          Get-WinUserLanguageList | Format-List | Out-File out/language-list.txt
+          Get-CimInstance Win32_VideoController | Select-Object CurrentHorizontalResolution, CurrentVerticalResolution | Format-List | Out-File out/display.txt
+      - name: Run the three modes
+        shell: pwsh
+        run: |
+          $out = (Resolve-Path out).Path
+          $runs = @(
+            @{ name = 'stable'; exe = 'target/stable/debug/unstable-input-spike.exe' },
+            @{ name = 'unstable-nochild'; exe = 'target/unstable/debug/unstable-input-spike.exe' },
+            @{ name = 'unstable-child'; exe = 'target/unstable/debug/unstable-input-spike.exe' }
+          )
+          foreach ($r in $runs) {
+            $env:SPIKE_MODE = $r.name
+            $env:SPIKE_OUT = "$out/$($r.name).json"
+            $p = Start-Process -FilePath $r.exe -PassThru -RedirectStandardError "$out/$($r.name).log" -RedirectStandardOutput "$out/$($r.name).stdout.log"
+            if (-not $p.WaitForExit(600000)) { Stop-Process -Id $p.Id -Force; Write-Host "timeout: $($r.name)" }
+            Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+            if (Test-Path "$out/$($r.name).json") {
+              $j = Get-Content "$out/$($r.name).json" -Raw | ConvertFrom-Json
+              Write-Host "$($r.name): $($j.summary | ConvertTo-Json -Compress -Depth 5)"
+            } else { Write-Host "$($r.name): no result"; Get-Content "$out/$($r.name).log" -ErrorAction SilentlyContinue }
+          }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: spike-unstable-windows
+          path: tools/spikes/unstable-input/out/
+          if-no-files-found: warn
+          retention-days: 14
