@@ -47,7 +47,7 @@ function config(extra: Record<string, unknown> = {}): Record<string, unknown> {
     adStyle: '',
     unit: 'testAd',
     customTracking: { a: 1 },
-    slotId: 'owad-bw-1-1',
+    slotId: 'owad-1',
     visibilityState: 'visible',
     hostKey: HOST_KEY,
     ...extra,
@@ -168,7 +168,7 @@ describe('installAdviewHost (D.1, D.2)', () => {
     const ready = g.sent.find((s) => s.args['name'] === '__host:ready');
     expect(ready?.command).toBe(ADVIEW_COMMAND);
     expect(ready?.args).toEqual({
-      slotId: 'owad-bw-1-1',
+      slotId: 'owad-1',
       name: '__host:ready',
       data: { href: ADVIEW_URL, testAd: true, visibilityState: 'visible', pageUrl: '' },
     });
@@ -198,7 +198,7 @@ describe('functions (D.3, D.4)', () => {
     expect(g.sent[0]?.args['data']).toEqual({ foo: 1 });
     expect(g.sent[1]?.args['data']).toEqual([1, 2]);
     expect(g.sent[2]?.args['data']).toEqual({ muted: false });
-    expect(g.sent.every((s) => s.args['slotId'] === 'owad-bw-1-1')).toBe(true);
+    expect(g.sent.every((s) => s.args['slotId'] === 'owad-1')).toBe(true);
   });
 
   it('caps data at 16 KiB and flattens events', () => {
@@ -436,10 +436,11 @@ describe('transport (D.1)', () => {
     expect(hijack).toEqual([]);
   });
 
-  it('reports trusted gestures only', () => {
+  it('never reports gestures (activation is read natively) and reports focus', () => {
     const g = guest();
     g.sent.length = 0;
     g.win.dispatchEvent(new Event('pointerdown'));
+    g.win.dispatchEvent(new Event('keydown'));
     expect(names(g)).not.toContain('__host:gesture');
     g.win.dispatchEvent(new Event('focus'));
     expect(g.sent.at(-1)?.args).toMatchObject({ name: '__host:focus', data: { focused: true } });

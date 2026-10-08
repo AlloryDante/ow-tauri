@@ -45,9 +45,6 @@ export function hostKeyOf(config: Record<string, unknown>): string {
 /** Most `onmessage` handlers kept (D.3). */
 export const MAX_HANDLERS = 16;
 
-/** Gesture reports closer than this are merged (D.4). */
-export const GESTURE_DEBOUNCE_MS = 100;
-
 /** The D.2 data keys, in the order the page enumerates them after the functions. */
 export const DATA_KEYS = [
   'uid',
@@ -347,39 +344,14 @@ export function installAdviewHost(win: Window, config: unknown): boolean {
     enumerable: false,
   });
 
-  // Guest focus and user gestures (D.4).
+  // Guest focus (D.4). User activation is read natively by the plugin
+  // (WebView2 `IsUserInitiated`, WKWebView's navigation type); the shim
+  // reports no gestures, so a page cannot forge one.
   win.addEventListener('focus', () => {
     post('__host:focus', { focused: true });
   });
   win.addEventListener('blur', () => {
     post('__host:focus', { focused: false });
-  });
-  let lastGesture = Number.NEGATIVE_INFINITY;
-  const gesture = (kind: string): void => {
-    const now = Date.now();
-    if (now - lastGesture < GESTURE_DEBOUNCE_MS) return;
-    lastGesture = now;
-    post('__host:gesture', { kind });
-  };
-  win.addEventListener(
-    'pointerdown',
-    (event) => {
-      if (event.isTrusted) gesture('pointerdown');
-    },
-    true,
-  );
-  win.addEventListener(
-    'keydown',
-    (event) => {
-      if (event.isTrusted) gesture('keydown');
-    },
-    true,
-  );
-  win.addEventListener('blur', () => {
-    // A click in a cross-origin creative moves focus into its iframe.
-    win.setTimeout(() => {
-      if (doc.activeElement?.tagName === 'IFRAME') gesture('iframe-focus');
-    }, 0);
   });
   const domReady = (): void => {
     post('__host:domReady');

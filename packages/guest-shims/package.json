@@ -1,0 +1,16 @@
+{
+  "name": "tauri-plugin-overwolf-guest-shims",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sources of the scripts tauri-plugin-overwolf injects into its own webviews (ad guests, consent window); built into crates/tauri-plugin-overwolf/js.",
+  "license": "MIT OR Apache-2.0",
+  "author": "ow-tauri contributors",
+  "type": "module",
+  "scripts": {
+    "build:generated": "rolldown -c rolldown.config.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  }
+}
