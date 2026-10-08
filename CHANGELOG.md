@@ -124,7 +124,9 @@ the npm package share one version number.
 - Windows lab: G1 reads the app window's own `index.html` load (it read
   ow-electron's internal `owepm://index.html/` window, so G1 failed on every
   scenario), and the ow-electron harness app has no default menu on Windows
-  and Linux, as ow-tauri windows have none (PARITY, deviations).
+  and Linux, as ow-tauri windows have none (PARITY, deviations). A state
+  reset that finds `EBWebView` refilled by a still-running WebView2
+  process (`ENOTEMPTY`) ends WebView2 and retries, as for locked files.
 - Packages sample e2e (ow-electron baseline): the upstream main window,
   built with `show: true`, no longer activates the app (it became the
   frontmost app on macOS); the runner kills an app that becomes frontmost.

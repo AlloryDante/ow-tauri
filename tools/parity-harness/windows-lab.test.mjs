@@ -427,6 +427,20 @@ test('a state folder WebView2 still holds is removed after ending WebView2', () 
     'removed after ending WebView2',
   );
   assert.deepEqual([calls, killed], [2, 1]);
+  // Windows lab (shard 2, 7625c43): a WebView2 process still writing into
+  // `EBWebView` while it was emptied failed the `rmdir` with `ENOTEMPTY`.
+  const writing = Object.assign(new Error('ENOTEMPTY'), { code: 'ENOTEMPTY' });
+  calls = 0;
+  killed = 0;
+  const refilled = () => {
+    calls += 1;
+    if (calls === 1) throw writing;
+  };
+  assert.equal(
+    resetDir('x', { rm: refilled, kill: () => (killed += 1) }),
+    'removed after ending WebView2',
+  );
+  assert.deepEqual([calls, killed], [2, 1]);
   assert.equal(
     resetDir('x', { rm: () => undefined, kill: () => assert.fail('no kill') }),
     'removed',

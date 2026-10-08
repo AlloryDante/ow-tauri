@@ -105,6 +105,9 @@ export function stateDirs(env = process.env) {
   ];
 }
 
+/** Error codes of a folder a live WebView2 process still uses. */
+const WEBVIEW_HELD = new Set(['EBUSY', 'EPERM', 'ENOTEMPTY']);
+
 /** Ends the WebView2 processes a finished run left behind (CI runner only). */
 function killWebViews() {
   spawnSync('taskkill', ['/F', '/T', '/IM', 'msedgewebview2.exe'], { windowsHide: true });
@@ -112,10 +115,11 @@ function killWebViews() {
 
 /**
  * Removes a state folder. WebView2's browser processes outlive the app
- * for a moment and keep files such as `EBWebView\Default\DIPS` open, so
- * removal is retried (Node retries `EBUSY` and `EPERM`) and, if the files
- * stay locked, the leftover WebView2 processes are ended and it is tried
- * once more.
+ * for a moment and keep files such as `EBWebView\Default\DIPS` open, or
+ * still write new ones while the folder is emptied (`ENOTEMPTY` on its
+ * `rmdir`), so removal is retried (Node retries `EBUSY`, `EPERM` and
+ * `ENOTEMPTY`) and, if that keeps failing, the leftover WebView2 processes
+ * are ended and it is tried once more.
  * @param {string} dir
  * @param {{rm?: typeof rmSync, kill?: () => void}} [deps]
  * @returns {'removed' | 'removed after ending WebView2'}
@@ -127,7 +131,7 @@ export function resetDir(dir, { rm = rmSync, kill = killWebViews } = {}) {
     return 'removed';
   } catch (error) {
     const code = /** @type {{code?: unknown}} */ (error)?.code;
-    if (code !== 'EBUSY' && code !== 'EPERM') throw error;
+    if (!WEBVIEW_HELD.has(String(code))) throw error;
   }
   kill();
   rm(dir, options);
