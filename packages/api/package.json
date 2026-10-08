@@ -1,0 +1,81 @@
+{
+  "name": "tauri-plugin-overwolf-api",
+  "version": "0.1.0",
+  "description": "JavaScript API of tauri-plugin-overwolf: Overwolf ads (<owadview>), consent, analytics switches, identity and the Overwolf updater for Tauri 2 apps.",
+  "license": "MIT OR Apache-2.0",
+  "author": "ow-tauri contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AlloryDante/ow-tauri.git",
+    "directory": "packages/api"
+  },
+  "keywords": [
+    "tauri",
+    "tauri-plugin",
+    "overwolf",
+    "ads",
+    "owadview"
+  ],
+  "type": "module",
+  "sideEffects": [
+    "./dist/adview/index.js"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./adview": {
+      "types": "./dist/adview/index.d.ts",
+      "default": "./dist/adview/index.js"
+    },
+    "./updater": {
+      "types": "./dist/updater.d.ts",
+      "default": "./dist/updater.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
+    },
+    "./jsx": {
+      "types": "./dist/jsx.d.ts",
+      "default": "./dist/jsx.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:generated": "rolldown -c rolldown.config.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.consumer.json",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "docs": "typedoc",
+    "check:package": "npm run build && publint --strict && attw --pack . --profile esm-only",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.1"
+  },
+  "peerDependencies": {
+    "@types/react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "@types/react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
+}

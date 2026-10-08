@@ -1,14 +1,19 @@
 /**
- * The `<owadview>` runtime of UI windows (`docs/CONTRACT.md` B.3,
- * [ADR 0003](../../../docs/adr/0003-owadview-native-child-webviews.md)).
+ * The `<owadview>` runtime of an app page (`docs/CONTRACT.md` B.3,
+ * [ADR 0003](../../../../docs/adr/0003-owadview-native-child-webviews.md)).
  *
  * `owadview` has no hyphen, so it cannot be a custom element. The runtime
  * finds the elements itself (a wrapped `document.createElement` and a
  * `MutationObserver`), mounts one native guest webview per element through
- * the plugin (`adview_mount`), keeps its geometry and visibility current
- * (`adview_update`), closes it when the element leaves the document
- * (`adview_unmount`), and re-dispatches the guest's events on the element
- * exactly as ow-electron does (B.3.5).
+ * the plugin (`adview_mount`, with a per-mount event channel), keeps its
+ * geometry and visibility current (`adview_update`), closes it when the
+ * element leaves the document (`adview_unmount`), and re-dispatches the
+ * guest's events on the element exactly as ow-electron does (B.3.5).
+ *
+ * Event ordering on the channel: events that arrive before `adview_mount`
+ * resolved are buffered and dispatched right after it; events of a mount
+ * that was unmounted or replaced, and events after the element's
+ * `destroyed`, are dropped ({@link EventGate}).
  *
  * The element lifecycle follows ow-electron [OBS]: an element the app
  * removes or moves after attach loses its guest and never attaches again
@@ -30,23 +35,18 @@
  *
  * @packageDocumentation
  */
-import type { FacadeOwadview, HostMessageHandler } from '../bootstrap/facade-kernel.js';
-import type { LogLevel } from '../bootstrap/services.js';
-import type { HostContext } from '../shared/protocol.js';
+import type { LogLevel } from '../internal.js';
+import { RUNTIME_VERSION } from '../internal.js';
 import {
   ADVIEW_ATTRIBUTES,
   needsRemount,
   readAttributes,
   sameTracking,
   type AdviewAttributes,
-  type AdviewRect,
-} from './owadview-attributes.js';
-import {
-  CLICK_DEDUPE_MS,
-  CLICK_NAMES,
-  SPELLING_TWINS,
-  createAdviewEvent,
-} from './owadview-events.js';
+  type AdviewGeometry,
+} from './attributes.js';
+import { CLICK_DEDUPE_MS, CLICK_NAMES, SPELLING_TWINS, createAdviewEvent } from './events.js';
+import { EventGate, type AdviewEventMessage } from './transport.js';
 
 /** The local name of the element. */
 export const TAG = 'owadview';
@@ -98,18 +98,28 @@ export const VISIBILITY_POLL_MS = 500;
 /** Attributes whose change anywhere in the document triggers a geometry pass while guests are mounted. */
 const LAYOUT_ATTRIBUTES = ['style', 'class', 'hidden', 'width', 'height', 'open'] as const;
 
-/** The kernel services the runtime uses (a subset of `FacadeKernel`). */
+/** The `adview_*` commands the runtime sends. */
+export type AdviewCommandName =
+  'adview_mount' | 'adview_update' | 'adview_unmount' | 'adview_command';
+
+/** What the runtime needs from its host: the plugin commands and a log. */
 export interface AdviewServices {
-  /** Where the runtime runs; only `'ui'` mounts guests. */
-  readonly context: HostContext;
   /**
-   * Invokes `plugin:overwolf|<name>`.
+   * Sends one `adview_*` command (see `tauriServices` for the wire form).
    *
    * @param name - the command
-   * @param args - its arguments
+   * @param args - its arguments: the request of `adview_mount` /
+   *   `adview_update`, `{ elementId }` for `adview_unmount`,
+   *   `{ elementId, command, args }` for `adview_command`
+   * @param onEvent - `adview_mount` only: receives every message of the
+   *   mount's event channel
    * @returns the response
    */
-  command(name: string, args?: Record<string, unknown>): Promise<unknown>;
+  command(
+    name: AdviewCommandName,
+    args: Record<string, unknown>,
+    onEvent?: (message: AdviewEventMessage) => void,
+  ): Promise<unknown>;
   /**
    * Logs a message.
    *
@@ -124,14 +134,6 @@ export interface AdviewServices {
    * @param message - the message
    */
   warnOnce(key: string, message: string): void;
-  /**
-   * Subscribes to host messages of one type.
-   *
-   * @param type - the message type
-   * @param handler - the handler
-   * @returns a function that unsubscribes
-   */
-  on(type: string, handler: HostMessageHandler): () => void;
 }
 
 /** Platform hooks, replaceable in tests. */
@@ -223,29 +225,24 @@ interface Entry {
   closed: boolean;
   membersDefined: boolean;
   attributes: AdviewAttributes | undefined;
-  rect: AdviewRect | undefined;
+  geometry: AdviewGeometry | undefined;
   visible: boolean | undefined;
+  /** The event gate of the current mount. */
+  gate: EventGate | undefined;
   ratio: number | undefined;
   chain: Promise<void>;
   pendingUpdate: PendingUpdate | undefined;
   lastGuestClick: number;
 }
 
-/** Fields of an `adview-event` host message (A.3). */
-interface AdviewEventMessage {
-  elementId?: unknown;
-  name?: unknown;
-  data?: unknown;
-  source?: unknown;
-}
-
-function sameRect(a: AdviewRect | undefined, b: AdviewRect): boolean {
+function sameGeometry(a: AdviewGeometry | undefined, b: AdviewGeometry): boolean {
   return (
-    a?.x === b.x &&
-    a.y === b.y &&
-    a.width === b.width &&
-    a.height === b.height &&
-    a.devicePixelRatio === b.devicePixelRatio
+    a?.rect.x === b.rect.x &&
+    a.rect.y === b.rect.y &&
+    a.rect.width === b.rect.width &&
+    a.rect.height === b.rect.height &&
+    a.devicePixelRatio === b.devicePixelRatio &&
+    a.innerWidth === b.innerWidth
   );
 }
 
@@ -261,10 +258,10 @@ function isAdview(node: Node): node is HTMLElement {
 }
 
 /**
- * The per-document `<owadview>` runtime. The bootstrap starts one in every
- * UI window; `ow-tauri/renderer` exposes it as `owadview`.
+ * The per-document `<owadview>` runtime. `tauri-plugin-overwolf-api/adview`
+ * starts one per page (a global singleton) and exposes it as `adview`.
  */
-export class AdviewRuntime implements FacadeOwadview {
+export class AdviewRuntime {
   readonly #services: AdviewServices;
   readonly #env: AdviewEnvironment;
   readonly #entries = new WeakMap<Element, Entry>();
@@ -303,10 +300,10 @@ export class AdviewRuntime implements FacadeOwadview {
 
   /**
    * Starts watching the document: default style, `createElement` wrapper,
-   * observers, host events. Idempotent; does nothing outside UI windows.
+   * observers. Idempotent.
    */
   start(): void {
-    if (this.#started || this.#services.context !== 'ui') return;
+    if (this.#started) return;
     this.#started = true;
     const { document: doc, window: win } = this.#env;
     this.#installStyle();
@@ -360,9 +357,6 @@ export class AdviewRuntime implements FacadeOwadview {
         doc.removeEventListener('transitionend', onChange, { capture: true });
         doc.removeEventListener('animationend', onChange, { capture: true });
       },
-      this.#services.on('adview-event', (message) => {
-        this.#onHostEvent(message as AdviewEventMessage);
-      }),
     );
     this.#scan(doc);
   }
@@ -381,6 +375,7 @@ export class AdviewRuntime implements FacadeOwadview {
     this.#poll = undefined;
     for (const entry of this.#tracked.values()) entry.tracked = false;
     this.#tracked.clear();
+    for (const entry of this.#live.values()) entry.gate?.close();
     this.#live.clear();
     this.#scheduled = false;
   }
@@ -543,8 +538,9 @@ export class AdviewRuntime implements FacadeOwadview {
         closed: false,
         membersDefined: false,
         attributes: undefined,
-        rect: undefined,
+        geometry: undefined,
         visible: undefined,
+        gate: undefined,
         ratio: undefined,
         chain: Promise.resolve(),
         pendingUpdate: undefined,
@@ -665,7 +661,7 @@ export class AdviewRuntime implements FacadeOwadview {
       }
     }
     if (entry.closed) return;
-    const rect = this.#rect(el, attributes.performance);
+    const { rect } = this.#geometry(el, attributes.performance);
     if (!attributes.performance && (rect.width <= 0 || rect.height <= 0)) {
       this.#ensureStyle();
       return;
@@ -699,7 +695,7 @@ export class AdviewRuntime implements FacadeOwadview {
     const id = entry.id;
     entry.mounted = true;
     entry.attributes = current;
-    entry.rect = this.#rect(entry.el, current.performance);
+    entry.geometry = this.#geometry(entry.el, current.performance);
     entry.visible = visible;
     entry.pendingUpdate = undefined;
     entry.modal = false;
@@ -709,19 +705,31 @@ export class AdviewRuntime implements FacadeOwadview {
       this.#attachShadow(entry);
     }
     this.#live.set(id, entry);
+    const gate = new EventGate((message) => {
+      this.#onHostEvent(entry, message);
+    });
+    entry.gate = gate;
     // `windowTitle` (D.2) is the title at mount: sent along, so Rust does
     // not have to ask the page for it.
     const request = {
       elementId: id,
       attributes: current,
-      rect: entry.rect,
+      rect: entry.geometry.rect,
       visible,
       documentTitle: this.#env.document.title,
+      devicePixelRatio: entry.geometry.devicePixelRatio,
+      innerWidth: entry.geometry.innerWidth,
+      runtimeVersion: RUNTIME_VERSION,
     };
     this.#enqueue(entry, async () => {
+      if (gate.closed) return;
       try {
-        await this.#services.command('adview_mount', request);
+        await this.#services.command('adview_mount', request, (message) => {
+          gate.push(message);
+        });
+        gate.open();
       } catch (error) {
+        gate.close();
         this.#services.log('warn', `<owadview> ${id} did not mount: ${(error as Error).message}`);
         // Only when no unmount or remount happened meanwhile.
         if (entry.gen === gen) {
@@ -772,7 +780,9 @@ export class AdviewRuntime implements FacadeOwadview {
     entry.gen++;
     entry.mounted = false;
     entry.attributes = undefined;
-    entry.rect = undefined;
+    entry.geometry = undefined;
+    entry.gate?.close();
+    entry.gate = undefined;
     entry.visible = undefined;
     entry.pendingUpdate = undefined;
     this.#live.delete(entry.id);
@@ -780,10 +790,12 @@ export class AdviewRuntime implements FacadeOwadview {
 
   #updateGeometry(entry: Entry, performance: boolean): void {
     const patch: Record<string, unknown> = {};
-    const rect = this.#rect(entry.el, performance);
-    if (!sameRect(entry.rect, rect)) {
-      entry.rect = rect;
-      patch['rect'] = rect;
+    const geometry = this.#geometry(entry.el, performance);
+    if (!sameGeometry(entry.geometry, geometry)) {
+      entry.geometry = geometry;
+      patch['rect'] = geometry.rect;
+      patch['devicePixelRatio'] = geometry.devicePixelRatio;
+      patch['innerWidth'] = geometry.innerWidth;
     }
     const visible = this.#visible(entry, performance);
     if (visible !== entry.visible) {
@@ -837,14 +849,28 @@ export class AdviewRuntime implements FacadeOwadview {
     entry.chain = entry.chain.then(task, task);
   }
 
-  #rect(el: HTMLElement, performance: boolean): AdviewRect {
+  /**
+   * The element box in CSS pixels, with the page's `devicePixelRatio` and
+   * `innerWidth`, which the plugin uses to convert CSS pixels to native ones
+   * under page zoom.
+   */
+  #geometry(el: HTMLElement, performance: boolean): AdviewGeometry {
     const win = this.#env.window;
     const devicePixelRatio = win.devicePixelRatio || 1;
+    const innerWidth = win.innerWidth;
     if (performance) {
-      return { x: 0, y: 0, width: win.innerWidth, height: win.innerHeight, devicePixelRatio };
+      return {
+        rect: { x: 0, y: 0, width: win.innerWidth, height: win.innerHeight },
+        devicePixelRatio,
+        innerWidth,
+      };
     }
     const box = el.getBoundingClientRect();
-    return { x: box.x, y: box.y, width: box.width, height: box.height, devicePixelRatio };
+    return {
+      rect: { x: box.x, y: box.y, width: box.width, height: box.height },
+      devicePixelRatio,
+      innerWidth,
+    };
   }
 
   /**
@@ -1092,18 +1118,10 @@ export class AdviewRuntime implements FacadeOwadview {
     root.append(style, frame);
   }
 
-  #onHostEvent(message: AdviewEventMessage): void {
-    const { elementId, name, data, source } = message;
-    if (typeof elementId !== 'string' || typeof name !== 'string' || name === '') return;
-    if (name.startsWith('__host:')) return;
-    const entry = this.#live.get(elementId);
-    if (!entry) {
-      this.#services.log(
-        'debug',
-        `adview-event '${name}' for unknown or replaced element ${elementId}`,
-      );
-      return;
-    }
+  /** Dispatches one message of a mount's event channel on its element (B.3.5). */
+  #onHostEvent(entry: Entry, message: AdviewEventMessage): void {
+    const { name, data, source } = message;
+    if (name === '' || name.startsWith('__host:')) return;
     const now = this.#env.now();
     if (source === 'host' && name === 'ad-clicked' && now - entry.lastGuestClick < CLICK_DEDUPE_MS)
       return;
@@ -1141,44 +1159,6 @@ function jsonArgs(args: unknown[]): unknown[] {
   } catch {
     return [];
   }
-}
-
-/** Kernel members {@link adviewRuntimeOf} needs. */
-export interface AdviewKernel extends AdviewServices {
-  /** The registered `<owadview>` runtime (`FacadeKernel.owadview`). */
-  owadview?: FacadeOwadview | undefined;
-  /**
-   * Registers a hook that a runtime reset runs.
-   *
-   * @param hook - the hook
-   * @returns a function that unregisters it
-   */
-  onReset(hook: () => void): () => void;
-}
-
-/**
- * The document's `<owadview>` runtime (one per webview), started when the
- * document is a UI window. The first copy of the package that asks (normally
- * the injected bootstrap) creates it and registers it as
- * `FacadeKernel.owadview`; every other copy uses that registration, which
- * is part of the versioned facade API (ADR 0012), never the other copy's
- * class.
- *
- * @param kernel - the runtime kernel
- * @returns the runtime
- */
-export function adviewRuntimeOf(kernel: AdviewKernel): FacadeOwadview {
-  const registered = kernel.owadview;
-  if (registered) return registered;
-  const runtime = new AdviewRuntime(kernel);
-  kernel.owadview = runtime;
-  const off = kernel.onReset(() => {
-    off();
-    runtime.stop();
-    if (kernel.owadview === runtime) kernel.owadview = undefined;
-  });
-  runtime.start();
-  return runtime;
 }
 
 /**

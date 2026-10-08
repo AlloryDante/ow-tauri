@@ -1,11 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { HostMessageHandler } from '../bootstrap/facade-kernel.js';
-import { OwTauriError } from '../shared/errors.js';
-import { mockHost, setHostContext, settle, type MockHost } from '../testing/index.js';
-import { owadview } from './index.js';
-import { parseCustomTracking } from './owadview-attributes.js';
-import { createAdviewEvent } from './owadview-events.js';
+import { RUNTIME_VERSION } from '../internal.js';
+import { parseCustomTracking } from './attributes.js';
 import {
   AdviewRuntime,
   DEFAULT_STYLE,
@@ -14,12 +10,12 @@ import {
   SHADOW_STYLE,
   VISIBILITY_POLL_MS,
   VISIBLE_RATIO,
-  adviewRuntimeOf,
   browserEnvironment,
   type AdviewEnvironment,
-  type AdviewKernel,
   type AdviewServices,
-} from './owadview.js';
+} from './element.js';
+import { createAdviewEvent } from './events.js';
+import type { AdviewEventMessage } from './transport.js';
 
 type Command = (args: Record<string, unknown>) => unknown;
 
@@ -28,19 +24,22 @@ interface FakeServices extends AdviewServices {
   impls: Record<string, Command>;
   logs: string[];
   warnings: string[];
-  emit(message: Record<string, unknown>): void;
+  /** The event channel of each mount, by element id. */
+  channels: Map<string, (message: AdviewEventMessage) => void>;
+  /** Delivers a message on the channel of the mount of `elementId` (if any). */
+  emit(message: { elementId: unknown } & Partial<AdviewEventMessage>): void;
 }
 
-function fakeServices(context: AdviewServices['context'] = 'ui'): FakeServices {
-  const handlers = new Map<string, Set<HostMessageHandler>>();
+function fakeServices(): FakeServices {
   const services: FakeServices = {
-    context,
     calls: [],
     impls: {},
     logs: [],
     warnings: [],
-    command: async (name, args = {}) => {
+    channels: new Map(),
+    command: async (name, args, onEvent) => {
       services.calls.push({ name, args });
+      if (onEvent) services.channels.set(String(args['elementId']), onEvent);
       const impl = services.impls[name];
       return await Promise.resolve(impl ? impl(args) : null);
     },
@@ -50,15 +49,8 @@ function fakeServices(context: AdviewServices['context'] = 'ui'): FakeServices {
     warnOnce: (key, message) => {
       services.warnings.push(`${key}: ${message}`);
     },
-    on: (type, handler) => {
-      const set = handlers.get(type) ?? new Set<HostMessageHandler>();
-      handlers.set(type, set);
-      set.add(handler);
-      return () => set.delete(handler);
-    },
-    emit: (message) => {
-      for (const handler of handlers.get('adview-event') ?? [])
-        handler({ type: 'adview-event', ...message });
+    emit: ({ elementId, ...message }) => {
+      services.channels.get(String(elementId))?.(message as AdviewEventMessage);
     },
   };
   return services;
@@ -208,11 +200,7 @@ afterEach(() => {
 });
 
 describe('discovery and attach (B.3.1)', () => {
-  it('adds the default style and starts only in UI windows', async () => {
-    services = fakeServices('main');
-    await startRuntime();
-    expect(runtime.started).toBe(false);
-    services = fakeServices();
+  it('adds the default style when it starts', async () => {
     await startRuntime();
     runtime.start();
     expect(runtime.started).toBe(true);
@@ -264,9 +252,12 @@ describe('discovery and attach (B.3.1)', () => {
           unit: 'video',
           pageurl: 'https://example.com/p',
         },
-        rect: { x: 10, y: 20, width: 300, height: 250, devicePixelRatio: 1 },
+        rect: { x: 10, y: 20, width: 300, height: 250 },
         visible: true,
         documentTitle: document.title,
+        devicePixelRatio: 1,
+        innerWidth: window.innerWidth,
+        runtimeVersion: RUNTIME_VERSION,
       },
     ]);
     expect(runtime.elements()).toEqual([el]);
@@ -525,7 +516,9 @@ describe('lifecycle (B.3.2, B.3.4)', () => {
       {
         elementId: runtime.elementId(el),
         attributes: { customTracking: { a: 1 }, pageurl: 'https://example.com/' },
-        rect: { x: 50, y: 20, width: 300, height: 250, devicePixelRatio: 1 },
+        rect: { x: 50, y: 20, width: 300, height: 250 },
+        devicePixelRatio: 1,
+        innerWidth: window.innerWidth,
       },
     ]);
   });
@@ -548,7 +541,9 @@ describe('lifecycle (B.3.2, B.3.4)', () => {
       {
         elementId: id,
         visible: true,
-        rect: { x: 40, y: 20, width: 400, height: 300, devicePixelRatio: 1 },
+        rect: { x: 40, y: 20, width: 400, height: 300 },
+        devicePixelRatio: 1,
+        innerWidth: window.innerWidth,
       },
     ]);
   });
@@ -587,12 +582,16 @@ describe('lifecycle (B.3.2, B.3.4)', () => {
       {
         elementId: id,
         visible: false,
-        rect: { x: 10, y: 60, width: 400, height: 300, devicePixelRatio: 1 },
+        rect: { x: 10, y: 60, width: 400, height: 300 },
+        devicePixelRatio: 1,
+        innerWidth: window.innerWidth,
       },
       {
         elementId: id,
         visible: true,
-        rect: { x: 10, y: 80, width: 400, height: 300, devicePixelRatio: 1 },
+        rect: { x: 10, y: 80, width: 400, height: 300 },
+        devicePixelRatio: 1,
+        innerWidth: window.innerWidth,
       },
       { elementId: id, visible: false },
     ]);
@@ -708,7 +707,9 @@ describe('lifecycle (B.3.2, B.3.4)', () => {
     expect(callsOf('adview_update')).toEqual([
       {
         elementId: runtime.elementId(el),
-        rect: { x: 10, y: 120, width: 300, height: 250, devicePixelRatio: 1 },
+        rect: { x: 10, y: 120, width: 300, height: 250 },
+        devicePixelRatio: 1,
+        innerWidth: window.innerWidth,
       },
     ]);
     services.calls.length = 0;
@@ -787,7 +788,9 @@ describe('lifecycle (B.3.2, B.3.4)', () => {
     expect(callsOf('adview_update')).toEqual([
       {
         elementId: id,
-        rect: { x: 0, y: 0, width: 320, height: 50, devicePixelRatio: 1 },
+        rect: { x: 0, y: 0, width: 320, height: 50 },
+        devicePixelRatio: 1,
+        innerWidth: window.innerWidth,
         visible: false,
       },
       { elementId: id, visible: true },
@@ -973,13 +976,9 @@ describe('performance ads (B.3.4)', () => {
     expect(callsOf('adview_mount')).toEqual([
       expect.objectContaining({
         elementId: runtime.elementId(first),
-        rect: {
-          x: 0,
-          y: 0,
-          width: window.innerWidth,
-          height: window.innerHeight,
-          devicePixelRatio: 1,
-        },
+        rect: { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight },
+        devicePixelRatio: 1,
+        innerWidth: window.innerWidth,
         visible: true,
       }),
     ]);
@@ -1338,18 +1337,13 @@ describe('events (B.3.5)', () => {
     ]);
   });
 
-  it('ignores internal, malformed and unknown-element messages', async () => {
+  it('ignores internal and nameless messages', async () => {
     const el = await mounted();
     const listener = vi.fn();
     el.addEventListener('__host:navigate', listener);
     services.emit({ elementId: runtime.elementId(el), name: '__host:navigate' });
-    services.emit({ elementId: 1, name: 'x' });
     services.emit({ elementId: runtime.elementId(el), name: '' });
-    services.emit({ elementId: 'e999', name: 'impression' });
     expect(listener).not.toHaveBeenCalled();
-    expect(services.logs.join('\n')).toContain(
-      "adview-event 'impression' for unknown or replaced element e999",
-    );
   });
 
   it('spreads a string payload per character, as Object.assign does [OBS]', async () => {
@@ -1557,60 +1551,5 @@ describe('stop and the runtime singleton', () => {
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(callback).toHaveBeenCalledTimes(1);
     expect(env.now()).toBeGreaterThan(0);
-  });
-
-  it('adviewRuntimeOf() registers one runtime per kernel and stops it on reset', async () => {
-    const hooks = new Set<() => void>();
-    const kernel: AdviewKernel = {
-      ...fakeServices(),
-      onReset: (hook) => {
-        hooks.add(hook);
-        return () => hooks.delete(hook);
-      },
-    };
-    runtime = adviewRuntimeOf(kernel) as AdviewRuntime;
-    expect(kernel.owadview).toBe(runtime);
-    expect(adviewRuntimeOf(kernel)).toBe(runtime);
-    expect(runtime.started).toBe(true);
-    for (const hook of [...hooks]) hook();
-    expect(hooks.size).toBe(0);
-    expect(runtime.started).toBe(false);
-    expect(kernel.owadview).toBeUndefined();
-    await tick();
-  });
-
-  it('adviewRuntimeOf() uses the runtime another copy registered', () => {
-    const registered = { upgrade: vi.fn(), elements: () => [] };
-    const kernel: AdviewKernel = {
-      ...fakeServices(),
-      owadview: registered,
-      onReset: () => () => undefined,
-    };
-    expect(adviewRuntimeOf(kernel)).toBe(registered);
-  });
-});
-
-describe('ow-tauri/renderer owadview', () => {
-  let host: MockHost | undefined;
-
-  afterEach(() => {
-    setHostContext(null);
-    host?.dispose();
-    host = undefined;
-  });
-
-  it('is available in UI windows only', async () => {
-    host = mockHost({ label: 'ow-main' });
-    runtime = new AdviewRuntime(fakeServices('none'), environment());
-    expect(() => owadview.elements()).toThrow(OwTauriError);
-    host.dispose();
-    host = mockHost({ label: 'bw-1' });
-    await settle();
-    const el = createAd();
-    document.body.append(el);
-    owadview.upgrade(el);
-    expect(owadview.elements()).toEqual([el]);
-    await settle();
-    expect(host.callsOf('adview_mount')).toHaveLength(1);
   });
 });

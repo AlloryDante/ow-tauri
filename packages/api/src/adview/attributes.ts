@@ -1,6 +1,6 @@
 /**
  * `<owadview>` attributes (`docs/CONTRACT.md` B.3.2) and the wire shapes of
- * the `adview_*` commands (A.2.5).
+ * the `adview_*` commands.
  *
  * @packageDocumentation
  */
@@ -25,7 +25,7 @@ export const REMOUNT_ATTRIBUTES = ['cid', 'slotsize', 'adstyle', 'performance', 
 /** Longest container id Overwolf accepts [DOC]. */
 export const MAX_CID_LENGTH = 20;
 
-/** The element attributes as `adview_mount` sends them (CONTRACT A.2.5 `AdviewAttributes`). */
+/** The element attributes as `adview_mount` sends them. */
 export interface AdviewAttributes {
   /** Container id, trimmed, at most 20 characters. */
   cid: string;
@@ -43,7 +43,7 @@ export interface AdviewAttributes {
   pageurl: string;
 }
 
-/** An element rectangle in CSS pixels relative to the embedder viewport (A.2.5 `AdviewRect`). */
+/** An element rectangle in CSS pixels relative to the embedder viewport. */
 export interface AdviewRect {
   /** Left edge. */
   x: number;
@@ -53,8 +53,20 @@ export interface AdviewRect {
   width: number;
   /** Height. */
   height: number;
-  /** `window.devicePixelRatio` of the embedder. */
+}
+
+/**
+ * What the plugin needs to place a guest: the element rectangle in CSS
+ * pixels, and the page's `devicePixelRatio` and `innerWidth` (the plugin
+ * derives the page zoom from them, per OS).
+ */
+export interface AdviewGeometry {
+  /** The element rectangle. */
+  rect: AdviewRect;
+  /** `window.devicePixelRatio` of the embedder page. */
   devicePixelRatio: number;
+  /** `window.innerWidth` of the embedder page, in CSS pixels. */
+  innerWidth: number;
 }
 
 /**

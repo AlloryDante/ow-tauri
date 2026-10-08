@@ -1,0 +1,23 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "name": "tauri-plugin-overwolf-api",
+  "entryPoints": [
+    "src/index.ts",
+    "src/adview/index.ts",
+    "src/updater.ts",
+    "src/testing/index.ts",
+    "src/jsx.ts"
+  ],
+  "tsconfig": "tsconfig.build.json",
+  "out": "docs-out",
+  "readme": "README.md",
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "treatWarningsAsErrors": true,
+  "validation": {
+    "notExported": true,
+    "invalidLink": true,
+    "notDocumented": true
+  },
+  "disableSources": true
+}
