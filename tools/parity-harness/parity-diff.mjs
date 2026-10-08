@@ -780,6 +780,11 @@ const RULES = [
     why: 'the ad page reloaded itself after the host told it hidden (CONTRACT D.5: window occluded, or the slot hidden while the ad was idle); ow-electron does the same, and whether the page asks depends on its ad state and playback speed',
   },
   {
+    when: (d) => d.section === 'host-message' && d.field === 'sequence' && d.consentGated,
+    cls: 'intended:deviation',
+    why: "ow-tauri's guest navigates only after the startup consent window closed (at most 3 s, CONTRACT D.6.5), so its page loads after the startup consent's messages went out and reads the consent from the cookies; ow-electron's guest attaches at once and gets them",
+  },
+  {
     when: (d) => d.section === 'host-message' && d.field === 'sequence' && d.consentDuringAttach,
     cls: 'variance',
     why: "the guest attached between the startup consent's two messages (or after them) on one host, so it got fewer of them; the consent goes to the guests that exist when it is sent (CONTRACT D.5)",
@@ -2106,6 +2111,27 @@ export function sameElement(sample, samples) {
 }
 
 /**
+ * How many `consent` messages lead a guest's host message sequence.
+ * @param {string[]} list message types
+ */
+function consentLead(list) {
+  const n = list.findIndex((x) => x !== 'consent');
+  return n < 0 ? list.length : n;
+}
+
+/**
+ * Whether the ow-tauri guest (`b`) got fewer of the startup consent's
+ * messages than the ow-electron guest (`a`) and the sequences differ only
+ * there: its first navigation waited for the startup consent window
+ * (CONTRACT D.6.5), so its page loaded after those messages went out.
+ * @param {string[]} a message types on ow-electron
+ * @param {string[]} b message types on ow-tauri
+ */
+export function consentGated(a, b) {
+  return consentDuringAttach(a, b) && consentLead(b) < consentLead(a);
+}
+
+/**
  * Whether two guests' host message sequences differ only in how many of
  * the startup consent's two `consent` messages lead them: the guest
  * attached between (or after) those messages on one host. The consent goes
@@ -2114,11 +2140,7 @@ export function sameElement(sample, samples) {
  * @param {string[]} b message types on the other
  */
 export function consentDuringAttach(a, b) {
-  const lead = (list) => {
-    const n = list.findIndex((x) => x !== 'consent');
-    return n < 0 ? list.length : n;
-  };
-  const [la, lb] = [lead(a), lead(b)];
+  const [la, lb] = [consentLead(a), consentLead(b)];
   return (
     la !== lb && la <= 2 && lb <= 2 && JSON.stringify(a.slice(la)) === JSON.stringify(b.slice(lb))
   );
@@ -2212,6 +2234,7 @@ function compareMessages(e, t, out) {
           (consentSavedBeforeGuests(t.runDir) && stable(leading(at)) === stable(bt)) ||
           (consentSavedBeforeGuests(e.runDir) && stable(leading(bt)) === stable(at)),
         consentDuringAttach: consentDuringAttach(at, bt),
+        consentGated: consentGated(at, bt),
       });
       continue;
     }

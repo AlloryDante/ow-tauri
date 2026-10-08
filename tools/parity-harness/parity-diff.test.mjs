@@ -14,6 +14,7 @@ import {
   classify,
   compareAdformats,
   consentDuringAttach,
+  consentGated,
   fillImpressions,
   GUEST_CREATE_MS,
   guestCreationSpans,
@@ -457,6 +458,26 @@ test('a guest that attached between the two startup consent messages is variance
   const d = { section: 'host-message', key: 'guest g', field: 'sequence' };
   assert.equal(classify({ ...d, consentDuringAttach: true }).class, 'variance');
   assert.equal(classify({ ...d, consentDuringAttach: false }).class, 'BUG');
+});
+
+test('an ow-tauri guest that missed the startup consent messages by the D.6.5 wait is intended', () => {
+  // ow-electron's guest got both, ow-tauri's none: the documented wait.
+  assert.equal(consentGated(['consent', 'consent'], []), true);
+  assert.equal(consentGated(['consent', 'consent', 'eHashes'], ['eHashes']), true);
+  assert.equal(consentGated(['consent', 'consent'], ['consent']), true);
+  // ow-tauri's guest got more of them: timing, not the wait.
+  assert.equal(consentGated(['consent'], ['consent', 'consent']), false);
+  // Other differences stay a bug.
+  assert.equal(consentGated(['consent', 'consent', 'x'], ['y']), false);
+  const d = { section: 'host-message', key: 'guest g', field: 'sequence' };
+  assert.equal(
+    classify({ ...d, consentDuringAttach: true, consentGated: true }).class,
+    'intended:deviation',
+  );
+  assert.equal(
+    classify({ ...d, consentDuringAttach: true, consentGated: false }).class,
+    'variance',
+  );
 });
 
 test('guest names follow probe write order; states sent before the guest document are ignored', () => {
