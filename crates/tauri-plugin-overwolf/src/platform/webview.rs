@@ -193,9 +193,11 @@ pub(crate) fn raise_to_top<R: Runtime>(
 ///   (`SetWindowRgn`), which hit-testing skips across processes; `NULL`
 ///   restores it. Clipping the guest's paint changes nothing visible while
 ///   it loads, because it is transparent.
-/// - macOS: the view's `hitTest:` answers `nil` while a per-view flag is
-///   set, through a subclass made for the view's class at run time (as
-///   key-value observing does), so `AppKit` hit-tests the sibling views.
+/// - macOS: the view's `hitTest:` answers `nil` while a per-view flag (an
+///   associated object) is set, so `AppKit` hit-tests the sibling views.
+///   The `hitTest:` of the web view's own class (below any
+///   `NSKVONotifying_` subclass) is replaced once and calls the original
+///   for views without the flag; the view's class is never changed.
 /// - Linux: an empty input shape on the guest widget's own `GdkWindow`,
 ///   when it has one.
 ///
