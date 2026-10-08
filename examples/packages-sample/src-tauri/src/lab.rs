@@ -35,7 +35,11 @@ pub fn manifest(embedded: &'static str) -> Result<&'static str, String> {
     Ok(Box::leak(json.into_boxed_str()))
 }
 
-/// Whether the app must stay out of the Dock and the app switcher.
+/// Whether the app must stay out of the Dock, the app switcher and the front
+/// (macOS: the shell then makes it an accessory app that is not activated at
+/// launch; elsewhere the plugin keeps the lab windows hidden, so the shell
+/// has nothing to do and this helper does not exist).
+#[cfg(target_os = "macos")]
 #[must_use]
 pub fn invisible() -> bool {
     tauri_plugin_overwolf::lab_invisible()

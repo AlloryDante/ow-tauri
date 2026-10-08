@@ -272,6 +272,13 @@ jobs:
           npm run build --workspace ow-tauri
           npm run build --workspace examples/packages-sample
           cargo build --manifest-path examples/packages-sample/src-tauri/Cargo.toml --locked
+      - name: packages sample Rust app lints (with and without the lab)
+        if: steps.gate.outputs.ported == 'true'
+        shell: bash
+        run: |
+          cargo fmt --manifest-path examples/packages-sample/src-tauri/Cargo.toml -- --check
+          cargo clippy --manifest-path examples/packages-sample/src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+          cargo clippy --manifest-path examples/packages-sample/src-tauri/Cargo.toml --all-targets --features lab --locked -- -D warnings
       - name: ad showcase (lint, types, unit tests, both stages, Rust app with and without the lab)
         if: steps.gate.outputs.ported == 'true'
         shell: bash
