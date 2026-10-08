@@ -201,13 +201,23 @@ mod tests {
     fn safari_version_is_read() {
         // Safari is part of every macOS install, but a stripped-down image
         // (some CI runners) can lack the bundle. Where an `Info.plist` is on
-        // disk, its version must be read, whatever its encoding.
+        // disk, its version must be read, whatever its encoding. CI's macOS
+        // job sets `OW_TAURI_EXPECT_SAFARI=1` and runs this test with
+        // `--nocapture`, so its log shows that a plist was read.
         let on_disk: Vec<_> = SAFARI_BUNDLES
             .iter()
             .map(|path| std::path::Path::new(path).join("Contents/Info.plist"))
             .filter(|plist| plist.is_file())
             .collect();
-        match safari_version() {
+        let version = safari_version();
+        println!("safari_version_is_read: version {version:?} from {on_disk:?}");
+        if std::env::var_os("OW_TAURI_EXPECT_SAFARI").is_some() {
+            assert!(
+                version.is_some(),
+                "OW_TAURI_EXPECT_SAFARI is set but no Safari version was read"
+            );
+        }
+        match version {
             Some(v) => assert_eq!(v.split('.').count(), 2, "{v}"),
             None => assert!(
                 on_disk.is_empty(),

@@ -73,6 +73,13 @@ jobs:
         run: cargo test --workspace --all-targets --all-features --locked
       - name: doctests
         run: cargo test -p tauri-plugin-overwolf --doc --all-features --locked
+      # The Safari version test passes when Safari is absent; on the macOS
+      # runner Safari is installed, so require the read and log its result.
+      - name: Safari version is read (macOS)
+        if: runner.os == 'macOS'
+        env:
+          OW_TAURI_EXPECT_SAFARI: '1'
+        run: cargo test -p tauri-plugin-overwolf --lib --all-features --locked platform::tests::safari_version_is_read -- --exact --nocapture
       - name: doc
         run: cargo doc --workspace --no-deps --all-features --locked
       - name: mingw-w64 (GNU cross-link of the OWE resource)
