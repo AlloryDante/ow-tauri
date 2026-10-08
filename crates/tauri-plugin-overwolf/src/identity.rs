@@ -357,6 +357,47 @@ mod tests {
         }
     }
 
+    /// The hashes ow-electron computed in the parity lab (captured
+    /// `generateUserEmailHashes` results and the `eHashes` it stored):
+    /// trimmed, lower-cased, hex, keys in the order sha1, md5, sha256, and a
+    /// string without `@` is hashed as it is.
+    #[test]
+    fn ow_electron_goldens() {
+        let cases = [
+            (
+                "test.email@overwolf.com",
+                "2c44f8a418bbfa88e80e3ce17d56cb30944f7675",
+                "170d78feecf2b8e7b804ba6b45af7ac2",
+                "ac43b559f15c2eb262ea8d5d4921f639aaf1cde84bc280bad2e1879d0ded68c2",
+            ),
+            (
+                "  Test.Email@Overwolf.COM  ",
+                "2c44f8a418bbfa88e80e3ce17d56cb30944f7675",
+                "170d78feecf2b8e7b804ba6b45af7ac2",
+                "ac43b559f15c2eb262ea8d5d4921f639aaf1cde84bc280bad2e1879d0ded68c2",
+            ),
+            (
+                "not-an-email",
+                "89f63c94649f03014b9ef4a397deeb323b29bf90",
+                "9a96eb2609277846ef2070a08db9ef11",
+                "eba038945cb806ba629b6f4524d54ac7dddd3c3f46bcb12b19d9cf727aa4bdf5",
+            ),
+        ];
+        for (email, sha1, md5, sha256) in cases {
+            let h = email_hashes(email, HashEncoding::Hex);
+            assert_eq!(h.sha1.as_deref(), Some(sha1), "{email:?}");
+            assert_eq!(h.md5.as_deref(), Some(md5), "{email:?}");
+            assert_eq!(h.sha256.as_deref(), Some(sha256), "{email:?}");
+            let json = serde_json::to_string(&h).unwrap();
+            let (i1, i5, i256) = (
+                json.find("sha1").unwrap(),
+                json.find("md5").unwrap(),
+                json.find("sha256").unwrap(),
+            );
+            assert!(i1 < i5 && i5 < i256, "{json}");
+        }
+    }
+
     #[test]
     fn empty_hashes() {
         assert!(EmailHashes::default().is_empty());
