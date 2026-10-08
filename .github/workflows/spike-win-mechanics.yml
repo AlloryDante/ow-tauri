@@ -59,6 +59,20 @@ jobs:
           $env:CARGO_TARGET_DIR = "target"
           cargo build --locked -p win-mechanics-spike 2>&1 | Tee-Object out/build.txt
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: B8 - build + run the cross-minor webview2-com re-wrap crate
+        shell: pwsh
+        run: |
+          $env:CARGO_TARGET_DIR = "target"
+          Write-Host "== build (compile + link: two webview2-com-sys versions)"
+          cargo build --locked -p b8-rewrap 2>&1 | Tee-Object out/b8-build.txt
+          $built = $LASTEXITCODE
+          "exit=$built" | Out-File -Append out/b8-build.txt
+          if ($built -eq 0) {
+            Write-Host "== run"
+            & target/debug/b8-rewrap.exe 2>&1 | Tee-Object out/b8-run.txt
+          } else {
+            "build failed (compile or link) - see b8-build.txt" | Out-File out/b8-run.txt
+          }
       - name: Run the probes
         shell: pwsh
         run: |

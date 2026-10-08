@@ -258,7 +258,10 @@ pub fn click_guest(app: &tauri::AppHandle, main_label: &str, _guest_label: &str)
         GetSystemMetrics, SetForegroundWindow, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
         SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
     };
-    let Some(win) = app.get_webview_window(main_label) else {
+    // `get_window`, not `get_webview_window`: once a child webview is attached
+    // the window is no longer a "webview window" and `get_webview_window`
+    // returns None (SPA F3). `Window` carries hwnd/scale/inner_position.
+    let Some(win) = app.get_window(main_label) else {
         return json!({ "error": "no main window" });
     };
     let hwnd = match win.hwnd() {
