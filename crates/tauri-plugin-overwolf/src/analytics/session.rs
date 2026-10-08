@@ -135,6 +135,13 @@ impl Session {
         self.user_enabled = enabled;
     }
 
+    /// When the next hourly heartbeat check is due, in session
+    /// milliseconds (E.2 #9).
+    #[must_use]
+    pub fn next_check_ms(&self) -> u64 {
+        self.next_check_ms
+    }
+
     /// Whether the launch sequence has run.
     #[must_use]
     pub fn is_started(&self) -> bool {

@@ -26,6 +26,7 @@
 pub mod session;
 #[cfg(feature = "plugin")]
 pub(crate) mod transport;
+pub mod user_agent;
 
 use std::time::Duration;
 
@@ -569,6 +570,38 @@ pub fn window_analytics_name(url: &str) -> String {
     } else {
         name
     }
+}
+
+/// The analytics name of a window whose naming webview shows `url`
+/// (DESIGN §4.3.3): [`window_analytics_name`] with one rule for Tauri's app
+/// origin. Tauri serves `index.html` for an empty path and reports the URL
+/// without it (`tauri://localhost/`), where ow-electron loads and reports
+/// `file://…/index.html`. So for an app page (`app_page`: the URL's origin
+/// is the app's custom-protocol origin, `build.devUrl`'s origin or an
+/// `ads.allowedEmbedderOrigins` entry) whose path is empty or ends with `/`,
+/// the path is read as `<path>index.html`. Remote pages are unchanged.
+///
+/// ```
+/// use tauri_plugin_overwolf::analytics::app_window_name;
+/// assert_eq!(app_window_name("tauri://localhost/", true), "index");
+/// assert_eq!(app_window_name("http://tauri.localhost", true), "index");
+/// assert_eq!(app_window_name("tauri://localhost/settings.html", true), "settings");
+/// assert_eq!(app_window_name("http://localhost:1420/nested/", true), "index");
+/// // A history-routed SPA path names the route, as documented.
+/// assert_eq!(app_window_name("tauri://localhost/route", true), "route");
+/// // Remote pages keep ow-electron's rule (the host name for `/`).
+/// assert_eq!(app_window_name("https://example.com/", false), "example.com");
+/// ```
+#[must_use]
+pub fn app_window_name(url: &str, app_page: bool) -> String {
+    if app_page && let Ok(mut parsed) = url::Url::parse(url) {
+        let path = parsed.path().to_owned();
+        if path.is_empty() || path.ends_with('/') {
+            parsed.set_path(&format!("{path}index.html"));
+            return window_analytics_name(parsed.as_str());
+        }
+    }
+    window_analytics_name(url)
 }
 
 fn percent_decode(s: &str) -> String {

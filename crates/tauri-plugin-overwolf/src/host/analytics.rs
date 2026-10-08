@@ -11,6 +11,7 @@ use tauri::Runtime;
 use super::{Core, lock};
 use crate::analytics::session::{Event, Session};
 use crate::analytics::transport::{BoxFuture, Dispatcher, RequestHooks};
+use crate::analytics::user_agent::accepts_native;
 use crate::analytics::{HostLabel, HostRequest, HostResponse, Reporter, compose_user_agent};
 use crate::app_identity::AppIdentity;
 
@@ -33,25 +34,28 @@ pub(crate) fn host_label(config: &crate::config::AnalyticsConfig) -> HostLabel {
 /// The platform webview's default user agent, the template used until the
 /// app webview's real one is known (DESIGN §4.10): the stock `WKWebView`
 /// string on macOS; on Windows `WebView2`'s reduced string, which carries
-/// only the runtime's major version.
+/// only the runtime's major version; the `WebKitGTK` form on Linux.
 pub(crate) fn fallback_platform_ua(webview_version: &str) -> String {
-    if cfg!(windows) {
-        let major = webview_version.split('.').next().unwrap_or_default();
-        format!(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36 Edg/{major}.0.0.0"
-        )
-    } else if cfg!(target_os = "macos") {
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)"
-            .to_owned()
-    } else {
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko)".to_owned()
-    }
+    crate::analytics::user_agent::template(
+        crate::paths::TargetOs::current(),
+        webview_version,
+        std::env::consts::ARCH,
+    )
 }
 
 /// `<UA>` composed from the template (E.1).
 pub(crate) fn template_user_agent(app: &AppIdentity, label: &HostLabel) -> String {
-    compose_user_agent(
+    composed_user_agent(
         &fallback_platform_ua(&tauri::webview_version().unwrap_or_default()),
+        app,
+        label,
+    )
+}
+
+/// `<UA>` composed from the platform user agent `platform_ua` (E.1).
+fn composed_user_agent(platform_ua: &str, app: &AppIdentity, label: &HostLabel) -> String {
+    compose_user_agent(
+        platform_ua,
         &app.name,
         &app.version,
         label,
@@ -117,7 +121,7 @@ impl AnalyticsHost {
     }
 
     /// Whether the launch burst was queued.
-    #[allow(dead_code, reason = "the window tracker (W2) checks it")]
+    #[allow(dead_code, reason = "tests and the ads host (W2-A) check it")]
     pub(crate) fn is_started(&self) -> bool {
         lock(&self.state).session.is_started()
     }
@@ -148,7 +152,6 @@ impl AnalyticsHost {
     }
 
     /// Replaces `<UA>` in the request builder.
-    #[allow(dead_code, reason = "UA discovery (W2, DESIGN §4.10) sets it")]
     pub(crate) fn set_user_agent(&self, ua: String) {
         lock(&self.state).reporter.user_agent = ua;
     }
@@ -156,6 +159,63 @@ impl AnalyticsHost {
     /// `<UA>` as currently known.
     pub(crate) fn user_agent(&self) -> String {
         lock(&self.state).reporter.user_agent.clone()
+    }
+
+    /// The first visible counted window (E.2 #5, once per run).
+    pub(crate) fn window_shown(&self, now_ms: u64) -> usize {
+        self.run(|s| s.window_shown(now_ms))
+    }
+
+    /// A counted window's visible period ended (E.2 #7).
+    pub(crate) fn window_closed(&self, name: &str, title: &str, visible_ms: u64) -> usize {
+        self.run(|s| s.window_closed(name, title, visible_ms))
+    }
+
+    /// The hourly heartbeat check (E.2 #9); `has_visible_window` is whether
+    /// a counted window is visible now.
+    pub(crate) fn tick(&self, now_ms: u64, has_visible_window: bool) -> usize {
+        self.run(|s| s.tick(now_ms, has_visible_window))
+    }
+
+    /// How long until the next hourly heartbeat check, from `now_ms` (the
+    /// parked ticker's wake-up, DESIGN §4.11); a full check period before
+    /// the burst.
+    pub(crate) fn until_next_check(&self, now_ms: u64) -> Duration {
+        let state = lock(&self.state);
+        let next = if state.session.is_started() {
+            state.session.next_check_ms()
+        } else {
+            now_ms + crate::analytics::session::HEARTBEAT_CHECK_MS
+        };
+        Duration::from_millis(next.saturating_sub(now_ms).max(1))
+    }
+
+    /// An ad guest attached (E.2 #6, 400025).
+    #[allow(dead_code, reason = "the ads host (W2-A) calls it after a forced poll")]
+    pub(crate) fn guest_attached(&self) -> usize {
+        self.run(Session::guest_attached)
+    }
+
+    /// The Counter of a reported guest crash (E.2 #8), before the reload.
+    #[allow(dead_code, reason = "the ads host (W2-A) reports guest crashes")]
+    pub(crate) fn guest_crash_counter(&self, session_secs: u64, reason: &str) -> usize {
+        self.run(|s| s.guest_crash_counter(session_secs, reason))
+    }
+
+    /// The 400024 of a reported guest crash (E.2 #8), after the reload.
+    #[allow(dead_code, reason = "the ads host (W2-A) reports guest crashes")]
+    pub(crate) fn guest_crash_stats(&self, session_secs: u64, reason: &str) -> usize {
+        self.run(|s| s.guest_crash_stats(session_secs, reason))
+    }
+
+    /// The `cmp-eu-only` request (E.2 #2), `None` when the user switch is
+    /// off.
+    pub(crate) fn cmp_eu_only_request(&self) -> Option<HostRequest> {
+        let state = lock(&self.state);
+        state
+            .session
+            .user_enabled()
+            .then(|| state.reporter.cmp_eu_only())
     }
 
     /// `<label>_sub_info` (E.2 #10). Resolves after the response or the
@@ -229,10 +289,66 @@ impl UserAgent {
     }
 }
 
-/// Starts `<UA>` discovery at Ready (DESIGN §4.10). Discovery reads an app
-/// webview's user agent asynchronously (W2); until then the template is
-/// final at once.
+/// The native read of an app webview's user agent.
+#[path = "../platform/ua.rs"]
+mod native_ua;
+
+/// Starts `<UA>` discovery at Ready (DESIGN §4.10): reads the user agent of
+/// the first app webview natively, without blocking the main thread, and
+/// makes `<UA>` final. A read that fails or does not have the platform
+/// default's shape (an app-set user agent) leaves the template; so does an
+/// app without any webview at Ready (a tray app). Host requests wait for it
+/// at most [`UA_WAIT`].
 pub(crate) fn start_user_agent_discovery<R: Runtime>(core: &Arc<Core<R>>) {
+    // Tauri's mock runtime never runs `with_webview` closures.
+    let native = super::windows::native_runtime::<R>();
+    let webview = core
+        .windows
+        .first_app_webview()
+        .filter(|_| native)
+        .and_then(|label| crate::compat::webview(&core.app, &label));
+    let Some(webview) = webview else {
+        core.ua.finish();
+        return;
+    };
+    let weak = Arc::downgrade(core);
+    let read = native_ua::read_native(&webview, move |ua| {
+        if let Some(core) = weak.upgrade() {
+            accept_native_user_agent(&core, ua.as_deref());
+        }
+    });
+    if read.is_err() {
+        core.ua.finish();
+        return;
+    }
+    // The webview may close before it answers.
+    let weak = Arc::downgrade(core);
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(UA_WAIT).await;
+        if let Some(core) = weak.upgrade() {
+            core.ua.finish();
+        }
+    });
+}
+
+/// Uses a natively read user agent for `<UA>` when it has the platform
+/// default's shape, then makes `<UA>` final.
+fn accept_native_user_agent<R: Runtime>(core: &Core<R>, native: Option<&str>) {
+    if core.ua.is_final() {
+        return;
+    }
+    match native {
+        Some(ua) if accepts_native(crate::paths::TargetOs::current(), ua) => {
+            let label = host_label(&core.identity.config.analytics);
+            core.analytics
+                .set_user_agent(composed_user_agent(ua, &core.identity.app, &label));
+        }
+        Some(_) => log::debug!(
+            target: super::LOG_TARGET,
+            "the app webview's user agent is not the platform default; Overwolf requests use the default"
+        ),
+        None => {}
+    }
     core.ua.finish();
 }
 
@@ -272,6 +388,89 @@ mod tests {
         } else {
             assert!(ua.starts_with("Mozilla/5.0 ("));
         }
+    }
+
+    use crate::host::windows::tests::{Capture, mock_app, wait_until, window};
+    use serde_json::json;
+
+    /// DESIGN §4.10: an app-set user agent never reaches Overwolf's
+    /// requests; one with the platform default's shape does.
+    #[test]
+    fn only_a_platform_default_native_user_agent_is_used() {
+        let (_app, dir, core) = mock_app("ua-native", &json!({}), &[], Capture::answering("{}"));
+        let template = core.analytics.user_agent();
+        assert!(!core.ua.is_final());
+        accept_native_user_agent(&core, Some("CustomApp/9.9 (Macintosh)"));
+        assert!(core.ua.is_final());
+        assert_eq!(core.analytics.user_agent(), template, "custom UA rejected");
+
+        let (_app2, dir2, core2) =
+            mock_app("ua-native2", &json!({}), &[], Capture::answering("{}"));
+        let platform = fallback_platform_ua(&tauri::webview_version().unwrap_or_default());
+        let native = platform.replace("10.0", "11.0");
+        accept_native_user_agent(&core2, Some(&native));
+        let ua = core2.analytics.user_agent();
+        if cfg!(windows) {
+            assert!(ua.starts_with(&native), "{ua}");
+        } else {
+            // macOS accepts the template only; Linux never reads natively.
+            assert_eq!(ua, template);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// The mock runtime has no webview to read: `<UA>` is final at Ready
+    /// (the template), so the burst does not wait.
+    #[test]
+    fn discovery_without_a_readable_webview_is_final_at_once() {
+        let (app, dir, core) = mock_app("ua-final", &json!({}), &[], Capture::answering("{}"));
+        window(&app, "main");
+        crate::host::lifecycle::on_ready(&core);
+        assert!(core.ua.is_final());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R10: `setAnonymousAnalyticsPreference(false)` of an earlier launch
+    /// applies at the next Ready, before the burst.
+    #[test]
+    fn the_persisted_preference_applies_at_the_next_ready() {
+        let capture = Capture::answering("{}");
+        let (_app, dir, core) = mock_app("analytics-pref", &json!({}), &[], capture.clone());
+        crate::ext::Overwolf(core.clone())
+            .set_anonymous_analytics_preference(false)
+            .unwrap();
+        let stored = std::fs::read_to_string(core.identity.state_dir.ow_tauri_json()).unwrap();
+        drop(core);
+
+        // The next launch, same state directory.
+        let capture2 = Capture::answering("{}");
+        let (_app2, dir2, core2) = mock_app(
+            "analytics-pref-next",
+            &json!({ "state": { "appDataDir": dir.clone() } }),
+            &[],
+            capture2.clone(),
+        );
+        assert!(stored.contains("\"anonymousAnalytics\": false"), "{stored}");
+        crate::host::lifecycle::on_ready(&core2);
+        assert!(wait_until(Duration::from_secs(5), || capture2
+            .counters()
+            .iter()
+            .any(|c| c.ends_with("_app_heartbeat"))));
+        std::thread::sleep(Duration::from_millis(100));
+        let counters = capture2.counters();
+        assert!(
+            !counters.iter().any(|c| c.ends_with("_app_start")),
+            "{counters:?}"
+        );
+        assert!(counters.iter().any(|c| c.ends_with("_app_first_launch")));
+        assert!(
+            capture.requests().is_empty(),
+            "no Ready in the first launch"
+        );
+        drop(core2);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
     }
 
     #[test]
