@@ -4,6 +4,8 @@
 
 #[cfg(feature = "plugin")]
 pub(crate) mod display;
+#[cfg(all(feature = "plugin", ow_tauri_ads))]
+pub(crate) mod gesture;
 #[cfg(feature = "plugin")]
 pub(crate) mod graphics;
 #[cfg(all(target_os = "macos", feature = "plugin"))]
@@ -12,6 +14,8 @@ pub(crate) mod input;
 pub(crate) mod machine;
 #[cfg(all(target_os = "macos", feature = "plugin"))]
 pub(crate) mod terminate;
+#[cfg(feature = "plugin")]
+pub(crate) mod ua;
 #[cfg(all(unix, feature = "plugin"))]
 mod unix;
 #[cfg(feature = "plugin")]

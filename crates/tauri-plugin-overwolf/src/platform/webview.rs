@@ -7,8 +7,20 @@
 //!
 //! Every function hands its work to the webview's thread with
 //! `Webview::with_webview` and returns at once. Linux has no ads, so
-//! nothing here touches WebKitGTK. The ads host (W2) wires these hooks.
-#![allow(dead_code, reason = "the ads and consent hosts (W2) call these")]
+//! nothing here touches WebKitGTK.
+//!
+//! Native handles are reached without naming the webview library's platform
+//! types (DESIGN [R2]): on Windows [`own_controller`] turns the controller
+//! Tauri hands out into this crate's own binding through its raw COM
+//! pointer, so a newer Tauri minor that moves to another `webview2-com`
+//! release still compiles; on macOS every handle is a raw `WKWebView*`.
+#![cfg_attr(
+    not(ow_tauri_ads),
+    allow(
+        dead_code,
+        reason = "the ads host that calls most of these builds with ads on Windows and macOS only"
+    )
+)]
 
 use std::sync::Arc;
 
@@ -100,22 +112,39 @@ pub(crate) fn webview2_net_error(status: i32) -> (i64, &'static str) {
     }
 }
 
-/// Mutes or unmutes the page's audio. Errors only when the webview is gone.
-pub(crate) fn set_muted<R: Runtime>(webview: &Webview<R>, muted: bool) -> tauri::Result<()> {
+/// Mutes or unmutes the page's audio. `done` runs on the webview's thread
+/// with whether the platform applied it (`false` on Linux, or when the
+/// platform call is missing or failed): the ads host closes a guest it
+/// could not mute (fail-closed, DESIGN §4.4.1). It does not run when the
+/// webview is gone. Errors only when the webview is gone.
+pub(crate) fn set_muted<R: Runtime>(
+    webview: &Webview<R>,
+    muted: bool,
+    done: impl FnOnce(bool) + Send + 'static,
+) -> tauri::Result<()> {
     webview.with_webview(move |pw| {
         #[cfg(target_os = "macos")]
-        {
-            macos::set_page_muted(pw.inner(), muted);
-        }
+        let applied = macos::set_page_muted(pw.inner(), muted);
         #[cfg(windows)]
-        {
-            windows_impl::set_muted(&pw.controller(), muted);
-        }
+        let applied = own_controller(&pw).is_some_and(|c| windows_impl::set_muted(&c, muted));
         #[cfg(not(any(target_os = "macos", windows)))]
-        {
+        let applied = {
             let _ = (pw, muted);
-        }
+            false
+        };
+        done(applied);
     })
+}
+
+/// This crate's own binding of the webview's WebView2 controller (DESIGN
+/// [R2]): the controller Tauri hands out, re-read through its raw COM
+/// pointer, so no type of the webview library's `webview2-com` release is
+/// named here. `None` when the pointer is null or not pointer-sized.
+#[cfg(windows)]
+pub(crate) fn own_controller(
+    pw: &tauri::webview::PlatformWebview,
+) -> Option<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller> {
+    windows_impl::own_controller(pw)
 }
 
 /// The rest of a transparent guest background that the webview builder's
@@ -167,7 +196,7 @@ pub(crate) fn raise_to_top<R: Runtime>(
         #[cfg(target_os = "macos")]
         let top = macos::raise_to_top(pw.inner());
         #[cfg(windows)]
-        let top = windows_impl::raise_to_top(&pw.controller());
+        let top = own_controller(&pw).and_then(|c| windows_impl::raise_to_top(&c));
         #[cfg(not(any(target_os = "macos", windows)))]
         let top = {
             let _ = pw;
@@ -203,7 +232,8 @@ pub(crate) fn set_input_passthrough<R: Runtime>(
         #[cfg(target_os = "macos")]
         let applied = macos::set_input_passthrough(pw.inner(), on);
         #[cfg(windows)]
-        let applied = windows_impl::set_input_passthrough(&pw.controller(), on);
+        let applied =
+            own_controller(&pw).is_some_and(|c| windows_impl::set_input_passthrough(&c, on));
         #[cfg(not(any(target_os = "macos", windows)))]
         let applied = {
             let _ = (pw, on);
@@ -247,9 +277,10 @@ pub(crate) fn load_shaped<R: Runtime>(
         let fallback = webview.clone();
         return webview
             .with_webview(move |pw| {
-                if windows_impl::navigate_with_headers(&pw.controller(), target.as_str(), &headers)
-                    .is_err()
-                {
+                let sent = own_controller(&pw).is_some_and(|c| {
+                    windows_impl::navigate_with_headers(&c, target.as_str(), &headers).is_ok()
+                });
+                if !sent {
                     let _ = fallback.navigate(target);
                 }
             })
@@ -278,11 +309,42 @@ pub(crate) fn document_header_fields(shaping: Option<&Shaping>) -> Vec<String> {
 }
 
 /// Platform reports from a webview that Tauri does not deliver.
+#[cfg_attr(
+    not(windows),
+    allow(
+        dead_code,
+        reason = "macOS reports a crash through the app's terminate hook and refuses navigations in Tauri's own hook"
+    )
+)]
 pub(crate) trait GuestReports: Send + Sync + 'static {
     /// The webview's render process ended (`reason` is Electron's spelling).
     fn crashed(&self, label: &str, reason: crate::ads::GoneReason, exit_code: i64);
     /// A main-frame load failed.
     fn load_failed(&self, label: &str, error_code: i64, description: &str, url: &str);
+    /// Windows, ad guests: the page asked for a new window at `url`;
+    /// `user_initiated` is WebView2's own activation flag (DESIGN §4.9). The
+    /// window is never created.
+    fn popup(&self, label: &str, url: &str, user_initiated: bool) {
+        let _ = (label, url, user_initiated);
+    }
+    /// Windows, ad guests: a top-level navigation off Overwolf was
+    /// cancelled; `user_initiated` is WebView2's flag and `input_age_ms` the
+    /// age of the last native input while the pointer was over the guest in
+    /// the foreground window (`None` otherwise, DESIGN §4.9).
+    fn top_navigation(
+        &self,
+        label: &str,
+        url: &str,
+        user_initiated: bool,
+        input_age_ms: Option<u64>,
+    ) {
+        let _ = (label, url, user_initiated, input_age_ms);
+    }
+    /// Windows: a frame navigation the local-origin guard cancelled
+    /// (DESIGN §4.4.9).
+    fn frame_blocked(&self, label: &str, url: &str) {
+        let _ = (label, url);
+    }
 }
 
 /// Which kind of webview the platform hooks watch.
@@ -295,6 +357,10 @@ pub(crate) enum HookTarget {
     /// An app webview (any label outside the reserved prefixes): only a render or browser
     /// process that exited counts (Electron reports an unresponsive page
     /// separately), and a load failure reports the document URL.
+    #[allow(
+        dead_code,
+        reason = "the app webview hooks are wired by the window host (change request W2-fix-r1 CR-3)"
+    )]
     App,
 }
 
@@ -352,10 +418,14 @@ pub(crate) fn wire_record(
 }
 
 /// Installs the per-guest platform hooks: on Windows the request shaping
-/// handler (D.8.3), `ProcessFailed` and `NavigationCompleted`. macOS reports
-/// crashes through the app's `on_web_content_process_terminate` hook
-/// instead. Guest JavaScript dialogs are silenced by the guest shim
-/// (DESIGN §3.7).
+/// handler (D.8.3), `ProcessFailed`, `NavigationCompleted`, the local-origin
+/// guard on the top frame and on every frame (`FrameCreated` → per-frame
+/// `NavigationStarting`, DESIGN §4.4.9) and, for ad guests (`owad-*`), the
+/// popup and top-level escape reports with WebView2's activation flags
+/// (§4.9). macOS reports crashes through the app's
+/// `on_web_content_process_terminate` hook instead, and its navigation hook
+/// already sees every frame. Guest JavaScript dialogs are silenced by the
+/// guest shim (DESIGN §3.7).
 pub(crate) fn install_guest_hooks<R: Runtime>(
     webview: &Webview<R>,
     shaping: Option<Shaping>,
@@ -374,7 +444,9 @@ fn install_hooks<R: Runtime>(
     webview.with_webview(move |pw| {
         #[cfg(windows)]
         {
-            windows_impl::install(&pw.controller(), target, shaping, label, reports);
+            if let Some(controller) = own_controller(&pw) {
+                windows_impl::install(&controller, target, shaping, label, reports);
+            }
         }
         #[cfg(not(windows))]
         {
@@ -397,6 +469,10 @@ pub(crate) fn default_store_cookies(
 /// attributes, as the ow-electron harness records them. Call it on the
 /// main thread; `done` runs there later.
 #[cfg(all(target_os = "macos", feature = "lab"))]
+#[allow(
+    dead_code,
+    reason = "the lab's cookie trace calls it (change request W2-fix-r1 CR-3)"
+)]
 pub(crate) fn default_store_cookie_details(
     done: impl FnOnce(Vec<serde_json::Value>) + Send + 'static,
 ) {
@@ -428,6 +504,10 @@ pub(crate) fn content_inset_top<R: Runtime>(window: &tauri::Window<R>) -> f64 {
 /// (`frame: false`, where the app's content extends under it as in
 /// Electron's frameless windows). 0 elsewhere, where Tauri's inner size is
 /// already the client area.
+#[allow(
+    dead_code,
+    reason = "the window host's content bounds use it (change request W2-fix-r1 CR-3)"
+)]
 pub(crate) fn frame_title_bar_overlap<R: Runtime>(window: &tauri::Window<R>) -> f64 {
     #[cfg(target_os = "macos")]
     {
@@ -514,6 +594,10 @@ pub(crate) fn without_app_activation<T>(create: impl FnOnce() -> T) -> T {
 /// app (lab trace: `activation-suppressed` and `key-front-redirected` in
 /// `wc-events.jsonl`). Other platforms do nothing here: their lab windows
 /// stay hidden.
+#[allow(
+    dead_code,
+    reason = "plugin setup calls it in the invisible lab (change request W2-fix-r1 CR-3)"
+)]
 pub(crate) fn hold_lab_app_back() {
     #[cfg(target_os = "macos")]
     {
@@ -587,6 +671,194 @@ pub(crate) fn screen_names<R: Runtime>(
 ///
 pub(crate) fn page_origin_y(webview_y: f64, inset_top: f64) -> f64 {
     webview_y.max(inset_top)
+}
+
+/// A `WKWebView` the plugin keeps alive itself (macOS; one retain). The ads
+/// host takes one per guest at mount, so that the close-hide (DESIGN
+/// §4.4.5, W0c ruling 2) can still evaluate the hide in the page at
+/// `WindowEvent::Destroyed`, when Tauri no longer hands the webview out.
+/// The retain is given back on the main thread: by [`NativeView::eval_then_release`]
+/// in the evaluation's completion handler, or when the handle is dropped.
+#[derive(Debug)]
+pub(crate) struct NativeView {
+    /// The retained `WKWebView*` (0 when nothing is held).
+    address: usize,
+}
+
+impl NativeView {
+    /// The view's address, for identity checks (the gesture monitor).
+    pub(crate) fn address(&self) -> usize {
+        self.address
+    }
+
+    /// Evaluates `script` in the view's page and gives the retain back in the
+    /// evaluation's completion handler (on the main thread). Call it on the
+    /// main thread; elsewhere it is queued there.
+    pub(crate) fn eval_then_release(self, script: String) {
+        let address = std::mem::ManuallyDrop::new(self).address;
+        if address == 0 {
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        macos::on_main(Box::new(move || {
+            macos::eval_js(address, &script, Box::new(move |_| macos::release(address)));
+        }));
+        #[cfg(not(target_os = "macos"))]
+        let _ = script;
+    }
+}
+
+impl Drop for NativeView {
+    fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        if self.address != 0 {
+            let address = self.address;
+            macos::on_main(Box::new(move || macos::release(address)));
+        }
+    }
+}
+
+/// Retains the webview's native view (macOS) and calls `done` with it on the
+/// main thread; `None` elsewhere. `done` does not run when the webview is
+/// gone. Errors only when the webview is gone.
+pub(crate) fn retain_native<R: Runtime>(
+    webview: &Webview<R>,
+    done: impl FnOnce(Option<NativeView>) + Send + 'static,
+) -> tauri::Result<()> {
+    webview.with_webview(move |pw| {
+        #[cfg(target_os = "macos")]
+        let view = macos::retain(pw.inner()).map(|address| NativeView { address });
+        #[cfg(not(target_os = "macos"))]
+        let view = {
+            let _ = pw;
+            None
+        };
+        done(view);
+    })
+}
+
+/// Evaluates `script` in the webview's top frame and calls `done` with the
+/// result when it is a string (macOS `evaluateJavaScript:completionHandler:`,
+/// on the main thread; `None` for any other result or an error). Elsewhere
+/// `done` gets `None` at once. Errors only when the webview is gone (`done`
+/// then never runs).
+pub(crate) fn eval_for_string<R: Runtime>(
+    webview: &Webview<R>,
+    script: String,
+    done: impl FnOnce(Option<String>) + Send + 'static,
+) -> tauri::Result<()> {
+    webview.with_webview(move |pw| {
+        #[cfg(target_os = "macos")]
+        {
+            let view = pw.inner();
+            if view.is_null() {
+                done(None);
+            } else {
+                macos::eval_js(view as usize, &script, Box::new(done));
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (pw, script);
+            done(None);
+        }
+    })
+}
+
+/// Removes every user script whose source contains `marker` from the
+/// webview's `WKUserContentController` and keeps the others in their order
+/// (macOS; `removeAllUserScripts` is the only public removal, so the rest
+/// are added back). `done` runs on the main thread with how many were
+/// removed (0 elsewhere). Errors only when the webview is gone.
+pub(crate) fn remove_user_scripts_marked<R: Runtime>(
+    webview: &Webview<R>,
+    marker: &'static str,
+    done: impl FnOnce(usize) + Send + 'static,
+) -> tauri::Result<()> {
+    webview.with_webview(move |pw| {
+        #[cfg(target_os = "macos")]
+        let removed = macos::remove_user_scripts_containing(pw.controller(), marker);
+        #[cfg(not(target_os = "macos"))]
+        let removed = {
+            let _ = (pw, marker);
+            0
+        };
+        done(removed);
+    })
+}
+
+/// Whether the view at `address` has its input pass-through flag set
+/// ([`set_input_passthrough`]; macOS, main thread). Always `false`
+/// elsewhere.
+pub(crate) fn passthrough_on(address: usize) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos::passthrough_on(address)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = address;
+        false
+    }
+}
+
+/// The native view directly above a guest webview among its window's child
+/// views, read before the guest is replaced (macOS), so the replacement
+/// takes the same place in the stacking order. Holds only the view's
+/// address, which [`place_below_anchor`] uses after finding it among the
+/// replacement's siblings again.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ViewAnchor(Arc<std::sync::Mutex<Option<usize>>>);
+
+/// Records in `anchor` the sibling view directly above `webview` (none when
+/// it is the top subview), then calls `done` (both on the main thread, in
+/// order with the webview's other native calls). Errors only when the
+/// webview is gone.
+pub(crate) fn read_anchor<R: Runtime>(
+    webview: &Webview<R>,
+    anchor: &ViewAnchor,
+    done: impl FnOnce() + Send + 'static,
+) -> tauri::Result<()> {
+    let slot = Arc::clone(&anchor.0);
+    webview.with_webview(move |pw| {
+        #[cfg(target_os = "macos")]
+        let above = macos::view_above(pw.inner());
+        #[cfg(not(target_os = "macos"))]
+        let above = {
+            let _ = pw;
+            None
+        };
+        *slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = above;
+        done();
+    })
+}
+
+/// Moves `webview` (a new child, on top) directly below the view `anchor`
+/// recorded, when that view is still one of its siblings. `done` runs on
+/// the main thread with whether a view was above the old guest and whether
+/// the new one now sits directly below it. Errors only when the webview is
+/// gone.
+pub(crate) fn place_below_anchor<R: Runtime>(
+    webview: &Webview<R>,
+    anchor: &ViewAnchor,
+    done: impl FnOnce(bool, bool) + Send + 'static,
+) -> tauri::Result<()> {
+    let slot = Arc::clone(&anchor.0);
+    webview.with_webview(move |pw| {
+        let above = *slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        #[cfg(target_os = "macos")]
+        let placed = above.is_some_and(|above| macos::place_below(pw.inner(), above));
+        #[cfg(not(target_os = "macos"))]
+        let placed = {
+            let _ = pw;
+            false
+        };
+        done(above.is_some(), placed);
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -844,6 +1116,10 @@ mod macos {
 
     /// `-[NSWindow orderFrontRegardless]`: on screen, front of its level,
     /// neither key nor activating the app.
+    #[allow(
+        dead_code,
+        reason = "the invisible lab's window show uses it (change request W2-fix-r1 CR-3)"
+    )]
     pub(super) fn order_front_regardless(address: usize) {
         if address == 0 {
             return;
@@ -1026,23 +1302,231 @@ mod macos {
 
     /// Mutes the page with the `WebKit` selector `_setPageMuted:` when the selector
     /// exists (the only way WKWebView mutes every frame; a known
-    /// deviation: private API).
-    pub(super) fn set_page_muted(wk_webview: *mut c_void, muted: bool) {
+    /// deviation: private API). Returns whether the selector was called.
+    pub(super) fn set_page_muted(wk_webview: *mut c_void, muted: bool) -> bool {
         if wk_webview.is_null() {
-            return;
+            return false;
         }
         // SAFETY: Tauri hands a live `WKWebView*` on the main thread.
         let obj: &AnyObject = unsafe { &*wk_webview.cast::<AnyObject>() };
         // SAFETY: `respondsToSelector:` exists on every NSObject.
         let responds: bool = unsafe { msg_send![obj, respondsToSelector: sel!(_setPageMuted:)] };
         if !responds {
-            return;
+            return false;
         }
         // `_WKMediaMutedState`: bit 0 mutes audio.
         let state: usize = usize::from(muted);
         // SAFETY: the selector exists (checked above) and takes an
         // NSUInteger.
         let () = unsafe { msg_send![obj, _setPageMuted: state] };
+        true
+    }
+
+    /// Retains the object at `view` (+1); its address, `None` for null.
+    pub(super) fn retain(view: *mut c_void) -> Option<usize> {
+        if view.is_null() {
+            return None;
+        }
+        // SAFETY: Tauri hands a live `WKWebView*`; the retain is balanced by
+        // `release`.
+        let kept = unsafe { objc2::ffi::objc_retain(view.cast()) };
+        (!kept.is_null()).then_some(kept as usize)
+    }
+
+    /// Gives back one retain taken by [`retain`]. Main thread (the last
+    /// release of a view deallocates it).
+    pub(super) fn release(address: usize) {
+        if address != 0 {
+            // SAFETY: balances the retain `retain` took on this object.
+            unsafe { objc2::ffi::objc_release(address as *mut AnyObject) };
+        }
+    }
+
+    unsafe extern "C" {
+        /// The main dispatch queue (`dispatch_get_main_queue()`).
+        static _dispatch_main_q: u8;
+        fn dispatch_async_f(
+            queue: *const u8,
+            context: *mut c_void,
+            work: extern "C" fn(*mut c_void),
+        );
+    }
+
+    extern "C" fn run_boxed(context: *mut c_void) {
+        // SAFETY: `on_main` passed a leaked `Box<Box<dyn FnOnce() + Send>>`.
+        let f: Box<Box<dyn FnOnce() + Send>> = unsafe { Box::from_raw(context.cast()) };
+        f();
+    }
+
+    /// Runs `f` on the main thread: at once when already there, else after
+    /// the main queue's current work (`dispatch_async_f`, thread-safe).
+    pub(super) fn on_main(f: Box<dyn FnOnce() + Send>) {
+        if objc2::MainThreadMarker::new().is_some() {
+            f();
+            return;
+        }
+        let context = Box::into_raw(Box::new(f)).cast();
+        // SAFETY: the main queue lives for the process; `run_boxed` takes
+        // the box back exactly once.
+        unsafe { dispatch_async_f(&raw const _dispatch_main_q, context, run_boxed) };
+    }
+
+    /// `-[WKWebView evaluateJavaScript:completionHandler:]` on the view at
+    /// `address` (main thread); `done` gets the result when it is a string.
+    pub(super) fn eval_js(
+        address: usize,
+        script: &str,
+        done: Box<dyn FnOnce(Option<String>) + Send>,
+    ) {
+        let slot = std::cell::Cell::new(Some(done));
+        let block = block2::RcBlock::new(move |value: *mut AnyObject, error: *mut AnyObject| {
+            let Some(done) = slot.take() else { return };
+            let text = (error.is_null() && !value.is_null())
+                .then(|| {
+                    // SAFETY: a live result object of the completion handler.
+                    let value = unsafe { &*value };
+                    // SAFETY: `isKindOfClass:` exists on every NSObject.
+                    let is_string: bool =
+                        unsafe { msg_send![value, isKindOfClass: class!(NSString)] };
+                    is_string.then(|| {
+                        // SAFETY: checked to be an NSString.
+                        unsafe { &*std::ptr::from_ref(value).cast::<NSString>() }.to_string()
+                    })
+                })
+                .flatten();
+            done(text);
+        });
+        let script = NSString::from_str(script);
+        // SAFETY: a live (retained by the caller) `WKWebView*` on the main
+        // thread; the block is copied by `WebKit`.
+        unsafe {
+            let () = msg_send![address as *mut AnyObject, evaluateJavaScript: &*script, completionHandler: &*block];
+        }
+    }
+
+    /// Removes the user scripts containing `marker` from the
+    /// `WKUserContentController` at `controller` and adds the others back in
+    /// order; returns how many were removed. `+[NSArray arrayWithArray:]`
+    /// keeps the scripts alive across `removeAllUserScripts` (a released
+    /// copy of `userScripts` crashed: W0c).
+    pub(super) fn remove_user_scripts_containing(controller: *mut c_void, marker: &str) -> usize {
+        if controller.is_null() {
+            return 0;
+        }
+        // SAFETY: Tauri hands a live `WKUserContentController*` on the main
+        // thread; every selector is public `WebKit` / Foundation API.
+        unsafe {
+            let c: &AnyObject = &*controller.cast::<AnyObject>();
+            let scripts: *mut AnyObject = msg_send![c, userScripts];
+            if scripts.is_null() {
+                return 0;
+            }
+            let copy: *mut AnyObject = msg_send![class!(NSArray), arrayWithArray: scripts];
+            if copy.is_null() {
+                return 0;
+            }
+            let n: usize = msg_send![copy, count];
+            let mut keep: Vec<*mut AnyObject> = Vec::with_capacity(n);
+            let mut removed = 0;
+            for i in 0..n {
+                let script: *mut AnyObject = msg_send![copy, objectAtIndex: i];
+                let source: *mut AnyObject = msg_send![script, source];
+                let restore_script =
+                    !source.is_null() && (*source.cast::<NSString>()).to_string().contains(marker);
+                if restore_script {
+                    removed += 1;
+                } else {
+                    keep.push(script);
+                }
+            }
+            if removed == 0 {
+                return 0;
+            }
+            let () = msg_send![c, removeAllUserScripts];
+            for script in keep {
+                let () = msg_send![c, addUserScript: script];
+            }
+            removed
+        }
+    }
+
+    /// Whether the view at `address` has its pass-through flag set.
+    pub(super) fn passthrough_on(address: usize) -> bool {
+        if address == 0 {
+            return false;
+        }
+        // SAFETY: reads an associated object of a live object.
+        let flag = unsafe {
+            objc2::ffi::objc_getAssociatedObject(
+                address as *const AnyObject,
+                (&raw const PASSTHROUGH_KEY).cast(),
+            )
+        };
+        !flag.is_null()
+    }
+
+    /// `NSWindowBelow` (`NSWindowOrderingMode`).
+    const NS_WINDOW_BELOW: isize = -1;
+
+    /// The address of the subview directly above `view` in its superview.
+    pub(super) fn view_above(view: *mut c_void) -> Option<usize> {
+        if view.is_null() {
+            return None;
+        }
+        // SAFETY: Tauri hands a live `WKWebView*` on the main thread.
+        let obj: &AnyObject = unsafe { &*view.cast::<AnyObject>() };
+        // SAFETY: public NSView property.
+        let superview: Option<Retained<AnyObject>> = unsafe { msg_send![obj, superview] };
+        let superview = superview?;
+        // SAFETY: public NSView property.
+        let subviews: Option<Retained<NSArray<AnyObject>>> =
+            unsafe { msg_send![&*superview, subviews] };
+        let list: Vec<usize> = subviews?
+            .iter()
+            .map(|v| Retained::as_ptr(&v) as usize)
+            .collect();
+        let at = list.iter().position(|&p| p == view as usize)?;
+        list.get(at + 1).copied()
+    }
+
+    /// Moves `view` directly below its sibling at address `above`, when
+    /// that view is still a sibling (a reorder of an existing subview).
+    pub(super) fn place_below(view: *mut c_void, above: usize) -> bool {
+        if view.is_null() {
+            return false;
+        }
+        // SAFETY: Tauri hands a live `WKWebView*` on the main thread.
+        let obj: &AnyObject = unsafe { &*view.cast::<AnyObject>() };
+        // SAFETY: public NSView property.
+        let superview: Option<Retained<AnyObject>> = unsafe { msg_send![obj, superview] };
+        let Some(superview) = superview else {
+            return false;
+        };
+        let subviews = || -> Vec<Retained<AnyObject>> {
+            // SAFETY: public NSView property.
+            let list: Option<Retained<NSArray<AnyObject>>> =
+                unsafe { msg_send![&*superview, subviews] };
+            list.map(|l| l.iter().collect()).unwrap_or_default()
+        };
+        let Some(sibling) = subviews()
+            .into_iter()
+            .find(|v| Retained::as_ptr(v) as usize == above)
+        else {
+            return false;
+        };
+        // SAFETY: public NSView method; both views are subviews of
+        // `superview` (the sibling was found among them, and is retained).
+        unsafe {
+            let () = msg_send![&*superview, addSubview: obj, positioned: NS_WINDOW_BELOW, relativeTo: &*sibling];
+        }
+        let order: Vec<usize> = subviews()
+            .iter()
+            .map(|v| Retained::as_ptr(v) as usize)
+            .collect();
+        order
+            .iter()
+            .position(|&p| p == view as usize)
+            .is_some_and(|at| order.get(at + 1) == Some(&above))
     }
 
     /// `drawsBackground = NO` (key-value coding, when the view has the
@@ -1349,6 +1833,7 @@ mod macos {
 #[cfg(windows)]
 mod windows_impl {
     use std::cell::Cell;
+    use std::ffi::c_void;
     use std::sync::Arc;
 
     use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -1362,21 +1847,24 @@ mod windows_impl {
         COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED, COREWEBVIEW2_WEB_RESOURCE_CONTEXT,
         COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL, COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
         COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL, ICoreWebView2, ICoreWebView2_2,
-        ICoreWebView2_8, ICoreWebView2_22, ICoreWebView2Controller, ICoreWebView2Environment2,
-        ICoreWebView2ProcessFailedEventArgs2,
+        ICoreWebView2_4, ICoreWebView2_8, ICoreWebView2_22, ICoreWebView2Controller,
+        ICoreWebView2Environment2, ICoreWebView2Frame2, ICoreWebView2ProcessFailedEventArgs2,
     };
     use webview2_com::{
         CallDevToolsProtocolMethodCompletedHandler, DevToolsProtocolEventReceivedEventHandler,
-        NavigationCompletedEventHandler, ProcessFailedEventHandler,
+        FrameCreatedEventHandler, FrameNavigationStartingEventHandler,
+        NavigationCompletedEventHandler, NavigationStartingEventHandler,
+        NewWindowRequestedEventHandler, ProcessFailedEventHandler,
         WebResourceRequestedEventHandler, take_pwstr,
     };
-    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-    use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+    use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, PtInRect, SetWindowRgn};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
     use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GW_HWNDPREV, GWL_STYLE, GetWindow, HWND_TOP, IsWindowVisible, STYLESTRUCT,
-        SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos, ShowWindow,
-        WM_STYLECHANGING, WS_VISIBLE,
+        GA_ROOT, GW_HWNDPREV, GWL_STYLE, GetAncestor, GetCursorPos, GetForegroundWindow, GetWindow,
+        GetWindowRect, HWND_TOP, IsWindowVisible, STYLESTRUCT, SW_SHOWNOACTIVATE, SWP_NOACTIVATE,
+        SWP_NOMOVE, SWP_NOSIZE, SetWindowPos, ShowWindow, WM_STYLECHANGING, WS_VISIBLE,
     };
     use windows::core::{BOOL, HSTRING, Interface, PWSTR};
 
@@ -1497,15 +1985,201 @@ mod windows_impl {
         }
     }
 
-    pub(super) fn set_muted(controller: &ICoreWebView2Controller, muted: bool) {
+    /// See [`super::own_controller`].
+    pub(super) fn own_controller(
+        pw: &tauri::webview::PlatformWebview,
+    ) -> Option<ICoreWebView2Controller> {
+        let theirs = pw.controller();
+        if std::mem::size_of_val(&theirs) != std::mem::size_of::<*mut c_void>() {
+            return None;
+        }
+        // SAFETY: a COM interface value is exactly one interface pointer
+        // (size checked above); the copy is only borrowed while `theirs`
+        // keeps its reference, and `cloned` takes a reference of our own.
+        let raw: *mut c_void = unsafe { std::mem::transmute_copy(&theirs) };
+        if raw.is_null() {
+            return None;
+        }
+        // SAFETY: `raw` is a live `ICoreWebView2Controller` (the same COM
+        // interface, whatever binding release named it), kept alive by
+        // `theirs` during the borrow.
+        let ours = unsafe { ICoreWebView2Controller::from_raw_borrowed(&raw) }.cloned();
+        drop(theirs);
+        ours
+    }
+
+    /// `ICoreWebView2_8::SetIsMuted`; whether it succeeded.
+    pub(super) fn set_muted(controller: &ICoreWebView2Controller, muted: bool) -> bool {
         // SAFETY: COM calls on the webview's own thread.
         unsafe {
-            if let Ok(core) = controller.CoreWebView2()
-                && let Ok(w8) = core.cast::<ICoreWebView2_8>()
-            {
-                let _ = w8.SetIsMuted(muted);
+            controller
+                .CoreWebView2()
+                .and_then(|core| core.cast::<ICoreWebView2_8>())
+                .and_then(|w8| w8.SetIsMuted(muted))
+                .is_ok()
+        }
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        /// Milliseconds since boot (the clock of `LASTINPUTINFO::dwTime`).
+        fn GetTickCount() -> u32;
+    }
+
+    /// The age of the last native input in milliseconds when the pointer is
+    /// over the container window `container` and its top-level window is
+    /// the foreground window; `None` otherwise (DESIGN §4.9).
+    pub(super) fn input_age_over(container: isize) -> Option<u64> {
+        let hwnd = HWND(container as *mut c_void);
+        if hwnd.is_invalid() {
+            return None;
+        }
+        // SAFETY: Win32 calls with valid out pointers; a stale handle makes
+        // them fail, which answers `None`.
+        unsafe {
+            let root = GetAncestor(hwnd, GA_ROOT);
+            if root.is_invalid() || GetForegroundWindow() != root {
+                return None;
+            }
+            let mut rect = RECT::default();
+            GetWindowRect(hwnd, &raw mut rect).ok()?;
+            let mut cursor = POINT::default();
+            GetCursorPos(&raw mut cursor).ok()?;
+            if !PtInRect(&raw const rect, cursor).as_bool() {
+                return None;
+            }
+            let mut info = LASTINPUTINFO {
+                cbSize: u32::try_from(std::mem::size_of::<LASTINPUTINFO>()).ok()?,
+                dwTime: 0,
+            };
+            if !GetLastInputInfo(&raw mut info).as_bool() {
+                return None;
+            }
+            Some(u64::from(GetTickCount().wrapping_sub(info.dwTime)))
+        }
+    }
+
+    /// The URL of a navigation's event arguments.
+    fn take_uri(read: impl FnOnce(*mut PWSTR) -> windows::core::Result<()>) -> String {
+        let mut uri = PWSTR::null();
+        if read(&raw mut uri).is_err() {
+            return String::new();
+        }
+        take_pwstr(uri)
+    }
+
+    /// Whether the local-origin guard lets a frame load `uri` (DESIGN
+    /// §4.4.9); an unparsable URL never loads.
+    fn frame_allowed(uri: &str) -> bool {
+        url::Url::parse(uri).is_ok_and(|u| crate::ads::frame_url_allowed(&u, &[]))
+    }
+
+    /// The local-origin guard on every frame: `FrameCreated` gives each new
+    /// frame a `NavigationStarting` handler that cancels what the guard
+    /// refuses. Needs `ICoreWebView2_4` and `ICoreWebView2Frame2` (the
+    /// supported WebView2 floor has both, W0c ruling 5).
+    fn guard_frames(
+        core: &ICoreWebView2,
+        label: &str,
+        reports: &Arc<dyn GuestReports>,
+    ) -> windows::core::Result<()> {
+        let core4 = core.cast::<ICoreWebView2_4>()?;
+        let label = label.to_owned();
+        let reports = Arc::clone(reports);
+        let mut token = 0_i64;
+        // SAFETY: COM calls on the webview's own thread with valid out
+        // pointers; the handlers live as long as the webview and its frames.
+        unsafe {
+            core4.add_FrameCreated(
+                &FrameCreatedEventHandler::create(Box::new(move |_, args| {
+                    let Some(args) = args else { return Ok(()) };
+                    let frame = args.Frame()?;
+                    let frame2 = frame.cast::<ICoreWebView2Frame2>()?;
+                    let label = label.clone();
+                    let reports = Arc::clone(&reports);
+                    let mut token = 0_i64;
+                    frame2.add_NavigationStarting(
+                        &FrameNavigationStartingEventHandler::create(Box::new(move |_, args| {
+                            let Some(args) = args else { return Ok(()) };
+                            let uri = take_uri(|p| args.Uri(p));
+                            if !frame_allowed(&uri) {
+                                args.SetCancel(true)?;
+                                reports.frame_blocked(&label, &uri);
+                            }
+                            Ok(())
+                        })),
+                        &raw mut token,
+                    )
+                })),
+                &raw mut token,
+            )
+        }
+    }
+
+    /// The top-level guard of a guest or consent window (local origins,
+    /// DESIGN §4.4.9) and, for ad guests (`escapes`), the escape report of a
+    /// top-level navigation off Overwolf with WebView2's activation flag and
+    /// the native input age (§4.9). The navigation is cancelled either way;
+    /// the ads host decides whether it opens in the system browser.
+    fn guard_top(
+        core: &ICoreWebView2,
+        label: &str,
+        escapes: bool,
+        container: Option<isize>,
+        reports: &Arc<dyn GuestReports>,
+    ) -> windows::core::Result<()> {
+        let nav_label = label.to_owned();
+        let nav_reports = Arc::clone(reports);
+        let mut token = 0_i64;
+        // SAFETY: COM calls on the webview's own thread with valid out
+        // pointers; the handler lives as long as the webview.
+        unsafe {
+            core.add_NavigationStarting(
+                &NavigationStartingEventHandler::create(Box::new(move |_, args| {
+                    let (label, reports) = (&nav_label, &nav_reports);
+                    let Some(args) = args else { return Ok(()) };
+                    let uri = take_uri(|p| args.Uri(p));
+                    if !frame_allowed(&uri) {
+                        args.SetCancel(true)?;
+                        reports.frame_blocked(label, &uri);
+                        return Ok(());
+                    }
+                    let Ok(url) = url::Url::parse(&uri) else {
+                        return Ok(());
+                    };
+                    if escapes
+                        && matches!(url.scheme(), "http" | "https")
+                        && !crate::ads::is_overwolf_url(&url)
+                    {
+                        let mut initiated = BOOL::default();
+                        let _ = args.IsUserInitiated(&raw mut initiated);
+                        args.SetCancel(true)?;
+                        let age = container.and_then(input_age_over);
+                        reports.top_navigation(label, &uri, initiated.as_bool(), age);
+                    }
+                    Ok(())
+                })),
+                &raw mut token,
+            )?;
+            if escapes {
+                let label = label.to_owned();
+                let reports = Arc::clone(reports);
+                let mut token = 0_i64;
+                core.add_NewWindowRequested(
+                    &NewWindowRequestedEventHandler::create(Box::new(move |_, args| {
+                        let Some(args) = args else { return Ok(()) };
+                        let uri = take_uri(|p| args.Uri(p));
+                        let mut initiated = BOOL::default();
+                        let _ = args.IsUserInitiated(&raw mut initiated);
+                        args.SetHandled(true)?;
+                        reports.popup(&label, &uri, initiated.as_bool());
+                        Ok(())
+                    })),
+                    &raw mut token,
+                )?;
             }
         }
+        Ok(())
     }
 
     /// The guest's container window (the controller's parent window, one
@@ -1707,6 +2381,12 @@ mod windows_impl {
                         })),
                         &raw mut token,
                     )?;
+                }
+                if target == HookTarget::Guest {
+                    let escapes = label.starts_with(crate::config::ADVIEW_LABEL_PREFIX);
+                    let container = container(controller).map(|h| h.0 as isize);
+                    guard_top(&core, &label, escapes, container, &reports)?;
+                    let _ = guard_frames(&core, &label, &reports);
                 }
                 let crash_label = label.clone();
                 let crash_reports = Arc::clone(&reports);
