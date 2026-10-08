@@ -393,6 +393,7 @@ Nothing is ever sent into an ad.
 | L9 | removal of a standard slot | as ow-electron | pass | pass |
 | L10 | the ad library's options on the wire, per format | equal on both hosts | pass, every scenario | pass |
 | L11 | `localStorage.owAdTestAd` in the guest origin | the same `testAd` result | pass in test mode; the live pair was not run | pass in test mode |
+| L12 | a playing rewarded slot hidden (`display: none`) for 2 s, then shown | the guest keeps playing to `complete`, no reload, as in ow-electron | pass, 3 of 3 runs in wave 4, with the same guest visibility sequence as ow-electron's run (a lab-overlay scenario, not yet in the harness) | not run |
 
 The macOS sweep W16 ran 24 scenarios with no window ever visible and the
 app never frontmost: 0 `BUG` in 23; the 24th, `perf-minimize`, was the
