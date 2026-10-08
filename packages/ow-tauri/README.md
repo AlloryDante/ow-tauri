@@ -43,8 +43,7 @@ handlers and window hooks when imported, so bundlers must not drop them.
 
 ## TypeScript setup
 
-After removing `@overwolf/ow-electron`, point TypeScript at the declarations
-this package ships. The bundler alias `electron -> ow-tauri/electron` and the
+Point TypeScript at the declarations this package ships. The bundler alias `electron -> ow-tauri/electron` and the
 `paths` entry must agree:
 
 ```jsonc
@@ -60,7 +59,13 @@ this package ships. The bundler alias `electron -> ow-tauri/electron` and the
 ```
 
 `ow-tauri/types` alone (without `paths`) also declares both modules, plus the
-global `Electron` and `overwolf` namespaces.
+global `Electron` and `overwolf` namespaces. Keep the `@overwolf/ow-electron`
+path whenever `@overwolf/ow-electron` is still installed (a project that
+builds both hosts): `@overwolf/ow-electron-packages-types` imports that
+module, and the path keeps ow-electron's own Electron typings out of the
+program. ow-tauri's runtime entries (`ow-tauri/main`, `ow-tauri/renderer`,
+`ow-tauri/electron`) declare no globals, so the ow-electron build of the same
+project compiles against ow-electron's types.
 
 Unsupported Electron members and modules (`Menu`, `Tray`, `clipboard`,
 `BrowserWindow#setVibrancy`, `dialog.showMessageBoxSync`, ...) are declared

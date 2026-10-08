@@ -95,9 +95,13 @@ npm install --save-dev @tauri-apps/cli@2.12.1 @tauri-apps/api@2.12.1
 ```
 
 Keep `@overwolf/ow-electron-packages-types` on its `latest` dist-tag: the
-ow-tauri typings re-declare the `overwolf.packages` types from it. Remove
-`@overwolf/ow-electron` itself: its Electron typings would then sit next to
-ow-tauri's `electron` declarations.
+ow-tauri typings re-declare the `overwolf.packages` types from it. A project
+that still builds for ow-electron during the move may keep
+`@overwolf/ow-electron` installed: the `@overwolf/ow-electron` entry of
+[step 5](#5-point-typescript-at-the-ow-tauri-typings)'s `paths` keeps its
+Electron typings out of the ow-tauri build, and ow-tauri's runtime entries
+declare no globals, so the ow-electron build still compiles against
+ow-electron's own types.
 
 Until ow-tauri is published, install it from a checkout. `<ow-tauri>` is
 the folder of your clone of this repository:
@@ -488,6 +492,10 @@ Write the main page yourself (`dist/main/main.html` with
 ```
 
 - The bundler alias and the TypeScript path must point at the same module.
+- Keep the `@overwolf/ow-electron` path even when the package is still
+  installed: `@overwolf/ow-electron-packages-types` imports it, and without
+  the path TypeScript would load ow-electron's own `declare module 'electron'`
+  next to ow-tauri's.
 - `ow-tauri/types` brings the global `overwolf` namespace, `Electron.*`, the
   `app.overwolf` augmentation and `document.createElement('owadview')`
   ([CONTRACT B.4](CONTRACT.md#b4-typings)).

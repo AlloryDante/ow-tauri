@@ -116,6 +116,12 @@ the npm package share one version number.
 
 ### Changed
 
+- Typings: `@overwolf/ow-electron` may stay installed next to ow-tauri (a
+  project that builds both hosts). The documented `paths` entry for
+  `@overwolf/ow-electron` keeps its Electron typings out of the ow-tauri
+  program, and the ow-electron build can import `ow-tauri/main` and
+  `ow-tauri/renderer` against ow-electron's own types; a type test checks
+  both with ow-electron's typings installed (CONTRACT B.4).
 - Invisible lab (feature `lab`, `OW_TAURI_LAB_INVISIBLE=1`, macOS): the app
   is never activated for the whole run. App activation is a no-op and
   `makeKeyAndOrderFront:` orders the window front without making it key, so

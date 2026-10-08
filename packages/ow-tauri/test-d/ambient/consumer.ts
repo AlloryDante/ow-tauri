@@ -1,6 +1,8 @@
 // Type-level check of `compilerOptions.types: ["ow-tauri/types"]` (CONTRACT
 // B.4): the ambient `electron` module wins over `paths`, so it must carry the
-// same `app.overwolf` augmentation as dist/types/electron.d.ts.
+// same `app.overwolf` augmentation as dist/types/electron.d.ts. The
+// `@overwolf/ow-electron` path stays, as documented: it keeps an installed
+// ow-electron's typings out of the program (CB-1, src/typings-coexist.test.ts).
 /// <reference path="../../src/types/index.d.ts" />
 import type { OverwolfGameEventPackage } from '@overwolf/ow-electron-packages-types';
 import electron, { app } from 'electron';

@@ -1588,7 +1588,7 @@ drags.
 
 ### B.4 Typings
 
-A port removes `@overwolf/ow-electron`, which is what supplied Electron's
+A port stops building on `@overwolf/ow-electron`, which is what supplied Electron's
 `electron.d.ts` and the global `overwolf` namespace. Code still needs those
 names: `@overwolf/ow-electron-packages-types` itself starts with
 `import '@overwolf/ow-electron'` and `import type { BrowserWindow,
@@ -1620,6 +1620,18 @@ and the path in TypeScript must agree:
   }
 }
 ```
+
+The `@overwolf/ow-electron` path is required while `@overwolf/ow-electron`
+is still installed (a project that builds both hosts during a migration):
+the packages-types `import '@overwolf/ow-electron'` would otherwise resolve
+to the installed package and add its `declare module 'electron'` and global
+`Electron` namespace to the program, next to these. With the path, the
+installed package stays out of the ow-tauri program. The runtime entries
+(`ow-tauri/main`, `ow-tauri/renderer`, `ow-tauri/electron`) declare no
+globals and no ambient modules, so the ow-electron build of the same project
+can import them and still compile against ow-electron's types.
+`src/typings-coexist.test.ts` checks both programs with ow-electron's
+typings installed.
 
 `@types/node` stays installed: the typings refer to `NodeJS.EventEmitter`, and
 main-process code still uses `events` and `path` through polyfills. `autoUpdater`
