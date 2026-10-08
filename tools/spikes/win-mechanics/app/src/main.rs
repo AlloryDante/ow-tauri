@@ -283,11 +283,12 @@ fn drive(
     // ---- B6: zoom with ZoomFactor ----
     r.insert("B6".into(), b6(app));
 
+    // ---- B5: SEC-B1 reproduction, raw vs guarded ----
+    // (before B3: B3's click navigates the raw guest to an external URL.)
+    r.insert("B5".into(), b5(app, events, guest_origin));
+
     // ---- B3: IsUserInitiated for popups + script top navigations ----
     r.insert("B3".into(), b3(app, events));
-
-    // ---- B5: SEC-B1 reproduction, raw vs guarded ----
-    r.insert("B5".into(), b5(app, events, guest_origin));
 
     // ---- B4: close timing ----
     r.insert("B4".into(), b4(app, close_facts));
