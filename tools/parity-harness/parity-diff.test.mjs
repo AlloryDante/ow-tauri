@@ -3,10 +3,12 @@
 //   node --test parity-diff.test.mjs
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { colourClass, compositeAt, sortKeys } from './lib/adformat-report.mjs';
 import {
@@ -32,6 +34,7 @@ import {
   minimizeDismiss,
   modalPhaseDiffers,
   sameElement,
+  scenarioMismatch,
   sentOsClick,
   shapingOf,
   withoutPackageRuntime,
@@ -928,4 +931,59 @@ test('a performance dismiss after a minimize is variance, other events are not',
   };
   assert.equal(classify({ ...count, minimizeDismiss: true }).class, 'variance');
   assert.equal(classify({ ...count, minimizeDismiss: false }).class, 'BUG');
+});
+
+const REWARD_ONE_SLOT = { describe: 'reward, one slot, hide during play', steps: [{ at: 15000 }] };
+const REWARD_TWO_SLOTS = { describe: 'reward, two slots', steps: [] };
+const runMeta = (host, options) => ({ runId: `${host}-run`, host, options });
+
+test('captures of different scenario definitions, layouts or modes are a mismatch', () => {
+  const base = { scenarioDef: REWARD_ONE_SLOT, layouts: ['400x300'], mode: 'test' };
+  assert.deepEqual(scenarioMismatch(runMeta('electron', base), runMeta('tauri', base)), []);
+  assert.deepEqual(
+    scenarioMismatch(
+      runMeta('electron', {
+        ...base,
+        scenarioDef: REWARD_TWO_SLOTS,
+        layouts: ['400x300', '400x600'],
+      }),
+      runMeta('tauri', base),
+    ),
+    ['scenarioDef', 'layouts'],
+  );
+  assert.deepEqual(
+    scenarioMismatch(runMeta('electron', { ...base, mode: 'live' }), runMeta('tauri', base)),
+    ['mode'],
+  );
+  // An older capture without the field is not compared on it.
+  assert.deepEqual(
+    scenarioMismatch(runMeta('electron', { mode: 'test' }), runMeta('tauri', base)),
+    [],
+  );
+  assert.deepEqual(scenarioMismatch(null, runMeta('tauri', base)), []);
+});
+
+test('the CLI refuses a scenario mismatch unless it is allowed, and then flags it', () => {
+  const root = mkdtempSync(join(tmpdir(), 'parity-diff-scenario-'));
+  const capture = (name, meta) => {
+    const dir = join(root, name);
+    mkdirSync(dir);
+    writeFileSync(join(dir, 'meta.json'), JSON.stringify(meta));
+    return dir;
+  };
+  const base = { scenarioDef: REWARD_ONE_SLOT, layouts: ['400x300'], mode: 'test' };
+  const e = capture('E', runMeta('electron', { ...base, scenarioDef: REWARD_TWO_SLOTS }));
+  const t = capture('T', runMeta('tauri', base));
+  const script = fileURLToPath(new URL('./parity-diff.mjs', import.meta.url));
+  const refused = spawnSync(process.execPath, [script, e, t], { encoding: 'utf8' });
+  assert.equal(refused.status, 2);
+  assert.match(refused.stderr, /differ in scenarioDef/);
+  assert.equal(existsSync(join(t, 'parity-diff.json')), false);
+
+  const allowed = spawnSync(process.execPath, [script, e, t, '--allow-scenario-mismatch'], {
+    encoding: 'utf8',
+  });
+  assert.notEqual(allowed.status, 2, allowed.stderr);
+  assert.match(allowed.stdout, /Warning: the runs differ in scenarioDef/);
+  assert.equal(existsSync(join(t, 'parity-diff.json')), true);
 });

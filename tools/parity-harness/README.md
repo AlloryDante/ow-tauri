@@ -180,9 +180,11 @@ node ci/windows-lab.mjs --scenarios lab-layers,audio
 ## Comparing the hosts (`parity-diff.mjs`)
 
 ```sh
-node parity-diff.mjs captures/<ow-electron run> captures/<ow-tauri run> [--tolerance-ms 1500] [--burst-ms 250]
+node parity-diff.mjs captures/<ow-electron run> captures/<ow-tauri run> [--tolerance-ms 1500] [--burst-ms 250] [--allow-scenario-mismatch]
 node --test parity-diff.test.mjs
 ```
+
+Both runs must use the same scenario definition, layouts and mode (`options.scenarioDef`, `layouts` and `mode` in each `meta.json`). When they differ, for example a baseline recorded before the scenario was edited, every difference of definition would read as a BUG, so the diff refuses with exit 2 and names the fields. `--allow-scenario-mismatch` runs it anyway and puts a warning at the top of `parity-diff.md` (`scenarioMismatch` in `parity-diff.json`). A capture's folder name can differ from its `runId`; pick the baseline by its `meta.json`.
 
 It compares two captures of the same scenario after normalising volatile values (timestamps, session ids, consent strings, cache-busters, the host label) and lists every observable difference: host requests (set, order, query and `Extra` fields, body, header order and values, cookies, status, protocol), requests sent together, ad document headers, consent pages and cookies, the state file, each guest's `__overwolf__` and page state, element events and API, host-to-guest messages and the visibility sequence. Each difference is classified:
 

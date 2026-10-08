@@ -81,7 +81,9 @@ Two halves, diffed field by field:
    `intended:deviation` ([Deviations](#deviations)), `variance` (it differs
    between two ow-electron runs too: ad content, HTTP cache, playback speed),
    `not-mirrored` (a harness step the Tauri edition cannot run), or `BUG`
-   (anything else). A run passes when no `BUG` remains. Ad-format runs are
+   (anything else). A run passes when no `BUG` remains. It refuses two
+   captures whose scenario definition, layouts or mode differ, since every
+   difference of definition would read as a `BUG`. Ad-format runs are
    also compared on per-element event names, order, counts and payload keys,
    DOM state and removal timings, the ad library's options on the wire, guest
    bounds, z-order, pass-through and mute timelines

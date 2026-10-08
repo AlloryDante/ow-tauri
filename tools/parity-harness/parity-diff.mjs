@@ -16,7 +16,12 @@
 // `length`) compare within --tolerance-ms; requests ow-electron sends
 // together must leave ow-tauri within --burst-ms of each other.
 //
-//   node parity-diff.mjs captures/<electron-run> captures/<tauri-run> [--tolerance-ms 1500] [--burst-ms 250]
+//   node parity-diff.mjs captures/<electron-run> captures/<tauri-run> [--tolerance-ms 1500] [--burst-ms 250] [--allow-scenario-mismatch]
+//
+// The two runs must use the same scenario definition, layouts and mode
+// (meta.json `options`); otherwise every difference of definition would
+// read as a BUG, so the diff refuses (exit 2) unless
+// --allow-scenario-mismatch is given, and then flags the mismatch.
 //
 // Ad formats (sections adformat-*): per element the lifecycle order, payload
 // keys, removal and `destroyed`, the DOM state before and after the first
@@ -2300,9 +2305,27 @@ function compareLive(e, t, out) {
     });
 }
 
+/** The run options that must match for a like-for-like diff. */
+export const SCENARIO_FIELDS = ['scenarioDef', 'layouts', 'mode'];
+
+/**
+ * The run options (of SCENARIO_FIELDS) on which the two captures' meta.json
+ * differ. A field missing from either capture (an older capture) is not
+ * compared.
+ */
+export function scenarioMismatch(electronMeta, tauriMeta) {
+  const a = electronMeta?.options ?? {};
+  const b = tauriMeta?.options ?? {};
+  return SCENARIO_FIELDS.filter(
+    (field) =>
+      a[field] !== undefined && b[field] !== undefined && stable(a[field]) !== stable(b[field]),
+  );
+}
+
 export function diffCaptures(electronDir, tauriDir, { tolerance = 1500, burst = 250 } = {}) {
   const e = loadCapture(electronDir);
   const t = loadCapture(tauriDir);
+  const mismatch = scenarioMismatch(e.meta, t.meta);
   const raw = [];
   compareIdentity(e, t, raw);
   compareActions(e, t, raw);
@@ -2329,6 +2352,7 @@ export function diffCaptures(electronDir, tauriDir, { tolerance = 1500, burst = 
       options: t.meta.options,
       everVisible: t.windowEnd?.everVisible ?? null,
     },
+    scenarioMismatch: mismatch,
     tolerance,
     burst,
     counts,
@@ -2349,6 +2373,12 @@ export function renderMarkdown(result) {
     '',
     `Tolerance ${result.tolerance} ms, bursts ${result.burst} ms. Tauri windows ever visible: ${result.tauri.everVisible}.`,
     '',
+    ...(result.scenarioMismatch?.length
+      ? [
+          `**Warning: the runs differ in ${result.scenarioMismatch.join(', ')}; differences of definition show as BUG.**`,
+          '',
+        ]
+      : []),
     `Counts: ${
       Object.entries(result.counts)
         .map(([k, v]) => `${k} ${v}`)
@@ -2381,13 +2411,27 @@ function main() {
   };
   const tolerance = option('--tolerance-ms', 1500);
   const burst = option('--burst-ms', 250);
+  const allowIndex = args.indexOf('--allow-scenario-mismatch');
+  const allowMismatch = allowIndex >= 0;
+  if (allowMismatch) args.splice(allowIndex, 1);
   if (args.length !== 2) {
     console.error(
-      'Usage: node parity-diff.mjs captures/<electron-run> captures/<tauri-run> [--tolerance-ms 1500] [--burst-ms 250]',
+      'Usage: node parity-diff.mjs captures/<electron-run> captures/<tauri-run> [--tolerance-ms 1500] [--burst-ms 250] [--allow-scenario-mismatch]',
     );
     exit(2);
   }
   const [electronDir, tauriDir] = args.map((a) => resolve(a));
+  const mismatch = scenarioMismatch(
+    readJson(join(electronDir, 'meta.json')),
+    readJson(join(tauriDir, 'meta.json')),
+  );
+  if (mismatch.length > 0 && !allowMismatch) {
+    console.error(
+      `parity-diff: the runs differ in ${mismatch.join(', ')} (meta.json options), so they are not like for like; ` +
+        'pick a baseline of the same scenario definition, or pass --allow-scenario-mismatch.',
+    );
+    exit(2);
+  }
   const result = diffCaptures(electronDir, tauriDir, { tolerance, burst });
   writeFileSync(join(tauriDir, 'parity-diff.json'), JSON.stringify(result, null, 2) + '\n');
   const md = renderMarkdown(result);
