@@ -17,6 +17,10 @@ use crate::host::{Core, LOG_TARGET};
 use crate::identity::{EmailHashes, email_hashes};
 use crate::types::{CmpWindowOptions, Info};
 
+/// The warning of a `disableAnonymousAnalytics()` call made after the launch
+/// burst was sent (DESIGN §4.8).
+const LATE_DISABLE_WARNING: &str = "too late for this launch's burst; use plugins.overwolf.analytics.disableAnonymous, the Builder, or setAnonymousAnalyticsPreference(false)";
+
 /// The plugin's per-app state, reachable from any Tauri manager through
 /// [`OverwolfExt::overwolf`] once the plugin's setup has run.
 pub struct Overwolf<R: Runtime>(pub(crate) Arc<Core<R>>);
@@ -350,10 +354,7 @@ impl<R: Runtime> Overwolf<R> {
                 .late_disable_warned
                 .swap(true, Ordering::SeqCst)
         {
-            log::warn!(
-                target: LOG_TARGET,
-                "disableAnonymousAnalytics() was called after the launch analytics were sent; call it in the app's setup, or use setAnonymousAnalyticsPreference(false) for the next launch"
-            );
+            log::warn!(target: LOG_TARGET, "{LATE_DISABLE_WARNING}");
         }
     }
 
@@ -569,5 +570,16 @@ pub trait OverwolfExt<R: Runtime> {
 impl<R: Runtime, T: Manager<R>> OverwolfExt<R> for T {
     fn overwolf(&self) -> &Overwolf<R> {
         self.state::<Overwolf<R>>().inner()
+    }
+}
+
+#[cfg(test)]
+mod late_warning_tests {
+    #[test]
+    fn the_late_disable_warning_is_the_design_text() {
+        assert_eq!(
+            super::LATE_DISABLE_WARNING,
+            "too late for this launch's burst; use plugins.overwolf.analytics.disableAnonymous, the Builder, or setAnonymousAnalyticsPreference(false)"
+        );
     }
 }

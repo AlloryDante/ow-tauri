@@ -12,6 +12,17 @@
 //! The caller checks the shape of what is read
 //! ([`crate::analytics::user_agent::accepts_native`]): an app-set user agent
 //! is never used for Overwolf's requests.
+//!
+//! §4.10's third macOS leg, an asynchronous `navigator.userAgent` read in the
+//! page, is left out on purpose (optimised, same outcome): on macOS only the
+//! exact `WebKit` template passes the shape check, and the synchronous reads
+//! above already return that template for every webview that has no custom
+//! user agent, so the page read could only confirm it or return an app-set
+//! value the check refuses anyway.
+//!
+//! On Windows the controller is reached through
+//! [`own_controller`](crate::platform::webview::own_controller), never the
+//! webview library's own binding (DESIGN [R2]).
 
 use tauri::{Runtime, Webview};
 
@@ -29,7 +40,8 @@ pub(crate) fn read_native<R: Runtime>(
         #[cfg(target_os = "macos")]
         let ua = macos::user_agent(pw.inner());
         #[cfg(windows)]
-        let ua = windows_impl::user_agent(&pw.controller());
+        let ua = crate::platform::webview::own_controller(&pw)
+            .and_then(|controller| windows_impl::user_agent(&controller));
         #[cfg(not(any(target_os = "macos", windows)))]
         let ua = {
             let _ = pw;

@@ -10,6 +10,10 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
+mod rules;
+
+pub use rules::*;
+
 /// The ad page every guest loads (CONTRACT D).
 pub const ADVIEW_URL: &str = "https://www.overwolf.com/monsdk/electron/latest/adview.html";
 
@@ -726,6 +730,50 @@ impl OpenBudget {
             self.gesture_at = None;
         }
         Ok(())
+    }
+}
+
+impl OpenBudget {
+    /// [`OpenBudget::try_open`] under the per-app cap too (DESIGN §4.9):
+    /// the open is counted in both budgets only when both allow it.
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::ads::{AppOpenCap, OpenBudget, OpenRefusal};
+    /// let url: url::Url = "https://advertiser.example/".parse().unwrap();
+    /// let mut app = AppOpenCap::new(1);
+    /// let (mut a, mut b) = (OpenBudget::new(5_000, 20), OpenBudget::new(5_000, 20));
+    /// assert_eq!(a.try_open_capped(&mut app, 0, &url, Some(true)), Ok(()));
+    /// assert_eq!(b.try_open_capped(&mut app, 1, &url, Some(true)), Err(OpenRefusal::RateLimited));
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// The reason the open is refused.
+    pub fn try_open_capped(
+        &mut self,
+        app: &mut AppOpenCap,
+        now_ms: u64,
+        url: &url::Url,
+        user_initiated: Option<bool>,
+    ) -> Result<(), OpenRefusal> {
+        if !app.allows(now_ms) {
+            // Checked first so a refused open never spends the guest's
+            // activation.
+            if openable_url(url) {
+                return Err(OpenRefusal::RateLimited);
+            }
+            return Err(OpenRefusal::Url);
+        }
+        self.try_open(now_ms, url, user_initiated)?;
+        app.record(now_ms);
+        Ok(())
+    }
+
+    /// Whether an activation is open at `now_ms` (lab traces read it).
+    #[must_use]
+    pub fn armed(&self, now_ms: u64) -> bool {
+        self.gesture_at
+            .is_some_and(|t| now_ms.saturating_sub(t) <= self.window_ms)
     }
 }
 

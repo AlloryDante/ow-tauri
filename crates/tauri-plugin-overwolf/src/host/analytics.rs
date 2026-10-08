@@ -289,10 +289,6 @@ impl UserAgent {
     }
 }
 
-/// The native read of an app webview's user agent.
-#[path = "../platform/ua.rs"]
-mod native_ua;
-
 /// Starts `<UA>` discovery at Ready (DESIGN §4.10): reads the user agent of
 /// the first app webview natively, without blocking the main thread, and
 /// makes `<UA>` final. A read that fails or does not have the platform
@@ -312,7 +308,7 @@ pub(crate) fn start_user_agent_discovery<R: Runtime>(core: &Arc<Core<R>>) {
         return;
     };
     let weak = Arc::downgrade(core);
-    let read = native_ua::read_native(&webview, move |ua| {
+    let read = crate::platform::ua::read_native(&webview, move |ua| {
         if let Some(core) = weak.upgrade() {
             accept_native_user_agent(&core, ua.as_deref());
         }

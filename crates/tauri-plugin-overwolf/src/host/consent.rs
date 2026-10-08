@@ -46,13 +46,6 @@ pub(crate) const CMP_STARTUP_LABEL: &str = "ow-cmp-startup";
 /// The hidden default-consent window's label (D.6.4).
 pub(crate) const CMP_DEFAULT_LABEL: &str = "ow-cmp-default";
 
-/// The browser arguments of the ads environment (DESIGN §4.4.2), which the
-/// consent windows share with the ad guests on Windows: `WebView2` refuses
-/// a second environment on the same data folder with other arguments, so
-/// this text must equal the guests' exactly.
-#[cfg_attr(not(windows), allow(dead_code, reason = "WebView2 only"))]
-pub(crate) const ADS_PARITY_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-web-security --allow-running-insecure-content";
-
 /// Behaviours that wait for a W3 harness observation of ow-electron
 /// (DESIGN §4.2, `last-window-during-consent`). Each default is the
 /// behaviour DESIGN-v2 specifies until then.
@@ -209,16 +202,6 @@ pub(crate) fn navigation_allowed(label: &str, url: &Url, settings_origin: Option
         "about" => url.as_str() == "about:blank",
         _ => false,
     }
-}
-
-/// The browser arguments of the ads environment: [`ADS_PARITY_ARGS`] and
-/// `ads.browserArgs`.
-#[cfg_attr(not(windows), allow(dead_code, reason = "WebView2 only"))]
-pub(crate) fn ads_browser_args(extra: &[String]) -> String {
-    std::iter::once(ADS_PARITY_ARGS)
-        .chain(extra.iter().map(String::as_str))
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// The consent page facts of this launch (D.6.1, D.6.4).
@@ -824,7 +807,12 @@ fn cmp_builder<'a, R: Runtime>(
     {
         builder = builder
             .data_directory(core.identity.ads_data_dir.clone())
-            .additional_browser_args(&ads_browser_args(&core.identity.config.ads.browser_args));
+            // The consent windows share the ad guests' environment
+            // (DESIGN §4.4.2): `WebView2` refuses a second environment on
+            // the same data folder with other arguments.
+            .additional_browser_args(&crate::ads::ads_browser_args(
+                &core.identity.config.ads.browser_args,
+            ));
     }
     builder
 }

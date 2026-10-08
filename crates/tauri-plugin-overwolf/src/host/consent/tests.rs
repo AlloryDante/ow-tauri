@@ -116,12 +116,30 @@ fn the_shim_carries_its_configuration_token() {
 
 #[test]
 fn the_ads_environment_arguments() {
+    use crate::ads::{ADS_PARITY_ARGS, ads_browser_args};
     assert_eq!(ads_browser_args(&[]), ADS_PARITY_ARGS);
     assert_eq!(
         ads_browser_args(&["--lang=de".into()]),
         format!("{ADS_PARITY_ARGS} --lang=de")
     );
     assert!(ADS_PARITY_ARGS.contains("--disable-web-security"));
+}
+
+/// DESIGN §4.4.9: consent windows never load a local-origin document.
+#[test]
+fn consent_windows_refuse_local_origins() {
+    for url in [
+        "tauri://localhost/index.html",
+        "http://tauri.localhost/",
+        "http://localhost:1420/",
+        "http://asset.localhost/x",
+    ] {
+        let url: Url = url.parse().unwrap();
+        for label in [CMP_SETTINGS_LABEL, CMP_STARTUP_LABEL, CMP_DEFAULT_LABEL] {
+            assert!(!navigation_allowed(label, &url, None), "{label} {url}");
+        }
+        assert!(!crate::ads::frame_url_allowed(&url, &[]), "{url}");
+    }
 }
 
 #[test]
