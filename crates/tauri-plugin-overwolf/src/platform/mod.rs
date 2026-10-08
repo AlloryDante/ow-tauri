@@ -6,6 +6,8 @@
 pub(crate) mod display;
 #[cfg(feature = "plugin")]
 pub(crate) mod graphics;
+#[cfg(all(target_os = "macos", feature = "plugin"))]
+pub(crate) mod input;
 #[cfg(feature = "plugin")]
 pub(crate) mod machine;
 #[cfg(all(target_os = "macos", feature = "plugin"))]

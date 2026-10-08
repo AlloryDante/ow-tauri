@@ -5,7 +5,7 @@
 //! | Hook | Modules |
 //! |---|---|
 //! | `on_window_ready` | windows |
-//! | `on_webview_ready` | windows, ads |
+//! | `on_webview_ready` | windows, `platform::input` (macOS), ads |
 //! | `on_page_load` | windows (app webviews), ads (all), consent (`ow-cmp*`) |
 //! | `on_navigation` | ads (`owad-*`), consent (`ow-cmp*`) |
 //! | `on_event` | lifecycle, windows, ads, consent |
@@ -27,6 +27,8 @@ pub(crate) fn on_window_ready<R: Runtime>(core: &Arc<Core<R>>, window: &Window<R
 /// `on_webview_ready`.
 pub(crate) fn on_webview_ready<R: Runtime>(core: &Arc<Core<R>>, webview: &Webview<R>) {
     core.windows.webview_ready(core, webview);
+    #[cfg(target_os = "macos")]
+    crate::platform::input::on_webview_ready(core, webview);
     core.ads.webview_ready(core, webview);
 }
 
@@ -75,5 +77,61 @@ pub(crate) fn on_event<R: Runtime>(core: &Arc<Core<R>>, event: &RunEvent) {
             core.consent.window_event(core, label, event);
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+#[cfg(target_os = "macos")]
+mod tests {
+    use std::path::PathBuf;
+
+    use tauri::test::{MockRuntime, mock_builder, mock_context, noop_assets};
+    use tauri::{App, WebviewUrl, WebviewWindowBuilder};
+
+    use crate::platform::input::{KeyFix, tests::seen};
+
+    /// A mock app with the plugin; `key_fix` is `Builder::macos_key_fix`.
+    fn app(name: &str, key_fix: bool) -> (App<MockRuntime>, PathBuf) {
+        let dir = crate::state::test_dir(name);
+        let mut context = mock_context(noop_assets());
+        context.config_mut().plugins.0.insert(
+            "overwolf".into(),
+            serde_json::json!({
+                "author": "Example Studio",
+                "name": "Example App",
+                "state": { "appDataDir": dir },
+                "analytics": { "muidStrategy": "per-install" }
+            }),
+        );
+        let mut builder = crate::Builder::new().macos_key_fix(key_fix);
+        let options = builder.options_mut();
+        options.os_queries = false;
+        options.runtime_capabilities = false;
+        options.argv = Some(vec!["app".into()]);
+        let app = mock_builder()
+            .plugin(builder.build())
+            .build(context)
+            .unwrap();
+        (app, dir)
+    }
+
+    #[test]
+    fn webview_ready_reaches_the_macos_key_fix() {
+        let (app, dir) = app("dispatch-key-fix-on", true);
+        WebviewWindowBuilder::new(&app, "key-fix-on", WebviewUrl::default())
+            .build()
+            .unwrap();
+        std::fs::remove_dir_all(dir).ok();
+        assert_eq!(seen("key-fix-on"), [KeyFix::SpliceAndFocus]);
+    }
+
+    #[test]
+    fn the_escape_hatch_reaches_the_macos_key_fix() {
+        let (app, dir) = app("dispatch-key-fix-off", false);
+        WebviewWindowBuilder::new(&app, "key-fix-off", WebviewUrl::default())
+            .build()
+            .unwrap();
+        std::fs::remove_dir_all(dir).ok();
+        assert_eq!(seen("key-fix-off"), [KeyFix::Off]);
     }
 }

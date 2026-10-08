@@ -55,6 +55,8 @@ impl Builder {
             options: SetupOptions {
                 os_queries: true,
                 runtime_capabilities: true,
+                #[cfg(target_os = "macos")]
+                macos_key_fix: true,
                 ..SetupOptions::default()
             },
         }
@@ -151,6 +153,24 @@ impl Builder {
         self
     }
 
+    /// macOS: whether the plugin repairs keyboard input in Tauri's child
+    /// webviews (DESIGN §4.6a). On by default: every webview gets a key
+    /// responder that offers key equivalents to the main menu, and an app
+    /// webview gets the focus when its window opens, so typing and page
+    /// shortcuts work as they do without Tauri's `unstable` feature. Apps
+    /// that ship their own fix pass `false`; ad guests stay unfocusable
+    /// either way.
+    ///
+    /// ```
+    /// let builder = tauri_plugin_overwolf::Builder::new().macos_key_fix(false);
+    /// # let _ = builder;
+    /// ```
+    #[cfg(target_os = "macos")]
+    pub fn macos_key_fix(mut self, enabled: bool) -> Self {
+        self.options.macos_key_fix = enabled;
+        self
+    }
+
     /// The embedded `dev-app-update.yml` a debug build reads instead of the
     /// configured feed (CONTRACT I.1). Ignored in release builds.
     ///
@@ -242,4 +262,24 @@ fn setup<R: Runtime>(
     #[cfg(target_os = "macos")]
     crate::platform::terminate::warn_if_unwired(core.options.forwards_terminate);
     Ok(())
+}
+
+#[cfg(test)]
+#[cfg(target_os = "macos")]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_macos_key_fix_is_on_by_default_and_can_be_turned_off() {
+        assert!(Builder::new().options.macos_key_fix);
+        assert!(Builder::default().options.macos_key_fix);
+        assert!(!Builder::new().macos_key_fix(false).options.macos_key_fix);
+        assert!(
+            Builder::new()
+                .macos_key_fix(false)
+                .macos_key_fix(true)
+                .options
+                .macos_key_fix
+        );
+    }
 }

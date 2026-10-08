@@ -48,6 +48,9 @@ pub(crate) struct SetupOptions {
     pub(crate) exclude_windows: Vec<String>,
     /// macOS: the app forwards the web content terminate hook itself.
     pub(crate) forwards_terminate: bool,
+    /// macOS: `Builder::macos_key_fix` (on by default, DESIGN §4.6a [R1]).
+    #[cfg(target_os = "macos")]
+    pub(crate) macos_key_fix: bool,
     /// The embedded `dev-app-update.yml` (CONTRACT I.1).
     #[allow(dead_code, reason = "the update client (W3) reads it")]
     pub(crate) dev_update_config: Option<&'static str>,
@@ -68,8 +71,8 @@ pub(crate) struct SetupOptions {
 
 impl std::fmt::Debug for SetupOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SetupOptions")
-            .field("test_ad", &self.test_ad)
+        let mut s = f.debug_struct("SetupOptions");
+        s.field("test_ad", &self.test_ad)
             .field(
                 "disable_anonymous_analytics",
                 &self.disable_anonymous_analytics,
@@ -78,8 +81,10 @@ impl std::fmt::Debug for SetupOptions {
             .field("disable_ads_fpd", &self.disable_ads_fpd)
             .field("host_label", &self.host_label)
             .field("exclude_windows", &self.exclude_windows)
-            .field("forwards_terminate", &self.forwards_terminate)
-            .field("transport", &self.transport.is_some())
+            .field("forwards_terminate", &self.forwards_terminate);
+        #[cfg(target_os = "macos")]
+        s.field("macos_key_fix", &self.macos_key_fix);
+        s.field("transport", &self.transport.is_some())
             .field("os_queries", &self.os_queries)
             .finish_non_exhaustive()
     }
