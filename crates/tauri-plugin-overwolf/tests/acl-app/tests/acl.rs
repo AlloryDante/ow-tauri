@@ -2080,8 +2080,8 @@ fn a_minimized_window_hides_its_guests_until_restored() {
     ow.test_window_minimized(1, true);
     assert_eq!(state("embedderMinimized"), true);
     assert_eq!(state("visibilityState"), "hidden");
-    // ow-electron [OBS]: window-minimized, then window-hidden; on Windows
-    // window-minimized only.
+    // ow-electron [OBS]: hidden, then window-minimized and window-hidden;
+    // on Windows window-minimized only.
     let on_minimize = minimize_messages();
     assert_eq!(messages()[before..], on_minimize);
     // Shown but still minimized: still hidden.
@@ -2098,10 +2098,10 @@ fn a_minimized_window_hides_its_guests_until_restored() {
     assert_eq!(messages()[hidden..], [json!("window-minimized")]);
 }
 
-/// The host messages a guest gets when its embedder window is minimized:
-/// `window-minimized`, then `window-hidden`, except on Windows, where
-/// ow-electron sends `window-minimized` only, after the guest turned hidden
-/// (Windows lab, `perf-minimize`).
+/// The host messages a guest gets when its embedder window is minimized,
+/// after its document turned hidden: `window-minimized`, then
+/// `window-hidden`, except on Windows, where ow-electron sends
+/// `window-minimized` only (Windows and macOS labs, `perf-minimize`).
 fn minimize_messages() -> Vec<Value> {
     if cfg!(windows) {
         vec![json!("window-minimized")]
@@ -2162,14 +2162,10 @@ fn a_window_animating_into_the_dock_is_minimized_not_hidden() {
     assert_eq!(state("visibilityState"), "hidden");
     let on_minimize = minimize_messages();
     assert_eq!(messages()[before..], on_minimize);
-    // ow-electron (observed): the messages reach the guest before its
-    // document turns hidden; on Windows after it.
-    let mut expected = on_minimize.clone();
-    if cfg!(windows) {
-        expected.insert(0, json!("hidden"));
-    } else {
-        expected.push(json!("hidden"));
-    }
+    // ow-electron (observed on Windows and macOS): the guest document turns
+    // hidden before the messages reach it.
+    let mut expected = vec![json!("hidden")];
+    expected.extend(on_minimize.iter().cloned());
     assert_eq!(steps()[steps_before..], expected);
     // The poll then sees it minimized: nothing more.
     ow.test_poll_window(1, false, true);

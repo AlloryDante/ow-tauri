@@ -170,15 +170,16 @@ enum Next {
     ScheduleReload(u64),
 }
 
-/// How a minimize reaches the guests (D.5), as ow-electron does it on
-/// Windows: the guest document turns `hidden` first and then gets
-/// `window-minimized` only, no `window-hidden` [OBS: Windows lab,
-/// `perf-minimize`]. On macOS (and Linux, not observed) the guest gets
-/// `window-minimized` and `window-hidden` first and then turns `hidden`
-/// [OBS]. A running performance ad then stops; on Windows ow-electron's
-/// sends `performance_ad_dismiss` before its `shutdown` in some runs and
-/// not in others [OBS: Windows lab, `perf-minimize`].
-pub(crate) const MINIMIZE_HIDES_FIRST: bool = cfg!(windows);
+/// How a minimize reaches the guests (D.5), as ow-electron does it: the
+/// guest document turns `hidden` first and then gets `window-minimized`,
+/// and on macOS (and Linux, not observed) `window-hidden` after it; on
+/// Windows no `window-hidden` [OBS: Windows and macOS labs,
+/// `perf-minimize`: ow-electron's guest visibility change to `hidden`
+/// precedes both messages in every run]. A running performance ad then
+/// stops; ow-electron's sends `performance_ad_dismiss` before its
+/// `shutdown` in some runs and not in others on Windows, and did in every
+/// macOS run [OBS].
+pub(crate) const MINIMIZE_SENDS_WINDOW_HIDDEN: bool = !cfg!(windows);
 
 /// Whether a minimize also hides the guest webviews natively until the
 /// restore (Windows). A minimized ow-electron window has an empty client
@@ -1482,14 +1483,13 @@ impl<R: Runtime> Host<R> {
     }
 
     /// The embedder window `id` was minimized or restored: its guests'
-    /// documents are hidden while it is minimized. On minimize each guest
-    /// gets a `window-minimized` and a `window-hidden` message, in that
-    /// order, and then its document turns `hidden`; on Windows its document
-    /// turns `hidden` first and it gets `window-minimized` only (see
-    /// [`MINIMIZE_HIDES_FIRST`]) and its webview is hidden natively until
-    /// the restore ([`MINIMIZE_HIDES_NATIVELY`]). No `window-hidden` when
-    /// the window was already hidden. Nothing is sent on restore beyond the
-    /// visibility (D.5).
+    /// documents are hidden while it is minimized. On minimize each guest's
+    /// document turns `hidden`, then it gets a `window-minimized` and a
+    /// `window-hidden` message, in that order; on Windows `window-minimized`
+    /// only (see [`MINIMIZE_SENDS_WINDOW_HIDDEN`]), and its webview is
+    /// hidden natively until the restore ([`MINIMIZE_HIDES_NATIVELY`]). No
+    /// `window-hidden` when the window was already hidden. Nothing is sent
+    /// on restore beyond the visibility (D.5).
     pub(crate) fn ads_window_minimized(self: &Arc<Self>, id: u32, minimized: bool) {
         for l in self.guests_of_window(id) {
             let (changed, already_hidden, visible) = self.with_core(|c| {
@@ -1505,18 +1505,13 @@ impl<R: Runtime> Host<R> {
             {
                 self.set_guest_native_visibility(&l, show);
             }
-            if changed && minimized && MINIMIZE_HIDES_FIRST {
-                self.sync_visibility(&l, false);
-                self.guest_deliver(&l, crate::ads::WINDOW_MINIMIZED, None);
-                continue;
-            }
+            self.sync_visibility(&l, false);
             if changed && minimized {
                 self.guest_deliver(&l, crate::ads::WINDOW_MINIMIZED, None);
-                if !already_hidden {
+                if MINIMIZE_SENDS_WINDOW_HIDDEN && !already_hidden {
                     self.guest_deliver(&l, "window-hidden", None);
                 }
             }
-            self.sync_visibility(&l, false);
         }
     }
 

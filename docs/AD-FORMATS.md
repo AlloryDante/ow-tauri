@@ -251,8 +251,9 @@ Other paths:
   enforces neither size.
 - **A second interstitial** while one is up is removed at once, with no ad
   and no event.
-- **Minimize**: the ad may dismiss itself (`performance_ad_dismiss`), then
-  shuts down. ow-electron varies here too.
+- **Minimize**: the ad dismisses itself (`performance_ad_dismiss`), then
+  shuts down; on Windows the dismiss comes in some runs only, on ow-electron
+  too.
 - Documented events that need a user's click and were never seen in the lab:
   `performance_ad_dismiss` (on a close), `performance_ad_clicked`,
   `performance_ad_video_complete`, `performance_ad_video_skipped`.

@@ -227,14 +227,14 @@ Status values:
 | `setPageUrl()`, `sendCommand()` | forwarded to the ad page as private messages; no visible effect | identical; `setPageUrl` also sets `pageurl` for the next load | B.3.3, D.5 | Target |
 | element events | plain `Event`, data copied as `Object.assign` copies it (a string payload spreads per character), `display_ad_loaded` twice, sub-frame `did-fail-load`; Electron's standard `<webview>` events also forwarded | identical for the ad events; `render-process-gone`, navigation and console events | B.3.5 | Target; Deviation (`did-frame-*`, `media-*`) |
 | element removed or moved after attach | dead: the guest detaches and the element never attaches again; a plain `destroyed` only when it is back in the document by then (a move) | identical | B.3.4, B.3.5 | Target |
-| host to guest messages | `consent` (twice), `customTracking` (resent per reload), `eHashes`, `window-minimized` (minimize), `window-hidden` (also on minimize, except on Windows, where the guest turns hidden before `window-minimized`), `sendCommand`, `setPageUrl` | identical | D.5 | Target |
+| host to guest messages | `consent` (twice), `customTracking` (resent per reload), `eHashes`, `window-minimized` (minimize), `window-hidden` (also on minimize, after `window-minimized`, except on Windows; on every platform the guest turns hidden before `window-minimized`), `sendCommand`, `setPageUrl` | identical | D.5 | Target |
 | email hashes | `{sha1, md5, sha256}` lower-case hex, trimmed and lower-cased input; sent as `eHashes`, never in `__overwolf__` | identical | A.2.2, D.5 | Target; R3-6 (gmail rule) |
 | ad document request | `Referer: https://www.overwolf.com/<uid>`, `Origin`, full header order, cookies | identical | D.8.2 | Target (Windows, macOS, Linux) |
 | subresource `Origin` | forced on every guest request | Windows identical | D.8.3 | Target (Windows); Gap (macOS); Gap until a web extension (Linux) |
 | `x-ow-*` on `owads.min.js` | `x-ow-uid`, `x-ow-phase`, `x-ow-window` | Windows identical | D.8.3 | Target (Windows); Gap (macOS, Linux); Overwolf |
 | guest web security | off; insecure content allowed | off on Windows and Linux | D.8.1 | Target (Windows, Linux); Gap (macOS) |
 | hidden embedder | loads, never fills | identical | B.3.4 | Target |
-| visibility | `hidden` for `display: none`, scrolled out, window hidden or minimized; screen position ignored; the page reloads itself after `hidden`; guests hidden before their window closes | identical signals and `visibilitychange` events (one in the old state on hide, three on show); the hidden main frame's timeouts of 1 s or more aligned to 1 s wake-ups as in Chromium (shorter timers and the ad frames run on time); 0.5 intersection ratio; a reload asked for while hidden is held until 2.5 s after `hidden` or until visible again; Windows: guests hidden natively while minimized | B.3.4, D.5 | Partial (sub-100 ms hides read with more jitter on Windows) |
+| visibility | `hidden` for `display: none`, scrolled out, window hidden or minimized; screen position ignored; the page reloads itself after `hidden`; guests hidden before their window closes | identical signals and `visibilitychange` events (one in the old state on hide, three on show; the engine's own events are stopped); the hidden main frame's timeouts of 1 s or more aligned to 1 s wake-ups as in Chromium (shorter timers and the ad frames run on time); 0.5 intersection ratio; a reload asked for while hidden is held until 2.5 s after `hidden` or until visible again; Windows: guests hidden natively while minimized | B.3.4, D.5 | Partial (sub-100 ms hides read with more jitter on Windows) |
 | crash recovery | immediate reload, no cap, `render-process-gone` | identical | D.7 | Target |
 | load errors | main frame reloaded every 5000 ms, no cap, no analytics | identical | D.7 | Target |
 | test and live | identical shaping, only `testAd` differs | identical | D.7 | Target |
@@ -258,7 +258,7 @@ Windows lab (27 scenarios), both against ow-electron 42.11.4.
 | interstitial stacking | above every other ad (`z-index: 999999`) | the newest performance guest raised to the top after every mount | B.3.4 | Target (Windows, macOS); Gap (Linux) |
 | interstitial end | `shutdown`, then the element leaves the document (+185 ms); no-fill sends `shutdown` alone; under 500 x 500 `performance_ad_error` (a string), then `shutdown` | identical (removal +1 ms, in the next task) | B.3.4, B.3.5 | Target |
 | second interstitial | removed in the same task, no guest, no event | identical | B.3.2 | Target |
-| interstitial after a minimize | dismisses itself (`performance_ad_dismiss`) in some runs, not in others, then `shutdown` | the same order of messages; the dismiss varies the same way | B.3.4, D.5 | Target (variance on both hosts) |
+| interstitial after a minimize | macOS: dismisses itself (`performance_ad_dismiss`), then `shutdown`, in every run; Windows: the dismiss in some runs only | the same order of messages and the same dismiss (macOS 4 of 4 runs) | B.3.4, D.5 | Target (Windows variance on both hosts) |
 | reward | `adstyle="rewarded-ad;"` on a slot of at least 400 x 300: `video_ad_ready`, `player_loaded`, play after hide then show, `impression`, `complete` | identical for hides of 1 frame, 50 ms, 500 ms and 2 s (L7) | B.3.2, B.3.4 | Target |
 | transparency | a slot with no ad shows the app's container; an interstitial's dim shows the app | guests transparent from creation (`ads.transparentGuests`) | B.3.4 | Optimised (L1, L1-W) |
 | `localStorage.owAdTestAd` in the guest | the same `testAd` result | identical in test mode | D.7 | Target (live not compared) |
@@ -387,15 +387,16 @@ Nothing is ever sent into an ad.
 | L5 | mute timeline per guest | equal to ow-electron's `isAudioMuted()` | pass | pass (native `IsMuted`) |
 | L6 | payload spread, `destroyed`, removal timings | as ow-electron | pass | pass |
 | L7 | reward opt-in after hides of 1 frame, 50 ms, 500 ms, 2 s | plays exactly when ow-electron plays | pass, all four | pass; a 50 ms hide can differ run to run (variance) |
-| L8 | minimize and restore under an interstitial | the same messages in the same order | pass; `performance_ad_dismiss` varies on both hosts | pass: hidden, then `window-minimized`, no `window-hidden` |
+| L8 | minimize and restore under an interstitial | the same messages in the same order | pass (macOS: hidden, `window-minimized`, `window-hidden`, then `performance_ad_dismiss` in 4 of 4 runs, 0 `BUG`); Windows: `performance_ad_dismiss` varies on both hosts | pass: hidden, then `window-minimized`, no `window-hidden` |
 | L9 | removal of a standard slot | as ow-electron | pass | pass |
 | L10 | the ad library's options on the wire, per format | equal on both hosts | pass, every scenario | pass |
 | L11 | `localStorage.owAdTestAd` in the guest origin | the same `testAd` result | pass in test mode; the live pair was not run | pass in test mode |
 
 The macOS sweep W16 ran 24 scenarios with no window ever visible and the
-app never frontmost: 0 `BUG` in 23; the 24th, `perf-minimize`, is the
-dismiss above, now classed as variance after the Windows lab saw ow-electron
-vary the same way. 9 live loads in total (under the cap of 10), never
+app never frontmost: 0 `BUG` in 23; the 24th, `perf-minimize`, was the
+dismiss above. Its cause was WebKit's own `visibilitychange` in the guest;
+with it stopped, `perf-minimize` diffs with 0 `BUG` on macOS (4 of 4 runs
+dismissed, as ow-electron's 4 of 4). 9 live loads in total (under the cap of 10), never
 clicked: standard and Tower Plus filled on ow-tauri; reward, interstitial
 and high impact did not fill on ow-tauri, as expected for an unqualified
 uid (OQ-A10).
@@ -530,7 +531,7 @@ Gaps that round 2 left, plus the ad formats. Same safety rules. Settled:
 
 | Id | Result | CONTRACT |
 |---|---|---|
-| R3-1 | minimize: `window-minimized` then `window-hidden` when the minimize ends (on Windows the guest turns hidden first, then `window-minimized` only), the guest document hidden after them; a running interstitial may dismiss itself, then shuts down. A restore with a live guest was not observed | B.3.4, D.5 |
+| R3-1 | minimize: the guest document turns hidden, then `window-minimized` and `window-hidden` when the minimize ends (on Windows `window-minimized` only); a running interstitial dismisses itself (on Windows in some runs), then shuts down. A restore with a live guest was not observed | B.3.4, D.5 |
 | R3-2 | `setPageUrl(url)` and `sendCommand(...)` are forwarded to the ad page as private messages; no visible effect | B.3.3, D.5 |
 | ad formats | every documented format in test mode: events, DOM, removal rules, the ad library's options, the reward opt-in ([Ad formats](#ad-formats)) | B.3, D.5, D.7 |
 

@@ -281,6 +281,18 @@ export function installAdviewHost(win: Window, config: unknown): boolean {
   } catch {
     // A page that redefined them first keeps its own.
   }
+  // The host alone drives the document's visibility (D.5): the engine's own
+  // `visibilitychange` (WebKit's when the embedder window is minimized) is
+  // one event more than an ow-electron guest sees, so it stops here, ahead
+  // of every page listener [OBS: macOS lab, perf-minimize: ow-electron's
+  // guest sees `visible`, `hidden`; ow-tauri's saw a third, `hidden`].
+  win.addEventListener(
+    'visibilitychange',
+    (event) => {
+      if (event.isTrusted) event.stopImmediatePropagation();
+    },
+    true,
+  );
   answerDocumentReferrer(win, config['documentReferrer'], fn);
 
   const dispatch = (message: HostMessage): void => {

@@ -1414,11 +1414,13 @@ ow-electron signals the guest `hidden` when the element is `display: none`,
 when it is scrolled out of the viewport, and when the embedder window is
 hidden (plus a `window-hidden` message, D.5); a resize signals nothing, and
 the window's position on the screen plays no part (an off-screen window
-still fills test ads) [OBS]. A minimize signals `hidden` plus the
-`window-minimized` and `window-hidden` messages (D.5) [OBS]; on Windows the
-guest turns `hidden` first and then gets only `window-minimized`; a running
-performance ad then stops, with `performance_ad_dismiss` before its `shutdown`
-in some ow-electron runs and without it in others [OBS: Windows lab].
+still fills test ads) [OBS]. A minimize turns the guest `hidden` first and then sends the
+`window-minimized` and `window-hidden` messages (D.5); on Windows only
+`window-minimized` [OBS: Windows and macOS labs, every run]. A running
+performance ad then stops: on macOS with `performance_ad_dismiss` before its
+`shutdown` in every run on both hosts [OBS: macOS lab, `perf-minimize`, 4
+ow-electron and 4 ow-tauri runs], on Windows with it in some ow-electron runs
+and without it in others [OBS: Windows lab].
 There a minimized window has an empty client area, so the guests stop
 rendering; ow-tauri hides each guest webview natively on a Windows minimize
 and shows it again on restore unless the app hid the element meanwhile
@@ -1442,9 +1444,8 @@ if that comes first [DEC]. A page that asked has given up its ad and plays
 nothing more until it reloads [OBS: lab, 2 s hide], so the request is never
 dropped. With the alignment and the `visibilitychange` events of D.5 a 2 s
 hide keeps the ad, and a minimized window's performance ad shuts down with
-the same messages as in ow-electron, where `performance_ad_dismiss` before
-the `shutdown` comes in some runs and not in others, on both hosts [OBS: lab,
-reward-optin and perf-minimize]. ow-electron signals a 300x250 guest
+the same messages as in ow-electron [OBS: lab, reward-optin and
+perf-minimize]. ow-electron signals a 300x250 guest
 `visible` from exactly half of it inside the viewport and `hidden` again at
 49 %, scrolled off the top or the left edge alike, with no hysteresis and
 within a few milliseconds of the move; a slot 25 % in view never fills, 50 %,
@@ -2036,7 +2037,7 @@ ow-tauri sends the same:
 | `consent` | string | a consent page saves (D.6.6): **twice**, first the TCF string (`saveConsent`), then the stored, URL-encoded unified string `cmp%3D...` (`saveUnifiedConsent`). Sent to every existing guest, including one that has not finished loading; **not** resent after a guest reloads [OBS] |
 | `customTracking` | object or `null` | the element's `customTracking` changed, and again after every later reload of that guest [OBS]; Overwolf documents that updates reach the running ad page [DOC] |
 | `eHashes` | `{ sha1, md5, sha256 }` | `setUserEmailHashes()` or `generateUserEmailHashes()` was called (A.2.2); sent to every existing guest; not resent after a reload [OBS] |
-| `window-minimized` | none | the embedder window was minimized, when the minimize ends, before `window-hidden`; the guest document turns `hidden` after both [OBS]. A running performance ad then shuts down about 1 s later, in some runs after dismissing itself (`performance_ad_dismiss`) and in others without it, on both hosts [OBS] (ow-tauri: with the hidden-page timer alignment of B.3.4) |
+| `window-minimized` | none | the embedder window was minimized, when the minimize ends: the guest document has turned `hidden` just before, and `window-hidden` follows [OBS: macOS and Windows labs, ow-electron's guest visibility change precedes both messages in every run]. A running performance ad then dismisses itself (`performance_ad_dismiss`) about 1.5 s later and shuts down, in every macOS run on both hosts; on Windows ow-electron's dismisses in some runs only [OBS] |
 | `window-hidden` | none | the embedder window was hidden or minimized (not again when a hidden window is minimized; on Windows a minimize sends `window-minimized` only, B.3.4); nothing is sent when it is shown or restored again [OBS] |
 | `sendCommand` | array: the arguments of `element.sendCommand(...args)`, as JSON (B.3.3) | the app called `sendCommand()` on the attached element [OBS] |
 | `setPageUrl` | array: `[url]` | the app called `setPageUrl(url)` on the attached element; the URL is also the `pageUrl` of the guest's next load (D.2) [OBS] |
@@ -2061,7 +2062,13 @@ document sees more than one `visibilitychange` per change: on a hide one
 event that still reads the old state, then the change; on a show three that
 still read `hidden`, then the change [OBS: lab, every hide and show of the
 reward and minimize captures]. The shim fires the same; a repeated state
-fires nothing; focus through
+fires nothing. The engine's own `visibilitychange` (WebKit fires one when the
+embedder window is minimized) is stopped in the capture phase before any page
+listener, since the guest's visibility is the host's alone: it was one event
+more than an ow-electron guest sees, and with it the performance ad of a
+minimized window shut down without `performance_ad_dismiss` in most runs
+[OBS: macOS lab, `perf-minimize`: 3 of 10 runs dismissed with it, 4 of 4
+without it]; focus through
 `setEmbedderFocus` (D.3), which also drives `document.hasFocus()` (it reads
 `true` while the embedder window has focus [OBS]).
 

@@ -292,13 +292,13 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
   ow-tauri reproduces those inside the shim, not as messages. ow-tauri adds
   `ad-clicked` (OQ-17). `ads.legacyHostMessages` is removed.
 - **Source.** Observed.
-- **R3-1 (minimize).** ow-electron sends `window-minimized` and
-  `window-hidden` when the minimize ends, and the guest document turns
-  `hidden` after both; a running performance ad then dismisses itself and
-  shuts down. ow-tauri sends the same in the same order (CONTRACT D.5); with
-  the hidden-page timer alignment (CONTRACT B.3.4) its performance ad
-  dismisses itself and shuts down as in ow-electron [OBS: lab
-  perf-minimize].
+- **R3-1 (minimize).** ow-electron turns the guest document `hidden`,
+  then sends `window-minimized` and `window-hidden` when the minimize ends;
+  a running performance ad then dismisses itself and shuts down. ow-tauri
+  sends the same in the same order (CONTRACT D.5) and stops WebKit's own
+  `visibilitychange`, one event more than ow-electron's guest sees; its
+  performance ad then dismisses itself and shuts down as in ow-electron
+  [OBS: macOS lab perf-minimize, 4 of 4 runs on each host].
 - **Open.** A restore with a live guest (not observed). Interim: nothing sent
   beyond the visibility.
 

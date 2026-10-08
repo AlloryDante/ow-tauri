@@ -300,6 +300,22 @@ describe('host to guest (D.5)', () => {
     expect(doc.hidden).toBe(false);
   });
 
+  it("stops the engine's own visibilitychange before the page's listeners", () => {
+    const g = guest();
+    const doc = g.win.document;
+    const seen: string[] = [];
+    doc.addEventListener('visibilitychange', () => seen.push(`doc:${doc.visibilityState}`), true);
+    // As WebKit fires it when the embedder window is minimized.
+    const native = new Event('visibilitychange', { bubbles: true });
+    Object.defineProperty(native, 'isTrusted', { value: true });
+    expect(native.isTrusted).toBe(true);
+    doc.dispatchEvent(native);
+    expect(seen).toEqual([]);
+    // The host's events reach the page.
+    g.host.setVisibility('hidden');
+    expect(seen).toEqual(['doc:visible', 'doc:hidden']);
+  });
+
   it('keeps at most 16 handlers', () => {
     const g = guest();
     let calls = 0;

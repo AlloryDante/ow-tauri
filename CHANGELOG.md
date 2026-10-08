@@ -158,6 +158,12 @@ the npm package share one version number.
   `innerBounds`. The macOS and Windows lab observations are unit vectors;
   the Windows lab compares the app window's frame (G1) and content area
   (G2, advisory) with ow-electron's.
+- Minimize (CONTRACT B.3.4, D.5): the guest document turns `hidden` before
+  `window-minimized` and `window-hidden` on every platform, as in
+  ow-electron, and the guest shim stops the engine's own
+  `visibilitychange`, so the page sees exactly ow-electron's events. A
+  minimized window's performance ad now dismisses itself before its
+  `shutdown` on macOS as in ow-electron (it did in 3 of 10 runs).
 - Invisible lab (feature `lab`, `OW_TAURI_LAB_INVISIBLE=1`, macOS): the app
   is never activated for the whole run. App activation is a no-op and
   `makeKeyAndOrderFront:` orders the window front without making it key, so
