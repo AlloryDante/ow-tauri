@@ -272,9 +272,10 @@ pub fn click_guest(app: &tauri::AppHandle, main_label: &str, _guest_label: &str)
     let Ok(origin) = win.inner_position() else {
         return json!({ "error": "no inner position" });
     };
-    // guest logical (480,0) + button ~(30,30) → window logical (510,30).
-    let sx = origin.x + ((510.0_f64) * scale).round() as i32;
-    let sy = origin.y + ((30.0_f64) * scale).round() as i32;
+    // guest logical (480,0) + the big button's centre ~(200,180) → window
+    // logical (680,180).
+    let sx = origin.x + ((680.0_f64) * scale).round() as i32;
+    let sy = origin.y + ((180.0_f64) * scale).round() as i32;
     unsafe {
         let _ = SetForegroundWindow(HWND(hwnd as *mut c_void));
         let (vx, vy, vw, vh) = (
