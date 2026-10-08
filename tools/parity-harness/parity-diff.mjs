@@ -543,6 +543,49 @@ export function guestVisibility(runDir) {
   return seq;
 }
 
+/**
+ * Per element cid, how long (ms) each hidden spell lasted, from the first
+ * `hidden` the host sent the guest to the next `visible`, in run order.
+ */
+export function guestHiddenSpans(runDir) {
+  const namer = guestNamer(runDir);
+  const raw = [];
+  for (const e of readJsonl(join(runDir, 'ipc.jsonl'))) {
+    if (e.via === 'guest-call' && e.function === 'setVisibility') {
+      raw.push([e.label, e.args, e.t]);
+    } else if (e.via === 'webContents._sendInternal') {
+      if (e.type === 'owadview') namer.see(e.webContentsId);
+      const m = /^\["GUEST_INSTANCE_VISIBILITY_CHANGE","(\w+)"\]$/.exec(e.args ?? '');
+      if (m && e.url !== '') raw.push([e.webContentsId, m[1], e.t]);
+    }
+  }
+  const since = {};
+  const spans = {};
+  for (const [id, state, t] of raw) {
+    const g = namer.name(id);
+    if (state === 'hidden') since[g] ??= t;
+    else if (state === 'visible' && since[g] !== undefined) {
+      (spans[g] ??= []).push(t - since[g]);
+      delete since[g];
+    }
+  }
+  return spans;
+}
+
+/** Hidden spells shorter than this are brief hides (the reward opt-in probes). */
+export const BRIEF_HIDE_MS = 100;
+
+/**
+ * Whether element `cid` was hidden only briefly (under BRIEF_HIDE_MS) on
+ * both hosts and for different lengths: a play after such a hide depends on
+ * the measured spell, which follows each host's frames.
+ */
+export function briefHideDiffers(cid, e, t) {
+  const a = (e.hiddenSpans?.[cid] ?? []).filter((ms) => ms < BRIEF_HIDE_MS);
+  const b = (t.hiddenSpans?.[cid] ?? []).filter((ms) => ms < BRIEF_HIDE_MS);
+  return a.length > 0 && a.length === b.length && a.some((ms, i) => Math.abs(ms - b[i]) >= 5);
+}
+
 /** The element events the harness page saw, per element. */
 function elementEvents(runDir) {
   const counts = {};
@@ -643,6 +686,7 @@ export function loadCapture(runDir) {
     hasIpc: existsSync(join(runDir, 'ipc.jsonl')),
     privateMessages: privateMessages(runDir),
     visibility: guestVisibility(runDir),
+    hiddenSpans: guestHiddenSpans(runDir),
     elementEvents: elementEvents(runDir),
     pageVisibility: pageRecords(runDir, 'page-visibility'),
     elementApi: pageRecords(runDir, 'owadview-api'),
@@ -904,6 +948,16 @@ const RULES = [
         (d.section === 'element-event' && d.field === 'count')),
     cls: 'intended:deviation',
     why: "the app removed this zone on both hosts, ow-tauri's copy before any ad loaded: the documented high-impact listener drops the 400x60 container when the 400x600 ad loads, and ow-tauri's first ad navigation waits for the startup consent window (at most 3 s, D.6.5), so the other zone can fill first",
+  },
+  {
+    when: (d) => d.section === 'element-event' && d.field === 'count' && d.briefHide,
+    cls: 'variance',
+    why: "the slot was hidden for under 100 ms and the two hosts measured the spell differently (each host's visibility signal follows its own frames, B.3.4: a 50 ms hide read 59 ms on ow-electron and 44 to 58 ms on ow-tauri in the Windows lab); whether the ad library plays after such a hide depends on that length",
+  },
+  {
+    when: (d) => d.section === 'adformat-probe' && d.modalPhaseDiffers,
+    cls: 'variance',
+    why: "the probe saw the performance modal loaded on one host and still loading on the other (ow-electron's may fill before the loading-phase probe; ow-tauri's first ad navigation waits for the startup consent window, D.6.5), so it compares two phases; L1-W, L2 and L3-W check each phase on ow-tauri",
   },
   {
     when: (d) => d.section === 'adformat-probe' && d.field === 'click' && d.tauriSentNotDelivered,
@@ -1710,6 +1764,20 @@ const AD_DRIVEN = new Set([
  */
 const AD_CONTENT_POINTS = new Set(['std-slot']);
 
+/**
+ * Whether probe `label` saw the performance modal loaded on one host and
+ * still loading on the other (`ef`, `tf`: ad-format facts). ow-electron's
+ * modal may fill before a probe meant for the loading phase, ow-tauri's
+ * first ad navigation waits for the startup consent window (D.6.5).
+ */
+export function modalPhaseDiffers(ef, tf, label) {
+  const loaded = (f) => {
+    const p = f.probes?.[label];
+    return Boolean(p && f.modalT !== null && f.modalT !== undefined && p.t >= f.modalT);
+  };
+  return Boolean(ef.probes?.[label] && tf.probes?.[label]) && loaded(ef) !== loaded(tf);
+}
+
 /** Compares the ad-format facts of both runs (lib/adformat-report.mjs). */
 export function compareAdformats(e, t, out) {
   const ef = e.formats;
@@ -1791,9 +1859,12 @@ export function compareAdformats(e, t, out) {
         ea.every((x, i) => extraCycles(x, ta[i])),
     });
   }
+  const phaseDiffers = (label) => modalPhaseDiffers(ef, tf, label);
   for (const [label, a] of Object.entries(ef.probes)) {
     const b = tf.probes[label];
     if (!b) continue;
+    const modalPhase = phaseDiffers(label);
+    const before = out.length;
     for (const [name, x] of Object.entries(a.points)) {
       const y = b.points[name];
       if (!y) continue;
@@ -1844,6 +1915,7 @@ export function compareAdformats(e, t, out) {
         electron: a.performance,
         tauri: b.performance,
       });
+    for (const d of out.slice(before)) d.modalPhaseDiffers = modalPhase;
   }
   if (ef.clicks.received !== tf.clicks.received || ef.clicks.sent !== tf.clicks.sent)
     out.push({
@@ -1857,6 +1929,11 @@ export function compareAdformats(e, t, out) {
         ef.clicks.sent === tf.clicks.sent &&
         tf.clicks.pointer === 0 &&
         tf.clicks.received === 0,
+      // The only clicking probes differ in phase: one host clicked into a
+      // loading layer, the other refused over a loaded modal.
+      modalPhaseDiffers: Object.entries(ef.probes).some(
+        ([label, p]) => (p.click || tf.probes[label]?.click) && phaseDiffers(label),
+      ),
     });
   if (tf.front === true || ef.front === true)
     out.push({
@@ -1916,6 +1993,10 @@ function compareElementEvents(e, t, out) {
         b - a <= (t.pageReloads?.[key.split(' ')[0]] ?? 0),
       removedUnfilled:
         b === 0 && AD_DRIVEN.has(key.split(' ')[1]) && removedUnfilled(key.split(' ')[0], e, t),
+      // A reward play (play, impression, complete) after a brief hide.
+      briefHide:
+        /\s(play|impression|complete|userPlay)$/.test(key) &&
+        briefHideDiffers(key.split(' ')[0], e, t),
     });
   }
   const ea = e.elementApi[0];

@@ -189,7 +189,9 @@ export function sortKeys(value) {
  *   (ow-electron net log; ow-tauri guest resource lists);
  * - mute: each guest's sequence of mute states (L5);
  * - probes: lab hit probes (page and native routing, clicks, composited
- *   colour classes) by label (L1-L4);
+ *   colour classes) by label (L1-L4), each with its time `t`;
+ * - modalT: when the first performance modal loaded (`performance_ad_loaded`),
+ *   on the probes' clock, or null;
  * - clicks: app control pointer and click records;
  * - bounds: ow-tauri native guest sizes against the element rects (L2);
  * - front: whether the app ever became the frontmost app.
@@ -311,6 +313,7 @@ export function adformatFacts(runDir) {
     const embedder = (label) => (label && /^bw-/.test(label) ? 'app' : label ? 'ad' : null);
     const composite = compositeAt(e);
     probes[e.label] = {
+      t: e.t,
       points: Object.fromEntries(
         (e.dom?.points ?? []).map((p) => [
           p.name,
@@ -333,6 +336,10 @@ export function adformatFacts(runDir) {
       guestMuted: guestMuted(e),
     };
   }
+  // When the first performance modal loaded, on the clock of the probes.
+  const modalT =
+    pageEvents.find((e) => e.kind === 'owadview-event' && e.event === 'performance_ad_loaded')?.t ??
+    null;
   const clicks = {
     pointer: pageEvents.filter((e) => e.kind === 'app-pointer').length,
     received: pageEvents.filter((e) => e.kind === 'app-click').length,
@@ -356,6 +363,7 @@ export function adformatFacts(runDir) {
     ),
     mute: [...mute.values()],
     probes,
+    modalT,
     clicks,
     bounds: Object.values(bounds),
     front: front ? front.everFront : null,

@@ -27,6 +27,8 @@ import {
   PACKAGE_RUNTIME_REQUEST,
   packageRuntimeLog,
   removedUnfilled,
+  briefHideDiffers,
+  modalPhaseDiffers,
   sameElement,
   sentOsClick,
   shapingOf,
@@ -862,4 +864,28 @@ test('a zone the app removed before its ad loaded on ow-tauri is the consent wai
     'intended:deviation',
   );
   assert.equal(classify({ ...events, adDriven: false, removedUnfilled: true }).class, 'BUG');
+});
+
+test('a probe that saw the performance modal loaded on one host only compares two phases', () => {
+  const facts = (probeT, modalT) => ({ probes: { 'perf-loading': { t: probeT } }, modalT });
+  // Windows lab: ow-electron's modal loaded 208 ms before its loading probe.
+  assert.equal(modalPhaseDiffers(facts(6749, 6541), facts(9262, 12563), 'perf-loading'), true);
+  assert.equal(modalPhaseDiffers(facts(6749, 7000), facts(9262, 12563), 'perf-loading'), false);
+  assert.equal(modalPhaseDiffers(facts(6749, null), facts(9262, null), 'perf-loading'), false);
+  assert.equal(modalPhaseDiffers(facts(6749, 6541), facts(9262, 12563), 'other'), false);
+  const d = { section: 'adformat-probe', key: 'perf-loading control', field: 'page-routing' };
+  assert.equal(classify({ ...d, modalPhaseDiffers: true }).class, 'variance');
+  assert.equal(classify({ ...d, modalPhaseDiffers: false }).class, 'BUG');
+});
+
+test('a reward play after a brief hide measured differently is variance', () => {
+  // Windows lab: a 50 ms hide read 59 ms on ow-electron, 44 ms on ow-tauri.
+  const e = { hiddenSpans: { s1: [59], s2: [502] } };
+  assert.equal(briefHideDiffers('s1', e, { hiddenSpans: { s1: [44] } }), true);
+  assert.equal(briefHideDiffers('s1', e, { hiddenSpans: { s1: [61] } }), false);
+  assert.equal(briefHideDiffers('s2', e, { hiddenSpans: { s2: [525] } }), false);
+  assert.equal(briefHideDiffers('s1', e, { hiddenSpans: {} }), false);
+  const d = { section: 'element-event', key: 's1 play', field: 'count', electron: 1, tauri: 0 };
+  assert.equal(classify({ ...d, briefHide: true }).class, 'variance');
+  assert.equal(classify({ ...d, briefHide: false }).class, 'BUG');
 });
