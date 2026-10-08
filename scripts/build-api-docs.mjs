@@ -4,7 +4,8 @@
 // never commit it.
 //
 //   packages/ow-tauri/docs-out/index.html        ow-tauri/main, /electron, /renderer, /testing
-//   target/doc/tauri_plugin_overwolf/index.html  the Rust plugin
+//   target/doc/tauri_plugin_overwolf/index.html  the Rust plugin (under
+//                                                CARGO_TARGET_DIR when set)
 //
 // Usage: node scripts/build-api-docs.mjs [--ts] [--rust]
 // With neither flag, both are built. Warnings fail the build in both tools,
@@ -12,7 +13,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -59,7 +60,12 @@ if (both || args.has('--rust')) {
     ...process.env,
     RUSTDOCFLAGS: [process.env.RUSTDOCFLAGS, '-D warnings'].filter(Boolean).join(' '),
   });
-  outputs.push(join(root, 'target', 'doc', 'tauri_plugin_overwolf', 'index.html'));
+  // Cargo resolves a relative CARGO_TARGET_DIR against its working
+  // directory, the repository root here.
+  const targetDir = process.env.CARGO_TARGET_DIR
+    ? resolve(root, process.env.CARGO_TARGET_DIR)
+    : join(root, 'target');
+  outputs.push(join(targetDir, 'doc', 'tauri_plugin_overwolf', 'index.html'));
 }
 
 for (const output of outputs) {

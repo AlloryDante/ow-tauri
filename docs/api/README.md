@@ -34,7 +34,7 @@ npm run docs:api -- --rust  # rustdoc only
 | Output | Open |
 |---|---|
 | typedoc | `packages/ow-tauri/docs-out/index.html` |
-| rustdoc | `target/doc/tauri_plugin_overwolf/index.html` |
+| rustdoc | `target/doc/tauri_plugin_overwolf/index.html` (under `$CARGO_TARGET_DIR` when it is set) |
 
 Both folders are generated and git-ignored. Never commit them.
 
