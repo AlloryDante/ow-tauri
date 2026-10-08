@@ -162,7 +162,8 @@ LIVE used a lab app identity whose uid is not enabled for live demand.
 "Same events" means the same ad event names per slot over the run, guest
 lifecycle left out (`e2e/compare.mjs`).
 
-**TEST mode** (tours `B2-T-tour-2` against `B2-E-tour-4`)
+**TEST mode** (ow-tauri tour `VR1-T-tour`, built from commit `4b230a5`,
+against ow-electron tour `B2-E-tour-4`)
 
 | Format (page)                             | ow-tauri                                                             | ow-electron            | Notes                                                                                                                                                           |
 | ----------------------------------------- | -------------------------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -173,10 +174,10 @@ lifecycle left out (`e2e/compare.mjs`).
 | Interstitial (4)                          | pass-through while loading, modal after                              | same                   | probe: "Click me" 0 to 1 while loading, the ad on top once shown                                                                                                |
 | Interstitial, small window (4)            | `performance_ad_error`, `shutdown`                                   | same                   |                                                                                                                                                                 |
 | Interstitial, red dim / blur 3 / unit (4) | load / load / `shutdown`                                             | same                   |                                                                                                                                                                 |
-| Reward (5)                                | ready, play, granted once, next ready                                | same                   | `complete` came after 11 s (ow-tauri) and 87 s (ow-electron) after a 2 s hide during play; one of three ow-tauri runs reloaded the guest on that hide (see Lab) |
+| Reward (5)                                | ready, play, granted once, next ready                                | same                   | `complete` came after 14 s (ow-tauri) and 87 s (ow-electron) after a 2 s hide during play; later ow-tauri tours did not always complete (see Lab) |
 | House slot (6)                            | test video plays                                                     | same                   | no house ad configured                                                                                                                                          |
 | Controls (7)                              | tracking, mute, display, scroll, hide, minimize: a new ad after each | same                   |                                                                                                                                                                 |
-| Consent and identity (8)                  | CMP required, three hashes, uid masked                               | same                   | the privacy settings window is skipped in lab runs                                                                                                              |
+| Consent and identity (8)                  | CMP required, three hashes, uid masked                               | same                   | the privacy settings window opens at alpha 0 in later lab tours, app kept in the background                                                                     |
 
 Step by step, 240 of 305 compare rows are the same and 19 differ only in
 guest lifecycle (ow-electron reports a `did-fail-load` per guest). The
@@ -239,10 +240,15 @@ known request-header gap, `docs/ARCHITECTURE.md` section 6).
 windows, test ads): see [e2e/README.md](e2e/README.md). The Tauri shell has
 the lab only with its `lab` Cargo feature, which is off by default.
 
-Open lab notes: in one of three ow-tauri tours the reward guest asked the
-host to reload (`__host:reload`) when its slot came back from a 2 s
-`display: none` during play, so that video never completed; the other two
-and both ow-electron tours completed. In one ow-tauri tour the banner slot
+Open lab notes: in one of four ow-tauri tours of 2026-10-07 the reward
+guest asked the host to reload (`__host:reload`) when its slot came back
+from a 2 s `display: none` during play, so that video never completed; the
+others and both ow-electron tours completed. In four ow-tauri tours of
+2026-10-08 (three with the plugin's whole-run activation hold, one in the
+`4b230a5` configuration as a control) the reward test video played, got no
+reload and sent no `complete` within 120 s after that hide; the control
+failing the same way points at the test creative of that day rather than
+the hold. In one ow-tauri tour the banner slot
 of four layouts and the controls slot got no test fill (guest visible,
 sized and requesting ads); the tour before and the ow-electron tours filled
 them.
