@@ -219,6 +219,40 @@ fn run(app: &AppHandle, main: WebviewWindow, mode: &str) -> Value {
     env["lookupWithChild"] = lookup;
 
     let mut results = Vec::new();
+
+    // A page-level shortcut right after the window opened: nothing focused,
+    // nobody clicked; does the page see the key at all?
+    {
+        let before = eval(&main, "window.__docKeys");
+        let state = focus_state(app, &main);
+        platform.key(Key::Ch('k'));
+        sleep(400);
+        let after = platform.after_keys();
+        let count = eval(&main, "window.__docKeys");
+        let seen = count.as_i64().unwrap_or(0) - before.as_i64().unwrap_or(0);
+        results.push(json!({
+            "target": "document", "case": "shortcut-at-open-no-focus", "keys": ["k"], "expect": "1 keydown",
+            "value": format!("{seen} keydown"), "ok": seen == 1, "focusBefore": state, "afterKeys": after,
+        }));
+    }
+
+    // Type right after the window opened: the page focused its input by
+    // script (as `autofocus` does), nobody clicked into the webview yet.
+    {
+        let prep = eval(&main, "__spike.prep('input')");
+        for k in chars("hi") {
+            platform.key(k);
+            sleep(35);
+        }
+        sleep(400);
+        let after = platform.after_keys();
+        let read = eval(&main, "__spike.read('input')");
+        let value = read["value"].as_str().unwrap_or_default().to_owned();
+        results.push(json!({
+            "target": "input", "case": "type-at-open-no-click", "keys": ["h", "i"], "expect": "hi",
+            "value": value, "ok": value == "hi", "prep": prep, "afterKeys": after, "log": read["log"],
+        }));
+    }
     for target in TARGETS {
         for case in cases(target) {
             let prep = eval(&main, &format!("__spike.prep({target:?})"));
@@ -316,6 +350,7 @@ fn run(app: &AppHandle, main: WebviewWindow, mode: &str) -> Value {
         "os": std::env::consts::OS,
         "tauri": tauri::VERSION,
         "mitigation": std::env::var("SPIKE_MITIGATE").unwrap_or_default(),
+        "focusAtOpen": std::env::var("SPIKE_FOCUS_AT_OPEN").unwrap_or_default(),
         "environment": env,
         "summary": { "cases": results.len(), "failed": failed.len(), "failures": failed },
         "focus": focus,
@@ -369,6 +404,12 @@ fn main() {
                 .inner_size(300.0, 200.0)
                 .position(620.0, 420.0)
                 .build()?;
+        }
+        if std::env::var("SPIKE_FOCUS_AT_OPEN").is_ok_and(|v| v == "1") {
+            // Mitigation under test: give the app's webview the keyboard
+            // focus inside its window (macOS: makeFirstResponder), as a
+            // stable build does when it creates the window.
+            main.as_ref().set_focus()?;
         }
         let handle = app.handle().clone();
         let main_for_driver = main.clone();
