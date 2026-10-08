@@ -864,8 +864,8 @@ const RULES = [
   },
   {
     when: (d) => d.section === 'host-request' && d.field === 'order' && d.cmpFirst,
-    cls: 'intended:optimised',
-    why: 'cmp-eu-only starts at RunEvent::Ready, the analytics sequence at main_ready (CONTRACT E.2 order and timing)',
+    cls: 'variance',
+    why: 'cmp-eu-only and the analytics sequence both start at main_ready, in parallel (CONTRACT D.6.2, E.2 #2), so which goes out first is a race',
   },
   {
     when: (d) => d.section === 'host-request' && d.field === 'protocol' && d.tauri === null,

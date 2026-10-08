@@ -25,7 +25,9 @@ The owner's decision: behave exactly like ow-electron's consent flow.
 
 ## Decision
 
-- The plugin starts the `cmp-eu-only` request at `RunEvent::Ready` and opens
+- The plugin starts the `cmp-eu-only` request at `main_ready` (first written
+  as `RunEvent::Ready`; moved so it leaves with the startup analytics, CONTRACT
+  E.2) and opens
   the startup consent window `ow-cmp-startup` as soon as it completes, on
   every launch: never shown, not focusable, in the ads data store, with the
   composed user agent and the observed URL and query.

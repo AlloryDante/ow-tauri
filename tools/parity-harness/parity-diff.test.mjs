@@ -72,6 +72,14 @@ test('a revalidation by the Chromium HTTP cache is intended (optimised)', () => 
   assert.equal(classify({ section: 'host-request', field: 'status' }).class, 'BUG');
 });
 
+test('cmp-eu-only racing the analytics sequence from main_ready is variance', () => {
+  const row = classify({ section: 'host-request', field: 'order', cmpFirst: true });
+  assert.equal(row.class, 'variance');
+  assert.match(row.why, /both start at main_ready/);
+  // Any other reordering of the host requests stays a bug.
+  assert.equal(classify({ section: 'host-request', field: 'order' }).class, 'BUG');
+});
+
 test('an ad document Chromium served from its cache is variance', () => {
   assert.equal(
     classify({ section: 'ad-document', key: 'first load', field: 'from-http-cache' }).class,

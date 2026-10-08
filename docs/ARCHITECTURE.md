@@ -174,7 +174,7 @@ pattern, what it may load and what it may call ([section 5](#5-security-model)).
 | overlay | reserved | none: `overlay.createWindow` needs a package runtime (CONTRACT H, Appendix P) | | Kept so a future runtime does not change the class table. |
 | remote | webview `bwr-<id>` in window `bw-<id>` | `loadURL('http(s)://...')` on a `BrowserWindow` | any URL | No IPC, no initialization scripts, no capability. Loading a remote URL closes the app webview and creates this fresh child webview in the same window, because Tauri cannot remove initialization scripts from a webview. Never moves back. |
 | adview-guest | `owad-<embedder>-<n>` | the ads host, per `<owadview>` | `https://www.overwolf.com/monsdk/electron/latest/adview.html` | Child webview inside the embedder's window; ads environment; requests shaped (CONTRACT D.8). |
-| cmp-startup | `ow-cmp-startup` | the plugin, on every launch, when the `cmp-eu-only` request started at `RunEvent::Ready` completes | `https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/ow-cmp-v2.html` | 1 x 32, never shown, not focusable; ads environment; closes itself (CONTRACT D.6.1). |
+| cmp-startup | `ow-cmp-startup` | the plugin, on every launch, when the `cmp-eu-only` request started at `main_ready` completes | `https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/ow-cmp-v2.html` | 1 x 32, never shown, not focusable; ads environment; closes itself (CONTRACT D.6.1). |
 | cmp | `ow-cmp` | `openCMPWindow` / `openAdPrivacySettingsWindow` | `https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/cmp.html` | Title `CMP`, 800 x 800; one at a time; ads environment (CONTRACT D.6.4). |
 | cmp-default | `ow-cmp-default` | the first `openAdPrivacySettingsWindow` / `openCMPWindow` call of a launch | `https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/ow-cmp-v2.html?unifiedcmp=&firstRun=true` | 1 x 32, never shown; writes a fresh default consent, as ow-electron does (CONTRACT D.6.4). |
 
@@ -193,13 +193,13 @@ sequenceDiagram
   P->>P: read state file, parse argv switches
   P->>M: create hidden window with init script __OW_TAURI_BOOTSTRAP__ (snapshot)
   T->>P: RunEvent::Ready
-  P->>P: GET features.overwolf.com/experiments/cmp-eu-only (isCMPRequired)
-  P->>C: when it completes: open ow-cmp-v2.html in the ads environment
   M->>M: bootstrap installs the runtime; app.overwolf built from the snapshot
   M->>P: ipc_subscribe(channel) -> epoch
   M->>M: app code runs top level (pre-ready calls, ipcMain.handle, ...)
   M->>P: ipc_main_ready, main_ready
+  P->>P: GET features.overwolf.com/experiments/cmp-eu-only (isCMPRequired)
   P->>P: analytics: first launch, start, heartbeat, 400022, 400023 (in order)
+  P->>C: when cmp-eu-only completes: open ow-cmp-v2.html in the ads environment
   C->>C: page stores consent, writes euconsent-v2 / acconsent cookies
   C->>P: cmp_event {name: close}
   M->>M: app.whenReady() resolves; app creates its windows
@@ -213,8 +213,9 @@ Two details matter for parity with ow-electron:
 - **Pre-ready calls.** `disableAnonymousAnalytics()` must be called before
   `app.ready` in ow-electron. ow-tauri starts the analytics sequence when the
   main webview reports `main_ready` (or after 10 s), so a top-level call in
-  the app's main code is honoured. The consent window and `cmp-eu-only` start
-  earlier, at `RunEvent::Ready`, as in ow-electron (CONTRACT E.2).
+  the app's main code is honoured. `cmp-eu-only` leaves at the same moment,
+  and the consent window follows its response, as ow-electron sends them
+  together once the app is ready (CONTRACT D.6.2, E.2).
 - **Synchronous members.** `uid`, `muid`, `phasePercent`, `utmParams`,
   `packages.hasPendingUpdates()`, `screen.getAllDisplays()`, `app.getPath()` and
   others are synchronous in Electron. The plugin injects a snapshot into the
