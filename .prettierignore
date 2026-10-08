@@ -9,8 +9,12 @@ package-lock.json
 # Written by tauri-plugin's build script (permissions schema, ACL test app).
 crates/tauri-plugin-overwolf/permissions/schemas/
 crates/tauri-plugin-overwolf/tests/acl-app/gen/
-# Built by `npm run build:injected --workspace ow-tauri` (minified, committed).
+# Built by `npm run build:generated` (minified, committed; `npm run check:generated`).
 crates/tauri-plugin-overwolf/js/
+crates/tauri-plugin-overwolf/api-iife.js
+
+# W0c mechanism spikes: throwaway lab apps with Tauri-generated schemas.
+tools/spikes/
 
 # The upstream sample keeps its own formatting (see its .prettierrc).
 examples/packages-sample/

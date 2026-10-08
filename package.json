@@ -1,28 +1,47 @@
 {
   "name": "ow-tauri-workspace",
   "private": true,
-  "description": "Workspace root for ow-tauri: run Overwolf ow-electron apps on Tauri 2.",
-  "license": "MIT",
+  "description": "Workspace root for the Overwolf plugin for Tauri 2: the JS API, the CLI and the guest shims.",
+  "license": "MIT OR Apache-2.0",
   "author": "ow-tauri contributors",
+  "type": "module",
   "workspaces": [
-    "packages/*",
-    "examples/*"
+    "packages/*"
   ],
   "engines": {
     "node": ">=22.12.0"
   },
   "scripts": {
-    "build": "npm run build --workspace ow-tauri",
-    "lint": "npm run lint --workspace ow-tauri",
-    "typecheck": "npm run typecheck --workspace ow-tauri",
-    "test": "npm run test --workspace ow-tauri",
-    "docs": "npm run docs --workspace ow-tauri",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:coverage": "npm run test:coverage --workspaces --if-present",
+    "docs": "npm run docs --workspace tauri-plugin-overwolf-api",
     "docs:api": "node scripts/build-api-docs.mjs",
+    "build:generated": "npm run build:generated --workspace tauri-plugin-overwolf-guest-shims --workspace tauri-plugin-overwolf-api",
+    "check:generated": "node scripts/check-generated.mjs",
+    "check:packages": "npm run check:package --workspace tauri-plugin-overwolf-api --workspace tauri-plugin-overwolf-cli",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check:links": "node scripts/check-links.mjs"
   },
   "devDependencies": {
-    "prettier": "3.9.9"
+    "@arethetypeswrong/cli": "0.18.5",
+    "@eslint/js": "10.0.1",
+    "@types/node": "22.20.5",
+    "@vitest/coverage-v8": "5.0.3",
+    "eslint": "10.12.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-tsdoc": "0.5.4",
+    "globals": "17.13.0",
+    "happy-dom": "20.14.5",
+    "prettier": "3.9.9",
+    "publint": "0.3.25",
+    "rolldown": "1.2.12",
+    "typedoc": "0.28.20",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "8.71.1",
+    "vitest": "5.0.3"
   }
 }

@@ -3,7 +3,7 @@
 // and rustdoc for the plugin crate. The output is generated and git-ignored;
 // never commit it.
 //
-//   packages/ow-tauri/docs-out/index.html        ow-tauri/main, /electron, /renderer, /testing
+//   packages/api/docs-out/index.html             tauri-plugin-overwolf-api (., /adview, /updater, /testing)
 //   target/doc/tauri_plugin_overwolf/index.html  the Rust plugin (under
 //                                                CARGO_TARGET_DIR when set)
 //
@@ -51,8 +51,8 @@ function run(command, commandArgs, env = process.env) {
 const outputs = [];
 
 if (both || args.has('--ts')) {
-  run('npm', ['run', 'docs', '--workspace', 'ow-tauri']);
-  outputs.push(join(root, 'packages', 'ow-tauri', 'docs-out', 'index.html'));
+  run('npm', ['run', 'docs', '--workspace', 'tauri-plugin-overwolf-api']);
+  outputs.push(join(root, 'packages', 'api', 'docs-out', 'index.html'));
 }
 
 if (both || args.has('--rust')) {
