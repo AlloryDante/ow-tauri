@@ -132,6 +132,8 @@ node run.mjs --scenario perf-minimize     # L8: minimize and restore under a per
 node run.mjs --scenario owadtestad        # L11: localStorage.owAdTestAd inside the guest
 node run.mjs --scenario tower-plus        # 400x600 + 400x60
 node run.mjs --scenario high-impact-only  # the high-impact zone without the small zone
+node run.mjs --scenario inview-probe      # 300x250 slots 25/50/75/100 % in view, vertical and horizontal, plus a 2.5-3 % sweep
+node run.mjs --scenario inview-fine       # one 300x250 swept 1 % at a time across 50 %, top edge then left edge
 
 node analyze.mjs captures/<run-id>        # report.md + report.json
 node lib/adformat-report.mjs captures/<run-id>   # adformats.md + adformats.json: attach params, ad-library options, event/IPC timeline
@@ -185,6 +187,8 @@ node --test parity-diff.test.mjs
 ```
 
 Both runs must use the same scenario definition, layouts and mode (`options.scenarioDef`, `layouts` and `mode` in each `meta.json`). When they differ, for example a baseline recorded before the scenario was edited, every difference of definition would read as a BUG, so the diff refuses with exit 2 and names the fields. `--allow-scenario-mismatch` runs it anyway and puts a warning at the top of `parity-diff.md` (`scenarioMismatch` in `parity-diff.json`). A capture's folder name can differ from its `runId`; pick the baseline by its `meta.json`.
+
+Current ow-electron baselines (TEST mode, recorded locally, captures are not in git): `R3-reward-test` for `reward`, `R4-inview-test` for `inview-probe` and `R4-inview-fine-test` for `inview-fine`. A scenario edited after its baseline needs a new baseline run before it can be diffed.
 
 It compares two captures of the same scenario after normalising volatile values (timestamps, session ids, consent strings, cache-busters, the host label) and lists every observable difference: host requests (set, order, query and `Extra` fields, body, header order and values, cookies, status, protocol), requests sent together, ad document headers, consent pages and cookies, the state file, each guest's `__overwolf__` and page state, element events and API, host-to-guest messages and the visibility sequence. Each difference is classified:
 

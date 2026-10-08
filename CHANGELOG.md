@@ -44,6 +44,11 @@ the npm package share one version number.
   typedoc and rustdoc), and `npm run check:links` with a `docs-links` CI job
   that checks every relative link and anchor in the Markdown files.
 - OPEN-QUESTIONS: ad-format questions OQ-A1 to OQ-A10.
+- Parity harness: `inview-probe` and `inview-fine` scenarios measure when a
+  partly visible 300x250 counts as in view (ow-electron: from exactly 50 %,
+  49 % is hidden, both axes); `addAd` takes `slotId` and `slotStyle`.
+- Ad showcase lab: `--theme dark|light` for the stills, and in-process
+  stills of each ow-electron ad guest with how much of it is painted.
 
 - Upstream `ow-electron-packages-sample` imported verbatim at commit `8a27053`
   into `examples/packages-sample` (MIT, Overwolf Ltd.).
@@ -115,6 +120,25 @@ the npm package share one version number.
   `mainCrashes` in `ow-tauri.json`.
 
 ### Changed
+
+- `<owadview>` in-view rule is now measured, not chosen: visible from half of
+  the element inside the viewport, as ow-electron (CONTRACT B.3.4,
+  AD-FORMATS); a boundary test pins 0.49 hidden / 0.5 visible.
+- CONTRACT D.1, D.4, D.5: the guest shim's host API lives on a random,
+  per-guest window property (`hostKey`), listed with the rest of the guest
+  configuration; `__host:ready` carries `pageUrl`; `__host:domReady` is
+  documented.
+- Ad showcase: the timeline shows the current page by default (toggle for
+  all pages, counts follow the scope); slot headers wrap instead of cutting
+  chips or the adstyle; event names keep priority over the cid; the consent
+  chip says `checking`, `EU rules apply`, `not required` or `could not
+  check`; paths in the window and in exported JSON show the home folder as
+  `~`; the light theme keeps status colours readable.
+- Parity diff: `cmp-eu-only` going out before the launch analytics is
+  variance (both start at `main_ready`), not an optimisation.
+- Packages sample: `tauri.conf.json` `productName` is the package's
+  `productName` (CONTRACT G.1), which silences the build warning; the app's
+  uid, name and data folder are unchanged.
 
 - Typings: `@overwolf/ow-electron` may stay installed next to ow-tauri (a
   project that builds both hosts). The documented `paths` entry for
