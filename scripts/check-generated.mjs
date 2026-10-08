@@ -26,14 +26,6 @@ const rolldownCli = join(
   'cli.mjs',
 );
 
-/**
- * Scripts of the previous runtime that no source builds any more but the
- * crate still embeds until its rewrite drops them (`build.rs` SCRIPTS and the
- * `include_str!` of `host/main_webview.rs` and `plugin.rs`). They are checked
- * for presence only; remove each name here in the commit that deletes the file.
- */
-const RETIRED = new Set(['bootstrap.js', 'native-dialogs.js']);
-
 /** @param {string} dir */
 function scripts(dir) {
   return existsSync(dir)
@@ -68,8 +60,7 @@ try {
       problems.push(`js/${name} differs from a fresh build`);
   }
   for (const name of committed)
-    if (!built.includes(name) && !RETIRED.has(name))
-      problems.push(`js/${name} is committed but no longer built`);
+    if (!built.includes(name)) problems.push(`js/${name} is committed but no longer built`);
   if (!existsSync(join(crate, 'api-iife.js'))) problems.push('api-iife.js is not committed');
   else if (read(join(out, 'api-iife.js')) !== read(join(crate, 'api-iife.js')))
     problems.push('api-iife.js differs from a fresh build');
