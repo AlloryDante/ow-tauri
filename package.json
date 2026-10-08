@@ -17,8 +17,10 @@
     "typecheck": "npm run typecheck --workspace ow-tauri",
     "test": "npm run test --workspace ow-tauri",
     "docs": "npm run docs --workspace ow-tauri",
+    "docs:api": "node scripts/build-api-docs.mjs",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "check:links": "node scripts/check-links.mjs"
   },
   "devDependencies": {
     "prettier": "3.9.9"
