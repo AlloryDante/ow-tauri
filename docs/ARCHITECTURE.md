@@ -44,7 +44,7 @@ Non-goals:
 
 - Running Node.js. The app's main-process code runs in a webview; Node
   built-ins are replaced ([PORT-MAP.md](PORT-MAP.md) section 3; the step-by-step
-  guide will be `docs/MIGRATION.md`).
+  guide is [MIGRATION.md](MIGRATION.md)).
 - Overwolf's gaming packages (GEP, overlay, recorder, utility, CRN). They are
   deferred; the runtime interface is kept as a design appendix (CONTRACT
   Appendix P). There are no simulated backends.
@@ -102,7 +102,7 @@ flowchart LR
 | state file | `state` | Read and write the per-app `ow-electron.json` with ow-electron's exact encoding, and `ow-tauri.json` (ow-tauri keys), atomically (CONTRACT F, [ADR 0007](adr/0007-state-file-continuity.md)). |
 | IPC router | `ipc` | Route `ipcRenderer.invoke/send` from UI windows to `ipcMain` in the main webview, and `webContents.send` back, by webview label, over one ordered channel per webview ([ADR 0010](adr/0010-per-webview-ipc-channels.md)). |
 | window manager | `window`, `host` | Create the windows behind the `BrowserWindow` facade, inject preload scripts, forward window events, enforce the window class of each webview. |
-| ads host | `ads` | One native child webview per `<owadview>` element in the ads environment; layout, visibility, mute, popups, crash recovery, plain DOM events, host-to-guest messages. |
+| ads host | `ads` | One native child webview per `<owadview>` element in the ads environment; layout, visibility, mute, popups, crash recovery, plain DOM events, host-to-guest messages; transparent guests, the interstitial raised above other guests and passing input through until it loads (CONTRACT B.3.4, [AD-FORMATS.md](AD-FORMATS.md)). |
 | request shaping | `ads`, `platform/*` | The headers ow-electron sends for ad guests: `Referer` and `Origin` on the ad document, `Origin` on subresources, `x-ow-*` on `owads.min.js`, per OS (CONTRACT D.8, [ADR 0013](adr/0013-request-shaping-per-os.md)). |
 | consent | `consent` | `isCMPRequired` from `cmp-eu-only`, the hidden startup consent window and the settings window, consent storage, the cookie fallback, ad sequencing; email hashes and the FPD switch (CONTRACT D.6, [ADR 0015](adr/0015-startup-consent-window.md)). |
 | analytics | `analytics` | ow-electron's anonymous analytics (Counter and InsertStats requests) in the observed order, labelled through `analytics.hostLabel`, with the mandatory subset and the opt-outs (CONTRACT E). |
@@ -502,7 +502,8 @@ the plugin grants nothing to a webview unless a capability below names it.
 | Class | Capability (who adds it) | Webviews | Permission sets | Origin |
 |---|---|---|---|---|
 | main | `ow-tauri-main` (plugin) | `ow-main` | `overwolf:main`, `core:app:default`, `core:path:default`, `core:window:default`, `core:webview:default`, and the `core:window:allow-*` / `core:webview:allow-*` commands the `BrowserWindow` facade calls (named in the runtime capability itself, not through a permission set); no `core:event:*` | `local: true` |
-| ui | the app (template in `examples/packages-sample/src-tauri/capabilities/ui.json`) | `bw-*` | `overwolf:renderer`, `core:window:allow-start-dragging` | `local: true` |
+| ui | the app (template in `examples/packages-sample/src-tauri/capabilities/ui.json`) | `bw-*` | `overwolf:renderer` | `local: true` |
+| ui-chrome | `ow-tauri-ui-chrome` (plugin) | `bw-*` | `core:window:allow-start-dragging`, `core:window:allow-toggle-maximize` (for `app-region: drag`, CONTRACT B.3.6) | `local: true` |
 | remote | none | `bwr-*` | none | |
 | adview-guest | `ow-tauri-adview-guest` (plugin) | `owad-*` | `overwolf:adview-guest` (one command: `adview_event`) | `https://www.overwolf.com/monsdk/electron/*` |
 | cmp-startup, cmp-default, cmp | `ow-tauri-cmp` (plugin) | `ow-cmp-startup`, `ow-cmp-default`, `ow-cmp` | `overwolf:cmp-window` (one command: `cmp_event`) | `https://content.overwolf.com/monsdk/electron/*` |
@@ -565,8 +566,10 @@ Tauri webview, and `__TAURI_INTERNALS__.invoke` is a page global. Any script
 that runs in a UI window can therefore call every command that window may
 call, including `ipc_invoke` on every channel. A CSP is the main defence
 against script injection, so ow-tauri documents a baseline per class and the
-example ships it in `tauri.conf.json` (`app.security.csp`, with
-`app.security.freezePrototype: true`):
+example ships it in `tauri.conf.json` (`app.security.csp`). The example does
+not set `app.security.freezePrototype`: Tauri injects it into every webview,
+ad guests and consent pages included, whose third-party scripts ow-tauri does
+not change.
 
 | Class | Baseline CSP |
 |---|---|
@@ -585,7 +588,7 @@ scripts are injected by the webview as initialization scripts, not as page
 |---|---|---|---|
 | Child webviews (`Window::add_child`) | yes, needs Tauri `unstable` | yes, needs Tauri `unstable` | yes, needs Tauri `unstable` |
 | Main webview liveness (A.6) | shared browser arguments disable background throttling | macOS 14+: `BackgroundThrottlingPolicy::Disabled`; 12 and 13: 1 x 1 visible window, transparent only with Tauri's `macOSPrivateApi` | 1 x 1 transparent visible window |
-| Main webview crash signal (A.6) | `ProcessFailed` | web-content termination, forwarded by the app (`report_main_webview_crash`) | `web-process-terminated` |
+| Main webview crash signal (A.6) | `ProcessFailed` | web-content termination, forwarded by the app (`report_web_content_terminated`) | `web-process-terminated` |
 | Navigation hook (A.2.3.1) | top-level navigations only: external links cancelled and opened in the system browser | also sees frames: external `http(s)` allowed; the bootstrap intercepts top-level link clicks and form submissions | as macOS |
 | Browser arguments (A.1.1) | one set per webview environment (app, ads), because WebView2 requires one set per data directory | none | none |
 | Guest mute | `ICoreWebView2_8::put_IsMuted` | private `_setPageMuted:` guarded by `respondsToSelector:` (risk below) | `webkit_web_view_set_is_muted` |
@@ -612,6 +615,18 @@ Risks we track:
   request but not ow-electron's subresource headers, and keep web security
   on. The lab check in [PARITY.md](PARITY.md#lab-checks) measures the effect
   on fill; a private-API prototype stays off by default (`ads.macPrivateHeaderApi`).
+- **Native guest mechanics.** What an in-page guest gets for free is rebuilt
+  per platform (CONTRACT B.3.4): transparency (on macOS through the
+  `drawsBackground` key-value key, guarded by `respondsToSelector:`, and the
+  public `underPageBackgroundColor`), stacking (`SetWindowPos`,
+  `addSubview:positioned:relativeTo:`) and input pass-through (an empty
+  window region on Windows; on macOS a `hitTest:` replaced once on the web
+  view's own class). A WebKit or WebView2 change can break one of them; the
+  lab's `transparent-native`, `zorder-native` and `passthrough-native`
+  records catch it.
+- **Linux overlap.** tauri-runtime-wry packs child webviews into a `GtkBox`,
+  so ad guests never overlap the page: ad rectangles, stacking and
+  pass-through do not apply on Linux.
 
 ## 7. Repository layout and build
 
@@ -633,6 +648,8 @@ packages/ow-tauri/src/
   bootstrap/ guest/ main/ electron/ renderer/ shared/ types/
 examples/packages-sample/
   src/ (upstream tree, ported), src-tauri/ (thin app using the plugin)
+examples/ad-showcase/
+  one renderer for both hosts: every ad format, on ow-electron and ow-tauri
 tools/parity-harness/
   runs ow-electron and ow-tauri side by side and compares the wire
 docs/

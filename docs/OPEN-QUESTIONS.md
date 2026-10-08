@@ -5,11 +5,13 @@ while specifying that, with its status, the answer and where the answer comes
 from. Ids are stable; numbers are not an order.
 
 Most questions are now settled: Overwolf's documentation answered some, black-box
-observation of ow-electron 42.11.4 with the parity harness (rounds 1 and 2)
-answered more ([PARITY.md](PARITY.md)), and the project owner decided the
-rest. What is still open is either a question only Overwolf can answer, or a
-detail that a harness item still has to observe: the 13-hour run (R2-9), the
-Windows and Linux runs (R2-10, R2-11), or round 3 (R3-n).
+observation of ow-electron 42.11.4 with the parity harness (rounds 1, 2 and
+3, the 13-hour run and the Windows lab) answered more
+([PARITY.md](PARITY.md)), and the project owner decided the rest. What is
+still open is either a question only Overwolf can answer, or a detail that a
+harness item still has to observe: Linux (R2-10, R2-11) or round 3 (R3-n).
+The ad-format questions for Overwolf are under [Ad formats](#ad-formats)
+(OQ-A1 to OQ-A10).
 
 Status:
 
@@ -22,7 +24,7 @@ Status:
 | **Deferred** | belongs to the package runtime, which the scope cut defers ([ADR 0004](adr/0004-packages-backend-selection.md)) |
 
 Sources are written as: *observed* (the parity harness against ow-electron
-42.11.4, rounds 1 and 2, [PARITY.md](PARITY.md)), a `dev.overwolf.com` URL, *typings* (the
+42.11.4, [PARITY.md](PARITY.md)), a `dev.overwolf.com` URL, *typings* (the
 published ow-electron 42.11.4 typings), *builder* (the published
 `@overwolf/app-builder-lib` 26.9.3 and `@overwolf/ow-cli` 0.1.10 JavaScript),
 or *owner decision* (the project owner's round-2 decisions of 2026-10-06).
@@ -35,23 +37,23 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 | Id | Topic | Question | Impact | Status | CONTRACT |
 |---|---|---|---|---|---|
 | [OQ-01](#oq-01-uid-rule-for-a-string-author-and-the-42112-change) | Identity | uid rule for a string `author` | High | Answered | G.2 |
-| [OQ-02](#oq-02-muid-derivation-muidv2-and-phase-bucketing-for-a-tauri-host) | Identity | muid derivation, `muidV2`, phases | High | Answered (macOS); open: pending harness (R2-10: Windows, Linux) | E.4 |
+| [OQ-02](#oq-02-muid-derivation-muidv2-and-phase-bucketing-for-a-tauri-host) | Identity | muid derivation, `muidV2`, phases | High | Answered (macOS, Windows); open: pending harness (R2-10: Linux) | E.4 |
 | [OQ-03](#oq-03-host-labelling-owver-owversion-extra-fields) | Analytics | host labelling | Medium | Decided; open: Overwolf (dashboards) | 0, E.1 |
-| [OQ-04](#oq-04-analytics-event-catalogue) | Analytics | event catalogue | High | Answered; open: pending harness (R2-9 12 h heartbeat, R3-4 crash threshold) | E.2 |
+| [OQ-04](#oq-04-analytics-event-catalogue) | Analytics | event catalogue | High | Answered; open: pending harness (R3-4 crash threshold) | E.2 |
 | [OQ-12](#oq-12-setexternalpaymentuserid-report) | Analytics | `setExternalPaymentUserId` report | Medium | Answered; open: pending harness (R3-3, with analytics disabled) | A.2.2, E.2 |
 | [OQ-14](#oq-14-windows-ad-optimisation-helper) | Analytics | Windows ad-optimisation helper | Medium | Decided; open: Overwolf; pending harness (R3-7, R3-8) | G.1, A.2.2 |
 | [OQ-05](#oq-05-request-shaping-for-the-ad-page) | Ads | request shaping | High | Answered; open: Overwolf (macOS gap) | D.8 |
 | [OQ-10](#oq-10-email-hash-encoding) | Ads | email hash encoding | Medium | Answered; open: pending harness (R3-6, gmail rule) | A.2.2 |
 | [OQ-11](#oq-11-email-hashes-in-the-ad-guest) | Ads | email hashes in the guest | Medium | Answered; open: pending harness (R3-3, after `disableAdsFPD`) | A.2.2, D.5 |
-| [OQ-13](#oq-13-host-to-guest-messages) | Ads | host-to-guest messages | Low to Medium | Answered; open: pending harness (R3-1, minimize) | D.5 |
+| [OQ-13](#oq-13-host-to-guest-messages) | Ads | host-to-guest messages | Low to Medium | Answered (R3-1 minimize included); open: a restore with a live guest | D.5 |
 | [OQ-17](#oq-17-click-and-navigation-rules) | Ads | click and navigation rules | Low | Decided | D.7 |
 | [OQ-19](#oq-19-systeminfo-contents) | Ads | `systemInfo` contents | Low to Medium | Answered (macOS, Windows); open: pending harness (R2-11: Linux) | D.2 |
 | [OQ-20](#oq-20-live-ads-from-a-tauri-host) | Ads | live ads approval | High | Decided (labs); open: Overwolf (production) | ADR 0005 |
-| [OQ-27](#oq-27-viewability) | Ads | viewability model | Medium | Answered; open: pending harness (R3-1, minimize) | B.3.4 |
+| [OQ-27](#oq-27-viewability) | Ads | viewability model | Medium | Answered | B.3.4 |
 | [OQ-28](#oq-28-crash-and-load-error-recovery) | Ads | guest recovery | Low | Answered; open: pending harness (R3-4, report threshold) | D.7, E.2 |
-| [OQ-29](#oq-29-performance-ads) | Ads | performance ad geometry | Medium | Decided | B.3.4 |
+| [OQ-29](#oq-29-performance-ads) | Ads | performance ad geometry, input and removal | Medium | Answered | B.3.2, B.3.4 |
 | [OQ-30](#oq-30-linux) | Ads | Linux | Low | Decided | D.8.3 |
-| [OQ-32](#oq-32-element-extensions-pageurl-setpageurl-sendcommand) | Ads | `pageUrl`, `setPageUrl`, `sendCommand` | Medium | Answered (present); open: pending harness (R3-2, behaviour) | B.3.2, B.3.3, D.2 |
+| [OQ-32](#oq-32-element-extensions-pageurl-setpageurl-sendcommand) | Ads | `pageUrl`, `setPageUrl`, `sendCommand` | Medium | Answered | B.3.2, B.3.3, D.2, D.5 |
 | [OQ-35](#oq-35-dom-event-shape) | Ads | DOM event shape | Low | Answered | B.3.5 |
 | [OQ-06](#oq-06-iscmprequired-source) | Consent | `isCMPRequired` source | High | Answered (`no-cmp` gives `false`); open: Overwolf (other values) | D.6.2 |
 | [OQ-07](#oq-07-consent-pages-and-the-first-layer) | Consent | consent pages, first layer, `cmpURL` | High | Answered; open: Overwolf (skip when not required); pending harness (R3-5) | D.6.1, D.6.4 |
@@ -72,6 +74,16 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 | [OQ-18](#oq-18-updates-and-the-console) | Distribution | updates and the console | High | Answered (feed); open: Overwolf (Tauri installers) | I.1 |
 | [OQ-24](#oq-24-installer-and-utm-parameters) | Distribution | installer and UTM parameters | Medium | Answered | F.2 |
 | [OQ-31](#oq-31-version-delta) | Distribution | version delta since 42.7.1 | Medium | Answered | [PARITY.md](PARITY.md) |
+| [OQ-A1](#oq-a1-reward-ads) | Ad formats | reward ads: element, opt-in, grant signal, verification | High | Open: Overwolf | B.3.2, [AD-FORMATS.md](AD-FORMATS.md#reward) |
+| [OQ-A2](#oq-a2-unit) | Ad formats | valid `unit` values; ignored on standard slots | Medium | Open: Overwolf | B.3.2, D.2 |
+| [OQ-A3](#oq-a3-does-every-performance-ad-end-with-shutdown) | Ad formats | does every performance ad end with `shutdown` | Medium | Answered (no fill, error); open: Overwolf (dismiss, click) | B.3.4 |
+| [OQ-A4](#oq-a4-house-ads-in-test-mode) | Ad formats | house ads in test mode | Low | Open: Overwolf | D.7 |
+| [OQ-A5](#oq-a5-owadtestad) | Ad formats | which storage `owAdTestAd` needs | Low | Answered (test mode); open: Overwolf | D.7 |
+| [OQ-A6](#oq-a6-interstitial-close-button-colours) | Ad formats | interstitial close-button colours | Low | Open: Overwolf | B.3.2 |
+| [OQ-A7](#oq-a7-in-stream-ads) | Ad formats | in-stream ads | Low | Open: Overwolf | none |
+| [OQ-A8](#oq-a8-970x90-in-test-mode) | Ad formats | 970x90 in test mode | Low | Answered | B.3.2 |
+| [OQ-A9](#oq-a9-re-appending-a-removed-element) | Ad formats | re-appending a removed element (high-impact handler) | Medium | Answered (copied); open: Overwolf (intended?) | B.3.4 |
+| [OQ-A10](#oq-a10-live-demand-for-demand-gated-formats) | Ad formats | live demand for high impact, interstitial and reward | High | Open: Overwolf | ADR 0005 |
 
 ## Identity and analytics
 
@@ -101,8 +113,8 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 
 - **Question.** How does ow-electron derive the machine id, what is `muidV2`,
   and how is the phase percent computed?
-- **Status.** Answered on macOS. Windows and Linux: **open, pending harness**
-  (R2-10, which needs a Windows and a Linux host).
+- **Status.** Answered on macOS and Windows. Linux: **open, pending
+  harness** (R2-10, which needs a Linux host).
 - **Answer.** Owner decision: same derivation as ow-electron; the
   per-install id becomes a non-parity option. macOS:
   `guid(sha256(lowercase(IOPlatformUUID)))`, `muidV2 = muid`; phase percent =
@@ -115,10 +127,11 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
   `HKCU\Software\OverwolfPersist` `MUIDV2`); owner decision;
   https://dev.overwolf.com/ow-electron/developers-console/performance-statistics
   (users and installs are machine-keyed).
-- **Open.** The Linux source (R2-11). Windows (R2-10, Windows lab):
-  `MUIDV2` is a separate random v4 per install, and `app.overwolf.muid`
-  answers it; analytics and guests keep the machine-derived `MUID`
-  (CONTRACT E.4).
+- **Windows (R2-10, Windows lab).** `MUIDV2` is a separate random v4 per
+  install, and `app.overwolf.muid` answers it; analytics and guests keep the
+  machine-derived `MUID` (CONTRACT E.4). Still unknown: whether
+  `MachineGuid` is ow-electron's `MUID` source.
+- **Open.** The Linux source (R2-10).
 
 ### OQ-03: host labelling (`owver`, `owVersion`, extra fields)
 
@@ -140,7 +153,7 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 
 - **Question.** Which events, Kinds, fields, cadence and mandatory subset does
   a host send?
-- **Status.** Answered. **Open, pending harness** for two details.
+- **Status.** Answered. **Open, pending harness** for one detail.
 - **Answer.** CONTRACT E.2: first launch (Counter + 400022), the
   `cmp-eu-only` request, start, launch heartbeat (Counter + 400023), first-show
   heartbeat (once per run), 400025 per ad guest, `window_closed`, the guest
@@ -159,9 +172,15 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
   https://dev.overwolf.com/ow-electron/guides/product-guidelines/app-screen-behavior/window-names
   (window names; its 20-character limit is not applied by ow-electron
   42.11.4); builder (uninstall event, CONTRACT I.6).
-- **Open.** R2-9 (periodic heartbeat cadence; a 13-hour run is in progress);
-  R3-4 (a crash 2 s after a recovery is not reported; the threshold is between
-  3 and 20 s, interim 10 s).
+- **R2-9 (answered).** A 13-hour session whose window was never shown sent
+  nothing after the launch burst until 12 hours later, then one heartbeat
+  Counter (`hasVisibleWindow: false`) and one 400023, and nothing in the
+  hour after (CONTRACT E.2 #9). ow-tauri's hourly check with a 12-hour
+  threshold matches it. Not settled by that run: a 12-hour timer against an
+  hourly check (at most an hour apart), and whether the first-show heartbeat
+  restarts the 12 hours.
+- **Open.** R3-4 (a crash 2 s after a recovery is not reported; the
+  threshold is between 3 and 20 s, interim 10 s).
 
 ### OQ-12: `setExternalPaymentUserId` report
 
@@ -261,11 +280,14 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 
 - **Question.** Which messages does the host pass to the ad page's
   `__overwolf__.onmessage` handlers, with which payloads?
-- **Status.** Answered. Minimize and restore **pending harness** (R3-1).
-- **Answer.** Exactly four types (CONTRACT D.5): `consent` (twice per consent
+- **Status.** Answered, minimize included (R3-1). A restore with a live
+  guest was not observed.
+- **Answer.** These types (CONTRACT D.5): `consent` (twice per consent
   save: the TCF string, then the URL-encoded unified string; not resent after
   a reload), `customTracking` (on change, and again after every later reload),
-  `eHashes` (OQ-11) and `window-hidden` (on hide; nothing on show). On each
+  `eHashes` (OQ-11), `window-hidden` (on hide; nothing on show),
+  `window-minimized` (on minimize, below), and `sendCommand` / `setPageUrl`
+  when the app calls those element methods (OQ-32). On each
   load the host also mutes the guest and signals its visibility and focus;
   ow-tauri reproduces those inside the shim, not as messages. ow-tauri adds
   `ad-clicked` (OQ-17). `ads.legacyHostMessages` is removed.
@@ -323,7 +345,7 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 ### OQ-27: viewability
 
 - **Question.** What makes a guest "visible" to the ad page?
-- **Status.** Answered. Minimize **pending harness** (R3-1).
+- **Status.** Answered.
 - **Answer.** A guest whose embedder window was never shown loads and never
   fills; a shown window fills even at opacity 0. ow-electron signals the guest
   `hidden` for `display: none`, for an element scrolled out of the viewport and
@@ -357,14 +379,21 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 
 - **Question.** What geometry and input behaviour should a full-page
   performance ad have?
-- **Status.** Decided.
-- **Answer.** The guest covers the embedder window's content area;
-  `adstyle` is passed through; one per window; the element closes after
-  `shutdown`; the documented 1000 x 600 minimum window is not enforced
-  (CONTRACT B.3.4).
-- **Source.**
-  https://dev.overwolf.com/ow-electron/monetization/advertising/unique-ad-sizes/interstitial-ads;
-  lead decision.
+- **Status.** Answered (round 3 and the ad-format lab).
+- **Answer.** The guest covers the embedder window's content area and stays
+  above every other ad guest; `adstyle` and `unit` are passed through. The
+  element gets no shadow root, the inline style `pointer-events: none;` and
+  one fixed full-viewport overlay `div`; input reaches the app under it until
+  the first `performance_ad_loaded`, then the ad takes it. One per window: a
+  second element is removed in the same task with no guest and no event. On
+  `shutdown` the element is removed from the document in the next task and
+  hears nothing more. The host enforces no minimum window size; the ad page
+  answers a window under 500 x 500 with `performance_ad_error` and
+  `shutdown`, and a no-fill with `shutdown` alone (CONTRACT B.3.2, B.3.4,
+  [AD-FORMATS.md](AD-FORMATS.md#interstitial-performance-ads)).
+- **Source.** Observed (round 3; lab perf, perf-sample, perf-small,
+  perf-twice, perf-remove, perf-with-standard, lab-layers);
+  https://dev.overwolf.com/ow-electron/monetization/advertising/unique-ad-sizes/interstitial-ads.
 
 ### OQ-30: Linux
 
@@ -380,8 +409,7 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 
 - **Question.** Does `<owadview>` support `pageUrl`, `setPageUrl()` or
   `sendCommand()`?
-- **Status.** Answered (they exist). Their behaviour is **pending harness**
-  (R3-2).
+- **Status.** Answered.
 - **Answer.** Yes. Round 1 inspected the element only at creation, when it is
   a plain `HTMLElement`; round 2 showed that after attach ow-electron upgrades
   it (an `OwAdViewElement` prototype with Electron's `<webview>` methods plus
@@ -390,19 +418,24 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
   ow-tauri defines `pageUrl`, `setPageUrl` and `sendCommand` on the element and
   reads `pageurl` (CONTRACT B.3.2, B.3.3, D.2); it does not provide the generic
   `<webview>` methods ([PARITY.md](PARITY.md#deviations)).
-- **Source.** Observed; absent from the typings and the documentation.
-- **Open.** R3-2: what `setPageUrl` and `sendCommand` do. Interim:
-  `setPageUrl` sets `pageurl` for the next guest load; `sendCommand` does
-  nothing.
+- **R3-2 (answered).** ow-electron forwards both to the running ad page as
+  private messages, `{ type: 'sendCommand', data: [...args] }` and
+  `{ type: 'setPageUrl', data: [url] }`; the test ad page showed no visible
+  effect. ow-tauri forwards them the same way, and `setPageUrl` also sets
+  `pageurl` for the next guest load (CONTRACT B.3.3, D.5).
+- **Source.** Observed (round 2, and round 3 `send-command-probe`); absent
+  from the typings and the documentation.
 
 ### OQ-35: DOM event shape
 
 - **Question.** Are `<owadview>` events plain `Event`s or `CustomEvent`s, and
   where is their data?
 - **Status.** Answered.
-- **Answer.** Plain, non-bubbling, non-cancelable `Event`s with the data as
-  own properties and `detail` `null`; `display_ad_loaded` fires twice per
-  fill; `did-fail-load` also fires for sub-frames (CONTRACT B.3.5).
+- **Answer.** Plain, non-bubbling, non-cancelable `Event`s with the data
+  copied as `Object.assign` copies it (an object's fields, an array's
+  indexes, a string's characters) and `detail` `null`; `display_ad_loaded`
+  fires twice per fill; `did-fail-load` also fires for sub-frames; an
+  element moved after attach gets a plain `destroyed` (CONTRACT B.3.5).
 - **Source.** Observed.
 
 ## Consent
@@ -655,3 +688,117 @@ ow-electron behaves where packages are unavailable (CONTRACT H).
   ([PARITY.md](PARITY.md#re-running-the-harness)).
 - **Source.** Observed;
   https://dev.overwolf.com/ow-electron/getting-started/changelog/ow-changelog.
+
+## Ad formats
+
+Questions from the ad-format work (round 3 and the ad-format lab). The
+developer guide is [AD-FORMATS.md](AD-FORMATS.md). Sources:
+https://dev.overwolf.com/ow-electron/monetization/advertising/overview and
+the pages under it, the archived Performance and Reward ads page
+(https://web.archive.org/web/20260317033924/https://dev.overwolf.com/ow-electron/monetization/advertising/unique-ad-sizes/performance-ads/),
+the official sample, and observation.
+
+### OQ-A1: reward ads
+
+- **Question.** Is `adstyle="rewarded-ad;"` the supported way to ask for a
+  reward ad? Is the `performance` element with a reward unit, from the
+  archived documentation, still valid? Is "hide the slot, then show it" the
+  intended opt-in, or is there a play command? Is `complete` the grant
+  signal, and is there a server-side verification or postback? Can a demo
+  app get a reward demo campaign?
+- **Status.** **Open: Overwolf.**
+- **Observed.** ow-electron 42.11.4 gives the rewarded flow to a slot of at
+  least 400 x 300 whose `adstyle` contains `rewarded-ad;` (a substring
+  match; `rewarded-ads;` works, `rewarded;` and `reward-ad;` do not). The
+  page sends `video_ad_ready`, then `player_loaded`; nothing plays until
+  the slot goes hidden and then visible; then `play`, `impression` and,
+  about 41 s later, `complete`, then a new `video_ad_ready`. No reward,
+  close or skip event exists, and `ad_uid` stays the same across cycles.
+  A smaller slot gets no event at all.
+- **Interim.** ow-tauri passes both paths through unchanged. The guide's
+  grant rule: grant once on `complete` after a `play` from the same element,
+  client-side only ([AD-FORMATS.md](AD-FORMATS.md#reward)).
+
+### OQ-A2: `unit`
+
+- **Question.** Which `unit` values are valid per app? On a standard slot it
+  is ignored; is that intended?
+- **Status.** **Open: Overwolf.**
+- **Observed.** On a performance element `unit` becomes the ad library's
+  `forceAdUnit`, verbatim, in test mode too; an unknown unit means no fill.
+  A standard slot ignores it. ow-tauri passes it through unchanged (the
+  earlier test-mode rewrite to `testAd` is removed; CONTRACT D.2).
+
+### OQ-A3: does every performance ad end with `shutdown`
+
+- **Question.** Does `performance_ad_dismiss` or `performance_ad_clicked`
+  always end with `shutdown`?
+- **Status.** Answered for no fill and for errors: both end with `shutdown`
+  (no fill sends `shutdown` alone; a window under 500 x 500 sends
+  `performance_ad_error`, then `shutdown`). **Open: Overwolf** for dismiss
+  and click, which need a user's click and were never sent in the lab.
+- **Interim.** No host watchdog: an overlay that never shuts down blocks
+  the window the same way in both hosts.
+
+### OQ-A4: house ads in test mode
+
+- **Question.** Can house ads be served in test mode?
+- **Status.** **Open: Overwolf.**
+- **Observed.** In test mode the page requests the house-ad configuration
+  for the uid (200), but no house creative was served in 120 s for an app
+  with none set up in the Dev Console.
+
+### OQ-A5: `owAdTestAd`
+
+- **Question.** The documentation's `localStorage.owAdTestAd = true` switch
+  is written for the app window's console. Which storage does it need under
+  ow-electron, where the ad page runs in a guest of its own?
+- **Status.** Answered for the observable part: set in the guest origin
+  (`https://www.overwolf.com`), it gives the same result on both hosts in
+  test mode [OBS lab L11]; live mode was not compared. **Open: Overwolf**
+  for the intended use. ow-tauri never touches the guest's `localStorage`
+  (CONTRACT D.7).
+
+### OQ-A6: interstitial close-button colours
+
+- **Question.** The ad library has `closeButtonColor` and
+  `closeButtonHoverColor` for interstitials. Can an ow-electron app set
+  them (for example through `adstyle`)?
+- **Status.** **Open: Overwolf.** The documented `adstyle` keys are the
+  background colour and blur; in every lab run the close-button colours
+  stayed at their defaults (`rgb(182, 182, 182)`, hover
+  `rgb(255,255,255)`) [OBS].
+
+### OQ-A7: in-stream ads
+
+- **Question.** How do ow-electron apps request in-stream ads, if at all?
+- **Status.** **Open: Overwolf.** In-stream ads are documented only for
+  ow-native's `OwAd`; `<owadview>` has no matching attribute or method in the
+  typings or the documentation. ow-tauri adds nothing and claims no
+  in-stream support.
+
+### OQ-A8: 970x90 in test mode
+
+- **Question.** Does the 970x90 container fill in test mode?
+- **Status.** Answered: it fills, in ow-electron and in ow-tauri [OBS: lab
+  sizes].
+
+### OQ-A9: re-appending a removed element
+
+- **Question.** The documented high-impact handler removes the small
+  container and appends it again. In ow-electron 42.11.4 that kills the slot:
+  an element removed after attach never attaches again. Is that intended,
+  or a bug ow-tauri should not copy?
+- **Status.** Answered (ow-tauri copies it: an element removed or moved
+  after attach is dead; CONTRACT B.3.4). **Open: Overwolf** (intended?).
+  Overwolf's own guidance is not to recycle containers, and the guide tells
+  apps to hide with `display: none` instead
+  ([AD-FORMATS.md](AD-FORMATS.md#high-impact)).
+
+### OQ-A10: live demand for demand-gated formats
+
+- **Question.** Would Overwolf qualify a demo app (or attach a demo deal) for
+  high impact, interstitial and reward ads, so they can be shown live?
+- **Status.** **Open: Overwolf.** These formats come from direct deals after
+  DevRel qualifies the app (documentation); an unqualified uid gets no live
+  fill in either host [OBS]. Test mode shows all three.

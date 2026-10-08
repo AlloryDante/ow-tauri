@@ -1,6 +1,6 @@
 # ADR 0005: Keep ow-electron's test/live ad semantics
 
-- Status: Accepted (amended 2026-10-06)
+- Status: Accepted (amended 2026-10-07)
 - Date: 2026-10-06
 
 ## Context
@@ -25,12 +25,9 @@ changes [OBS].
 - ow-tauri follows ow-electron: live unless `--test-ad`, `OW_TAURI_TEST_AD=1`,
   `ads.testAd: true` or `Builder::test_ad(true)`.
 - Test and live mode use the same wire behaviour (CONTRACT D.8); test mode
-  only sets `testAd: true` in `__overwolf__`.
-- As a safety guard, test mode also rewrites a non-empty `unit` to
-  `"testAd"`, so a test build cannot request a live performance ad.
-  ow-electron passes `unit` through unchanged in test mode (observed), so
-  this is a documented deviation
-  ([PARITY.md](../PARITY.md#deviations)) that the project keeps on purpose.
+  only sets `testAd: true` in `__overwolf__`. Every attribute, `unit`
+  included, passes through unchanged in both modes, as in ow-electron
+  (amended 2026-10-07; see Amendments).
 - Live mode does not touch the guest's `localStorage`.
 - **Labs** (owner decision, 2026-10-06): agents and automated labs may load
   live ads to verify parity, under fixed rules: at most 10 live loads per
@@ -75,3 +72,9 @@ changes [OBS].
   (ow-electron does not rewrite `unit`); live lab windows stay on-screen at
   alpha 0; live runs are measured by fill impressions, because ow-electron's
   live runs on macOS emitted no `display_ad_loaded`.
+- 2026-10-07, ad formats (wave 3e): the test-mode `unit` guard is dropped.
+  ow-electron passes `unit` through in test mode, where it becomes the
+  performance ad's `forceAdUnit`; `testAd: true` already selects test demand,
+  and the rewrite changed what the ad page saw, which a reviewer comparing
+  the hosts would see. `unit` now passes through in both modes and the
+  deviation is gone from PARITY.

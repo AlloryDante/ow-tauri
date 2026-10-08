@@ -44,8 +44,9 @@ can change it. Every other known difference is listed under
 
 Parity is measured against a fixed **baseline**: ow-electron 42.11.4 (the
 `latest` dist-tag on 2026-10-06; Electron 42.11.4, Chrome 148.0.7778.280),
-observed on macOS 25.5 arm64. A new ow-electron release means a new baseline
-run ([Re-running the harness](#re-running-the-harness)).
+observed on macOS arm64 and, through the Windows lab on CI, on Windows
+Server 2025. A new ow-electron release means a new baseline run
+([Re-running the harness](#re-running-the-harness)).
 
 ## How parity is proven
 
@@ -59,12 +60,32 @@ Two halves, diffed field by field:
    modifies ow-electron. Facts it establishes are tagged [OBS] ("matches
    ow-electron (observed)") in CONTRACT. Its README lists every capture file
    and option.
-2. **The ow-tauri side: the Tauri lab.** The example app built with ow-tauri,
-   run with the same identity and the same scenario, with its traffic
-   captured: on Windows through WebView2's net log (`--log-net-log` in the
-   browser arguments) and the plugin's own request log; on macOS through a
-   lab-only HTTPS proxy with a local certificate authority, inside an
-   isolated home directory.
+2. **The ow-tauri side: the Tauri edition of the harness**
+   (`tools/parity-harness/tauri-app`, `node run.mjs --host tauri`). The same
+   harness app on ow-tauri: a minimal Tauri app whose main webview runs each
+   scenario through the `ow-tauri/electron` facade, step by step as the
+   ow-electron app does. The plugin's `lab` Cargo feature (off by default,
+   never shipped) writes a trace in the ow-electron capture shapes: host
+   requests as sent, guest requests (on Windows through WebView2's
+   `Network.requestWillBeSent` events), cookies, the state file, element
+   events, host-to-guest messages, and the native state of each guest
+   (`transparent`, `zorder` and `passthrough` records, with `-native`
+   variants read back from the platform). Each run uses the same identity
+   and scenario as its ow-electron baseline, inside an isolated home
+   directory.
+3. **The diff: `parity-diff.mjs`.** It compares an ow-electron capture with
+   an ow-tauri capture of the same scenario, after normalising volatile
+   values, and classes every difference: `intended:host-label` (the
+   labelling rule), `intended:os-gap` (a documented platform gap),
+   `intended:optimised` ([Optimised, same outcome](#optimised-same-outcome)),
+   `intended:deviation` ([Deviations](#deviations)), `variance` (it differs
+   between two ow-electron runs too: ad content, HTTP cache, playback speed),
+   `not-mirrored` (a harness step the Tauri edition cannot run), or `BUG`
+   (anything else). A run passes when no `BUG` remains. Ad-format runs are
+   also compared on per-element event names, order, counts and payload keys,
+   DOM state and removal timings, the ad library's options on the wire, guest
+   bounds, z-order, pass-through and mute timelines
+   ([harness README](../tools/parity-harness/README.md)).
 
 Safety rules for both halves:
 
@@ -72,9 +93,13 @@ Safety rules for both halves:
   inside the screen bounds (live demand does not fill an off-screen window),
   ignore the mouse, are not focusable and stay off the taskbar; a window that
   is never shown never fills, in ow-electron and in ow-tauri. The dock icon
-  is hidden. Screenshots of the screen are opt-in, because they can raise a
-  system screen-recording prompt.
-- No input is ever sent to an ad. Ads are never clicked.
+  is hidden. A window monitor kills a run the moment any window becomes
+  visible, and a front-app monitor fails a run whose app ever became
+  frontmost. Nothing captures the screen. The Windows lab runs only on a CI
+  runner, whose desktop is nobody's screen.
+- No input is ever sent to an ad. Ads are never clicked. A pass-through
+  probe may send one click to the app's own control in test mode, and only
+  when the native hit test there names the app's webview.
 - Test ads by default. Live loads only when a run opts in, at most 10 per
   run, each one logged.
 - Each run uses an isolated home directory, so the real profile, consent and
@@ -106,7 +131,13 @@ Safety rules for both halves:
 | `offscreen` | test and live fill with the window off-screen or on-screen at opacity 0 |
 | `packages`, `introspect` | the package manager surface; the element's members after attach |
 | `--overwolf-uid` | `app_id` and `app_cuid` with a console-assigned uid |
-| `long` (13 hours, hidden) | the periodic heartbeat cadence |
+| `long` (13 hours, hidden) | the periodic heartbeat cadence (R2-9) |
+| `sizes`, `tower-plus` | the seven standard containers and a recommended layout: events, the ad library's options, refresh |
+| `high-impact`, `high-impact-small-zone`, `high-impact-only` | the high-impact zone, its events and the container growth |
+| `perf`, `perf-sample`, `perf-unit`, `perf-small`, `perf-twice`, `perf-remove`, `perf-with-standard`, `perf-minimize` | the interstitial (performance) element: DOM shape, input, events, error and no-fill paths, one per window, removal, stacking over a standard slot, minimize |
+| `reward`, `reward-two-slots`, `reward-visibility-probe`, `reward-play-probe`, `reward-optin` | the rewarded flow: preload, opt-in through hide then show (1 frame, 50 ms, 500 ms, 2 s), play, `complete` |
+| `house`, `adstyle-probe`, `send-command-probe`, `owadtestad` | house-ad configuration, which `adstyle` values switch the ad library, `sendCommand` / `setPageUrl` delivery, `localStorage.owAdTestAd` |
+| `lab-layers`, `audio`, `standard-remove` | the [ad-format lab checks](#ad-format-lab-checks): transparency, z-order, pass-through, blur, mute, removal |
 
 ## Parity matrix
 
@@ -119,6 +150,8 @@ Status values:
 - **R2-n / R3-n**: a harness item ([Harness rounds](#harness-rounds)) still
   has to observe part of it; CONTRACT gives the interim behaviour.
 - **Deviation**: ow-tauri differs on purpose ([Deviations](#deviations)).
+- **Optimised**: ow-tauri gets the same outcome another way
+  ([Optimised, same outcome](#optimised-same-outcome)).
 - **Overwolf**: needs an answer only Overwolf can give.
 - **Deferred**: outside the current scope (packages).
 
@@ -131,9 +164,10 @@ Status values:
 | `app_cuid` when `overwolf.uid` is set | override as `app_id`, computed uid as `app_cuid` | identical | G.2 | Target |
 | `process.env.OVERWOLF_APP_UID` | set when the main module loads | set before app scripts run | B.1.1 | Target |
 | muid, macOS | `guid(sha256(lowercase(IOPlatformUUID)))`, `muidV2 = muid` | identical; 4 test vectors | E.4 | Target |
-| muid, Windows and Linux | not observed yet | registry values shared, else derived | E.4 | R2-10 |
+| muid, Windows | `MUID` (machine) in analytics and guests; `MUIDV2` a random v4 per install, also `app.overwolf.muid` | registry values shared, else derived and written | E.4 | Target (Windows lab) |
+| muid, Linux | not observed | derived from `/etc/machine-id` | E.4 | R2-10 |
 | phase percent | MD5 character-code sum of the muid, modulo 100 | identical | E.4 | Target |
-| `ow-electron.json` | `firstLaunch`, `cmp` with URL-encoded unified string and seconds `timeStamp`; nothing else in the directory | identical bytes | F.2 | Target |
+| `ow-electron.json` | `firstLaunch`, `cmp` with URL-encoded unified string and seconds `timeStamp`, then `eHashes` once the app set email hashes; nothing else in the directory | identical bytes; ow-tauri's own options in `ow-tauri.json` beside it | F.2, F.3 | Target; Optimised (`ow-tauri.json`) |
 | `utmParams` absent | `undefined` | `undefined` | F.2 | Target |
 | logs | none written; `logger.enabled: false` | none unless `logging.enabled` | F.4 | Target |
 | `logsFolderPath` | literal `<userData>/..\ow-electron/<uid>/logs` | identical string | F.4 | Target |
@@ -144,17 +178,18 @@ Status values:
 | Behaviour | ow-electron (observed) | ow-tauri target | CONTRACT | Status |
 |---|---|---|---|---|
 | launch sequence | first launch, `cmp-eu-only`, start, heartbeat, 400022, 400023, within about 100 ms | identical order, from `main_ready` | E.2 | Target |
-| first-show heartbeat | Counter + 400023 when the first window shows | identical | E.2 | Target |
+| first-show heartbeat | Counter + 400023 when the first window shows, before the 400025 of a guest attached after the show | identical | E.2 | Target |
 | ad guest Kind | 400025 per guest | identical | E.2 | Target |
 | `window_closed` | one per visible period (`hide()`, close, quit), nothing under 1 s; constructor `title`; `length` rounded down; never for unshown windows or the consent settings window | identical | E.2 | Target |
 | window analytics name | last path segment of the URL at first show, `.html` dropped, sanitised, not truncated; the `name` option is ignored | identical | E.2 | Target |
 | guest crash event | Counter `sessionTS`, `reason`; Kind 400024 with `reason` first | identical | E.1, E.2 | Target |
 | crash report suppression | a crash 2 s after a recovery is not reported; threshold unknown | no report under 10 s | E.2 | R3-4 |
-| periodic heartbeat | none within 6 minutes | hourly check, 12 h | E.2 | R2-9 (running) |
+| periodic heartbeat | in a 13-hour hidden session: nothing after the launch burst for 12 h, then one Counter (`hasVisibleWindow: false`) and one 400023, nothing in the next hour | an hourly check that sends 12 h after the last heartbeat | E.2 | Target (R2-9); a 12 h timer against an hourly check, and a reset by the first-show heartbeat, not settled |
 | Counter query and `Extra` | key order, URLSearchParams encoding, `os_ver` from `os.release()` | identical | E.1 | Target |
 | InsertStats body | `Kind` + positional `Extra`, no event fields | identical | E.1 | Target |
-| host request headers | fetch-metadata headers, `priority: u=4, i`, no Origin or Referer, session cookies | identical, cookies from the ads data store | E.1 | Target |
-| user agent | Chromium UA with `<PNNS>/<ver>` and `Electron/42.11.4` | same shape, `Tauri/<tv>`; engine never faked | E.1 | Target (label) |
+| host request headers | fetch-metadata headers, `priority: u=4, i`, no `accept`, no Origin or Referer, `content-length` first on InsertStats, no cookies sent or stored | identical (its own HTTP client) | E.1 | Target |
+| HTTP cache | a URL Chromium's cache holds is revalidated (`if-none-match`, 304) | no HTTP cache: the plain request, same server outcome | E.1, E.2 | Optimised |
+| user agent | Chromium UA with `<PNNS>/<ver>` and `Electron/42.11.4` | same shape, `Tauri/<tv>`; on WKWebView Safari's `Version/` and `Safari/` tokens are added where Electron keeps Chromium's; engine never faked | E.1 | Target (label) |
 | `owver` | `42.11.4`, `42_11_4` | `tauri-<tv>`, `tauri-<tv with _>` | 0 | Target (label); Overwolf (dashboards) |
 | event names | `electron_*` | `tauri_*` | 0 | Target (label); Overwolf (dashboards) |
 | `disableAnonymousAnalytics()` | keeps first-launch Counter and both heartbeats | identical | E.3 | Target |
@@ -172,7 +207,7 @@ Status values:
 | consent cookies | written by the page, 365 days, every launch, before ads | written by the page; host fallback only if missing | D.6.3 | Target |
 | `isCMPRequired()` | one `cmp-eu-only` request per launch, not persisted, no timeout; resolves at the startup page's load; a `{}` body disables the cache | identical | D.6.2 | Target |
 | `isCMPRequired()` rule | `true` for every response served | `true` | D.6.2 | Overwolf |
-| settings window | title `CMP`, 800 x 800, not modal, preloader then `cmp.html` with a fixed query; closing writes nothing | identical | D.6.4 | Target; R3-5 (`firstRun`, `cmpRequired` on later launches) |
+| settings window | title `CMP`, 800 x 800, not modal, preloader then `cmp.html` with a fixed query; closing writes nothing | identical, verified in the lab | D.6.4 | Target; R3-5 (`firstRun`, `cmpRequired` on later launches) |
 | settings window promise | resolves on creation; a second call focuses | identical | A.2.2 | Target |
 | default consent on the first settings call | a hidden `ow-cmp-v2.html` window overwrites the stored consent with a new default | identical | D.6.4 | Target; Overwolf (OQ-38) |
 
@@ -180,25 +215,52 @@ Status values:
 
 | Behaviour | ow-electron (observed) | ow-tauri target | CONTRACT | Status |
 |---|---|---|---|---|
-| `__overwolf__` | 31 keys in a fixed order, frozen, `consent` and `pageUrl` empty | identical; `owVersion` labelled | D.2 | Target |
+| `__overwolf__` | 31 keys in a fixed order, frozen; `consent` and `consentFull` = the stored unified consent string as it was at launch (empty on a first launch, not updated in the session); `pageUrl` from the `pageurl` attribute | identical; `owVersion` labelled | D.2 | Target |
 | `systemInfo`, macOS | CPU brand, one empty GPU entry, named displays with dpi | identical | D.2 | Target |
-| `systemInfo`, Windows and Linux | not observed | interim adapters list | D.2 | R2-10, R2-11 |
-| `unit` in test mode | passed through | rewritten to `testAd` (safety guard) | D.2 | Deviation |
+| `systemInfo`, Windows | one GPU entry per DXGI adapter with only `driverVersion`; displays by their friendly names | identical | D.2 | Target (Windows lab) |
+| `systemInfo`, Linux | not observed | one blank GPU entry | D.2 | R2-11 |
+| `unit` | passed through, in test mode too; a performance ad's `forceAdUnit` | identical | D.2 | Target |
 | `pageurl` attribute | becomes the guest's `pageUrl` | identical | B.3.2, D.2 | Target |
-| element shape | after attach: `OwAdViewElement` prototype with Electron's `<webview>` methods, `pageUrl`, `setPageUrl`, `sendCommand`; open shadow root with `style` and `iframe` | owadview members on the instance (incl. `pageUrl`, `setPageUrl`, `sendCommand`); same shadow root; no generic `<webview>` methods | B.3.3, B.3.4 | Target (owadview members); Deviation (webview methods); R3-2 (method behaviour) |
-| element events | plain `Event`, data as own properties, `display_ad_loaded` twice, sub-frame `did-fail-load`; Electron's standard `<webview>` events also forwarded | identical for the ad events; `render-process-gone`, navigation and console events | B.3.5 | Target; Deviation (`did-frame-*`, `media-*`) |
-| host to guest messages | `consent` (twice), `customTracking` (resent per reload), `eHashes`, `window-minimized` (minimize), `window-hidden` (also on minimize, except on Windows, where the guest turns hidden before `window-minimized`) | identical | D.5 | Target |
+| element shape | a plain `HTMLElement` until attach; then `OwAdViewElement` prototype with Electron's `<webview>` methods plus `setPageUrl` and `sendCommand`, own attribute-backed properties, an open shadow root with `style` and `iframe` | own attribute-backed accessors in ow-electron's order; `setPageUrl`, `sendCommand`, `setAudioMuted`, `reload` on an inserted prototype; the shadow root is attempted (engines refuse it on `owadview`); no generic `<webview>` methods | B.3.3, B.3.4 | Target (owadview members); Gap (shadow root); Deviation (webview methods) |
+| `setPageUrl()`, `sendCommand()` | forwarded to the ad page as private messages; no visible effect | identical; `setPageUrl` also sets `pageurl` for the next load | B.3.3, D.5 | Target |
+| element events | plain `Event`, data copied as `Object.assign` copies it (a string payload spreads per character), `display_ad_loaded` twice, sub-frame `did-fail-load`; Electron's standard `<webview>` events also forwarded | identical for the ad events; `render-process-gone`, navigation and console events | B.3.5 | Target; Deviation (`did-frame-*`, `media-*`) |
+| element removed or moved after attach | dead: the guest detaches and the element never attaches again; a plain `destroyed` only when it is back in the document by then (a move) | identical | B.3.4, B.3.5 | Target |
+| host to guest messages | `consent` (twice), `customTracking` (resent per reload), `eHashes`, `window-minimized` (minimize), `window-hidden` (also on minimize, except on Windows, where the guest turns hidden before `window-minimized`), `sendCommand`, `setPageUrl` | identical | D.5 | Target |
 | email hashes | `{sha1, md5, sha256}` lower-case hex, trimmed and lower-cased input; sent as `eHashes`, never in `__overwolf__` | identical | A.2.2, D.5 | Target; R3-6 (gmail rule) |
 | ad document request | `Referer: https://www.overwolf.com/<uid>`, `Origin`, full header order, cookies | identical | D.8.2 | Target (Windows, macOS, Linux) |
 | subresource `Origin` | forced on every guest request | Windows identical | D.8.3 | Target (Windows); Gap (macOS); Gap until a web extension (Linux) |
 | `x-ow-*` on `owads.min.js` | `x-ow-uid`, `x-ow-phase`, `x-ow-window` | Windows identical | D.8.3 | Target (Windows); Gap (macOS, Linux); Overwolf |
 | guest web security | off; insecure content allowed | off on Windows and Linux | D.8.1 | Target (Windows, Linux); Gap (macOS) |
 | hidden embedder | loads, never fills | identical | B.3.4 | Target |
-| visibility | `hidden` for `display: none`, scrolled out, window hidden or minimized; screen position ignored; the page reloads itself after `hidden` | identical signals and `visibilitychange` events (one in the old state on hide, three on show); the hidden main frame's timeouts of 1 s or more aligned to 1 s wake-ups as in Chromium (shorter timers and the ad frames run on time); 0.5 intersection ratio; a reload asked for while hidden is held until 2.5 s after `hidden` or until visible again | B.3.4, D.5 | Partial |
+| visibility | `hidden` for `display: none`, scrolled out, window hidden or minimized; screen position ignored; the page reloads itself after `hidden`; guests hidden before their window closes | identical signals and `visibilitychange` events (one in the old state on hide, three on show); the hidden main frame's timeouts of 1 s or more aligned to 1 s wake-ups as in Chromium (shorter timers and the ad frames run on time); 0.5 intersection ratio; a reload asked for while hidden is held until 2.5 s after `hidden` or until visible again; Windows: guests hidden natively while minimized | B.3.4, D.5 | Partial (sub-100 ms hides read with more jitter on Windows) |
 | crash recovery | immediate reload, no cap, `render-process-gone` | identical | D.7 | Target |
 | load errors | main frame reloaded every 5000 ms, no cap, no analytics | identical | D.7 | Target |
 | test and live | identical shaping, only `testAd` differs | identical | D.7 | Target |
-| live fill on macOS | fill impressions with the window on-screen at opacity 0; none off-screen; no `display_ad_loaded` in live runs | measured in the lab | D.8.3 | Lab check 6 |
+| live fill on macOS | fill impressions with the window on-screen at opacity 0; none off-screen; no `display_ad_loaded` in live runs | measured: 2 fill impressions per load on both hosts (300x250, lab run against round 2's live run) | D.8.3 | Target (lab check 6) |
+| external opens | one gesture, one open | one gesture, one open; at most 20 per guest per minute (Overwolf's QA step clicks one ad five times) | D.7 | Target |
+
+### Ad formats
+
+The developer view of each format is [AD-FORMATS.md](AD-FORMATS.md).
+Results are from the macOS ad-format lab (24 scenarios, test mode) and the
+Windows lab (28 scenarios), both against ow-electron 42.11.4.
+
+| Behaviour | ow-electron (observed) | ow-tauri target | CONTRACT | Status |
+|---|---|---|---|---|
+| standard display, 7 sizes | all seven fill in test mode (970x90 included); `display_ad_loaded` twice per fill, refresh about every 30 s | identical events and ad library options | B.3.2, B.3.5 | Target |
+| standard video (400x300, 400x600) | `player_loaded`, `play`, `impression`, `complete`; guests start muted | identical; mute timeline equal (L5) | B.3.5, D.7 | Target |
+| house ads | configuration request per uid; `house_ad_action` / `house-ad-action` with `{ action }` | identical request; both spellings dispatched | B.3.5 | Target; not served in test mode on either host (OQ-A4) |
+| high impact | `adstyle="high-impact-ad;"` passed to the ad library; `high-impact-ad-loaded`, then `high-impact-ad-removed` about 15 s later; the guest follows the zone's growth | identical | B.3.2, B.3.4 | Target |
+| interstitial DOM | no shadow root, inline `pointer-events: none;`, one fixed full-viewport `div`; `auto` at `performance_ad_loaded` | identical, character for character | B.3.4 | Target |
+| interstitial input | the page under it takes input until `performance_ad_loaded` | native pass-through until that event (Windows window region, macOS `hitTest:`) | B.3.4 | Target (Windows, macOS); Gap (Linux) |
+| interstitial stacking | above every other ad (`z-index: 999999`) | the newest performance guest raised to the top after every mount | B.3.4 | Target (Windows, macOS); Gap (Linux) |
+| interstitial end | `shutdown`, then the element leaves the document (+185 ms); no-fill sends `shutdown` alone; under 500 x 500 `performance_ad_error` (a string), then `shutdown` | identical (removal +1 ms, in the next task) | B.3.4, B.3.5 | Target |
+| second interstitial | removed in the same task, no guest, no event | identical | B.3.2 | Target |
+| interstitial after a minimize | dismisses itself (`performance_ad_dismiss`) in some runs, not in others, then `shutdown` | the same order of messages; the dismiss varies the same way | B.3.4, D.5 | Target (variance on both hosts) |
+| reward | `adstyle="rewarded-ad;"` on a slot of at least 400 x 300: `video_ad_ready`, `player_loaded`, play after hide then show, `impression`, `complete` | identical for hides of 1 frame, 50 ms, 500 ms and 2 s (L7) | B.3.2, B.3.4 | Target |
+| transparency | a slot with no ad shows the app's container; an interstitial's dim shows the app | guests transparent from creation (`ads.transparentGuests`) | B.3.4 | Optimised (L1, L1-W) |
+| `localStorage.owAdTestAd` in the guest | the same `testAd` result | identical in test mode | D.7 | Target (live not compared) |
+| in-stream | no `<owadview>` API | none | none | Not supported (OQ-A7) |
 
 ### Packages, updates, signing
 
@@ -218,7 +280,6 @@ Known differences from ow-electron, each deliberate:
 | Difference | Why | CONTRACT |
 |---|---|---|
 | host label (`tauri_*`, `tauri-<tv>`, `Tauri/<tv>`) | the owner's labelling rule; one setting reverts it | 0 |
-| test mode rewrites a non-empty `unit` to `testAd` | safety guard: a test build never requests a live performance ad | D.2 |
 | macOS: no subresource `Origin`, no `x-ow-*` headers, web security on | no public WebKit API (OQ-05) | D.8.3 |
 | Linux: subresource shaping waits for a web-process extension | not built yet | D.8.3 |
 | no generic Electron `<webview>` methods on `<owadview>`; no `did-frame-*` / `media-*` events | undocumented for `<owadview>`, no platform equivalent, and some would give app code control of remote content | B.3.3, B.3.5 |
@@ -226,12 +287,53 @@ Known differences from ow-electron, each deliberate:
 | first ad navigation waits up to 3 s for the startup consent window | makes ow-electron's observed ordering deterministic | D.6.5 |
 | crash-report threshold of 10 s | interim until R3-4 | E.2 |
 | consent cookies written by the host if the page could not | only when both cookies are missing (`consent.hostCookieFallback`) | D.6.3 |
-| ow-tauri options (`analytics.userSwitch`, `analytics.muidStrategy: per-install`, a numeric `ads.maxRecoveries`, `logging.enabled`) | off by default; documented as non-parity | A.1 |
+| ow-tauri options (`analytics.userSwitch`, `analytics.muidStrategy: per-install`, a numeric `ads.maxRecoveries`, `logging.enabled`, `ads.transparentGuests: false`) | off by default; documented as non-parity | A.1 |
+| windows are sized by their inner (content) size; ow-electron sizes the outer frame and fits it to the work area | Tauri's window builder sizes the content; changing it needs a product decision | B.2.2 |
+
+The test-mode rewrite of a non-empty `unit` to `testAd` was a deviation
+until wave 3e; it is removed, and `unit` passes through as in ow-electron
+([ADR 0005](adr/0005-ads-test-live-parity.md) amendment).
+
+### Known platform gaps
+
+Where the platform cannot reproduce ow-electron with public API. Each is in
+CONTRACT with its fallback, and `parity-diff.mjs` classes it
+`intended:os-gap`.
+
+| Gap | Platform | CONTRACT |
+|---|---|---|
+| no subresource `Origin`, no `x-ow-*` headers, web security on in guests | macOS (WebKit) | D.8.3 |
+| subresource shaping waits for a web-process extension | Linux | D.8.3 |
+| after a cross-origin redirect, the later hops carry `Origin: null` (WebView2 lets a host change a request once, not per hop) | Windows | D.8.3 |
+| guests are packed into a `GtkBox` and never overlap: no ad rectangles, z-order or pass-through | Linux | B.3.4 |
+| `<owadview>` gets no shadow root (engines refuse `attachShadow` on it) | all | B.3.4 |
+| Electron's `<webview>` events `did-frame-*`, `media-*` and the like | all | B.3.5 |
+| guests mounted together report 400025 over their creation time (WebView2 creates them one after another on the main thread); host requests due meanwhile leave up to about 300 ms late | Windows | E.2 |
+| `SameSite=None` cookies read back as no policy; `document.cookie` order follows the WebKit store | macOS | D.6.3 |
+
+## Optimised, same outcome
+
+ow-tauri reaches the same observable outcome another way. `parity-diff.mjs`
+classes these `intended:optimised`.
+
+| ow-electron | ow-tauri | Why the outcome is the same |
+|---|---|---|
+| the ad guest is an in-DOM `<webview>` driven by `GUEST_VIEW_*` IPC | a native child webview per `<owadview>`, driven by the plugin's own commands and host messages ([ADR 0003](adr/0003-owadview-native-child-webviews.md)) | the page sees the same `__overwolf__`, messages and visibility; the element gets the same events |
+| the guest is part of the page, so it has no background of its own | guests are created transparent (`ads.transparentGuests`, default `true`); macOS clears the `WKWebView` background without Tauri's `macos-private-api` | an empty slot shows the app's container and an interstitial's dim shows the app [OBS L1, L1-W] |
+| the overlay's `z-index` puts the interstitial above other ads | the newest performance guest is raised natively after every guest mount | the interstitial is the top ad [OBS L2] |
+| `pointer-events: none` on the overlay until the ad loads | the native guest passes input through until `performance_ad_loaded` | the app under an empty interstitial takes clicks [OBS L3, L3-W] |
+| Electron's `GUEST_INSTANCE_FOCUS_CHANGE` | the shim's `setEmbedderFocus` (D.3) | `hasWindowFocus()` and `document.hasFocus()` read the same |
+| Chromium's HTTP cache revalidates a cached analytics URL (304) | no HTTP cache for host requests | the same request reaches the same server |
+| one state file, `ow-electron.json` | `ow-electron.json` shared byte for byte, plus `ow-tauri.json` for ow-tauri's own options (F.3) | Overwolf's file is identical |
 
 ## Lab checks
 
 These checks run in the Tauri lab before a release, per platform. Each
 compares the Tauri capture with the baseline capture of the same scenario.
+Last result on macOS (2026-10-07, final build of the lab round): 0 `BUG` in
+the first and second launch, consent, `messages`, quit and live runs.
+On Windows the [Windows lab](#windows-lab) runs checks 1, 4 and 8 on every
+push.
 
 1. **Field-by-field diff** of: Counter and InsertStats URLs, queries and
    bodies; host request header set and order; cookies on host requests; the
@@ -269,6 +371,50 @@ compares the Tauri capture with the baseline capture of the same scenario.
    `customTracking` after every reload once it has changed, `eHashes` after
    both email-hash calls, and `window-hidden` on hide, and nothing else.
 
+### Ad-format lab checks
+
+Test mode, both hosts, the scenarios of the [scenario table](#scenarios).
+Nothing is ever sent into an ad.
+
+| Id | Check | Pass when | macOS (W16 sweep) | Windows (CI) |
+|---|---|---|---|---|
+| L1 | transparency: an unfilled slot over a red container; an interstitial's dim | the app's colour shows where the guest has no content | pass: probes see the container under the guest; native routing matches the DOM | L1-W pass: the composed window shows the red container under a ready reward slot; every guest's WebView2 background is transparent |
+| L2 | z-order: interstitial up, then a standard slot remounted | the performance guest stays on top | pass (`zorder` record) | pass: the performance guest's container is the top child window before load, after load and after the remount |
+| L3 | pass-through while the interstitial loads | the app's control takes a click while loading; after `performance_ad_loaded` the ad would | pass on routing: `pointer-events` `none` then `auto`, native hit test on the app while loading; the click itself is not mirrored (WebKit ignores synthesised events in the invisible window) | L3-W pass: empty window region and one click delivered to the app while loading; after load the region is gone and the click is refused |
+| L4 | `background-blur` | same visual outcome | pass | pass (diff only) |
+| L5 | mute timeline per guest | equal to ow-electron's `isAudioMuted()` | pass | pass (native `IsMuted`) |
+| L6 | payload spread, `destroyed`, removal timings | as ow-electron | pass | pass |
+| L7 | reward opt-in after hides of 1 frame, 50 ms, 500 ms, 2 s | plays exactly when ow-electron plays | pass, all four | pass; a 50 ms hide can differ run to run (variance) |
+| L8 | minimize and restore under an interstitial | the same messages in the same order | pass; `performance_ad_dismiss` varies on both hosts | pass: hidden, then `window-minimized`, no `window-hidden` |
+| L9 | removal of a standard slot | as ow-electron | pass | pass |
+| L10 | the ad library's options on the wire, per format | equal on both hosts | pass, every scenario | pass |
+| L11 | `localStorage.owAdTestAd` in the guest origin | the same `testAd` result | pass in test mode; the live pair was not run | pass in test mode |
+
+The macOS sweep W16 ran 24 scenarios with no window ever visible and the
+app never frontmost: 0 `BUG` in 23; the 24th, `perf-minimize`, is the
+dismiss above, now classed as variance after the Windows lab saw ow-electron
+vary the same way. 9 live loads in total (under the cap of 10), never
+clicked: standard and Tower Plus filled on ow-tauri; reward, interstitial
+and high impact did not fill on ow-tauri, as expected for an unqualified
+uid (OQ-A10).
+
+### Windows lab
+
+`.github/workflows/windows-lab.yml` runs on pushes to `main` that touch the
+plugin, `ow-tauri` or the harness, and on demand. It builds the Tauri
+harness app with the `lab` feature, then four shards run every scenario on
+ow-electron and on ow-tauri one after the other on the same runner (Windows
+Server 2025, display 1920 x 1080), diff the pair and evaluate the Windows
+checks. Test ads only, with the harness's neutral identity.
+
+Last full run on `caa7065`: 28 scenarios (the round-2 base runs `A`, `cmp`
+and `messages`, and every ad-format scenario), 0 `BUG`, and L1-W, L2, L3-W
+and L5 true. Request shaping matched on the wire: the ad library request
+carries the same `x-ow-uid`, `x-ow-phase` and `x-ow-window` headers and
+`Referer` as ow-electron's, the ad document the same `Referer` and `Origin`,
+and subresources the forced `Origin` (176 of 178; the 2 others are later
+hops of a cross-origin redirect, a [known gap](#known-platform-gaps)).
+
 ## Re-running the harness
 
 Anyone can reproduce the baseline. The harness uses only public packages:
@@ -305,8 +451,25 @@ node run.mjs --scenario packages
 node run.mjs --scenario introspect
 nohup taskpolicy -b node run.mjs --scenario long --allow-long --caffeinate --no-cdp &
 
+# Round-3 ad formats and the ad-format lab checks (test ads):
+node run.mjs --scenario sizes --window-monitor
+node run.mjs --scenario perf-sample --window-monitor
+node run.mjs --scenario reward-optin --window-monitor
+node run.mjs --scenario lab-layers --window-monitor
+# ... every scenario of the table above; the full list is in the harness README
+
 node analyze.mjs captures/<run-id>           # report.md and report.json per run
+node lib/adformat-report.mjs captures/<run-id>   # per-element ad-format facts
+
+# The same scenario on ow-tauri (builds tools/parity-harness/tauri-app once,
+# with the plugin's lab feature), then the diff:
+taskpolicy -b node run.mjs --host tauri --scenario sizes --run-id T-sizes
+node parity-diff.mjs captures/<ow-electron run> captures/T-sizes   # exit 1 while a BUG remains
 ```
+
+The Windows lab is the `windows-lab.yml` workflow (`workflow_dispatch` with
+a scenario list, or a push to `main`); its captures and diffs are the
+`windows-lab-captures-<shard>` artifacts.
 
 Captures are git-ignored and stay on the machine that made them; they
 contain cookies and identifiers. The harness runs as a neutral example app
@@ -349,23 +512,30 @@ in total. Its results are folded into CONTRACT, tagged [OBS]:
 | R2-14 | `app_cuid` with a console-assigned uid | G.2 |
 | R2-15 | the package manager's async rejections and `undefined` package objects | B.1.3, H.1 |
 | live fill | round 1's live run had fill impressions but no `display_ad_loaded`; no live fill off-screen | lab check 6 |
+| R2-9 | the 13-hour hidden session (`R2-long-20261006-2023`): one heartbeat Counter and one 400023 at 12 h, nothing else; no `window_closed` at quit for a window never shown | E.2 |
+| R2-10, R2-11 (Windows) | `MUID` / `MUIDV2` and `app.overwolf.muid`; `systemInfo` GPUs and display names (Windows lab) | D.2, E.4 |
 
 Still open from round 2:
 
 | Id | What to observe | For |
 |---|---|---|
-| R2-9 | a 13-hour hidden session: periodic heartbeat cadence (running) | OQ-04 |
-| R2-10 | Windows and Linux: machine-id derivation; Windows `MUID` / `MUIDV2` registry values before and after a first run; `systemInfo.gpus` (needs a Windows and a Linux host) | OQ-02, OQ-19 |
-| R2-11 | Windows `systemInfo` shape (GPU names, display names, dpi) | OQ-19 |
+| R2-10 | Linux: machine-id derivation; Windows: whether `MachineGuid` is the `MUID` source | OQ-02 |
+| R2-11 | Linux `systemInfo` shape (needs a Linux host) | OQ-19 |
 
 ### Round 3
 
-Gaps that round 2 left. Same safety rules.
+Gaps that round 2 left, plus the ad formats. Same safety rules. Settled:
+
+| Id | Result | CONTRACT |
+|---|---|---|
+| R3-1 | minimize: `window-minimized` then `window-hidden` when the minimize ends (on Windows the guest turns hidden first, then `window-minimized` only), the guest document hidden after them; a running interstitial may dismiss itself, then shuts down. A restore with a live guest was not observed | B.3.4, D.5 |
+| R3-2 | `setPageUrl(url)` and `sendCommand(...)` are forwarded to the ad page as private messages; no visible effect | B.3.3, D.5 |
+| ad formats | every documented format in test mode: events, DOM, removal rules, the ad library's options, the reward opt-in ([Ad formats](#ad-formats)) | B.3, D.5, D.7 |
+
+Still open:
 
 | Id | What to observe | For |
 |---|---|---|
-| R3-1 | embedder minimize and restore: host messages and guest visibility (needs a window that can be minimized while staying invisible) | OQ-13, OQ-27 |
-| R3-2 | `setPageUrl(url)` and `sendCommand(...)` on an attached element | OQ-32 |
 | R3-3 | `setExternalPaymentUserId` and `setUserEmailHashes` after `disableAnonymousAnalytics()` and after `disableAdsFPD()` | OQ-11, OQ-12 |
 | R3-4 | the crash-report threshold: crashes 3, 5, 10 and 15 s after a recovery | OQ-28 |
 | R3-5 | the settings window's `firstRun` and `cmpRequired` on a second launch of one profile | OQ-07 |

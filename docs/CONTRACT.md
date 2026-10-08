@@ -194,13 +194,14 @@ line switches (last wins). Every field is optional.
         "requestShaping": true,       // D.8; always on, the switch exists for debugging only
         "owVersionOverride": null,    // string given to the guest owVersion and consent oweVersion (section 0)
         "macPrivateHeaderApi": false, // ow-tauri option: macOS private header SPI prototype (D.8.3)
+        "transparentGuests": true,    // ad guests transparent from creation (B.3.4); false = opaque guests
         "gestureWindowMs": 1500,      // user-gesture window for guest top-level navigation
         "maxRecoveries": null,        // null = no cap, as ow-electron (D.7); a number is an ow-tauri option
         "loadErrorRetryMs": 5000,     // reload interval after a failed main-frame load (D.7)
         "guestLimits": {              // per guest webview (D.4)
           "eventsPerSecond": 50, "eventBurst": 100,
           "bytesPerSecond": 262144,
-          "externalOpensPerMinute": 5
+          "externalOpensPerMinute": 20 // per guest; each open also needs its own gesture (D.7)
         }
       },
       "analytics": {
@@ -261,6 +262,7 @@ Environment variables:
 | `OW_CLI_EMAIL`, `OW_CLI_API_KEY`, `OW_DEV_KEY` | dev-mode credentials, read with Overwolf's documented precedence (`OW_CLI_EMAIL` with `OW_CLI_API_KEY`, else `OW_DEV_KEY`) in debug builds only and kept for a future package runtime (Appendix P); never logged and never sent anywhere by ow-tauri [DOC] |
 | `OW_CLI_EMAIL`, `OW_CLI_API_KEY`, `OW_BUILD_KEY`, `OW_CLI_API_URL`, `OW_REQUIRE_SIGNING` | build time only: the signing step (G.4) [BUILDER] |
 | `OW_TAURI_PACKAGE_RUNTIME=<path>` | reserved for Appendix P; ignored with a warning |
+| `OW_TAURI_ALLOW_UNSIGNED=1` | build time only: a Windows release build that requires signing (G.4 e) but has no signed output builds anyway, with a warning. For local unsigned builds; never for a release that ships |
 | `OW_TAURI_ALLOW_MISSING_JS=1` | build time only: the crate builds without the injected scripts (`js/bootstrap.js` and the guest scripts, ADR 0012) and embeds a placeholder that only reports their absence. For CI jobs that test the Rust side and never run the app. Without it a release build fails when a script is missing; a debug build embeds the placeholder and prints a build warning |
 | `OW_TAURI_REQUIRE_JS=1` | build time only: a debug build also fails when an injected script is missing |
 
@@ -596,6 +598,7 @@ gets `forbidden`, whatever its capability says.
 | `ipc_skip` | `{ epoch: string; seq: number }` | `void` | none | The runtime reports that the call carrying `seq` was rejected, by Tauri before the command ran or by the plugin (C.3), so the reorder buffer does not wait for it. Numbers already used or skipped, and stale epochs, are ignored. |
 | `eval_result` | `{ id: number; ok: boolean; value?: OtjValue; error?: IpcErrorWire }` | `void` | `not-found` | Result of a `window_eval` with `wantResult` targeted at the calling window. |
 | `navigation_external` | `{ url: string }` | `void` | `invalid-argument` (the `shell_open_external` checks, or a URL on the app origin) | macOS and Linux: a top-level navigation the renderer bootstrap cancelled (A.2.3.1). Rust opens the URL in the system browser and sends `will-navigate { url }` for the calling window to `ow-main`, as the Windows navigation hook does. |
+| `navigation_in_page` | `{ url: string }` | `void` | `invalid-argument` (not a valid URL, no loaded document in the window, or a different origin) | The renderer bootstrap reports a top-document URL change without a new load: `hashchange`, `popstate`, and the patched `history.pushState` / `replaceState`. The URL becomes the window's URL (`webContents.getURL()`, and the next `did-finish-load` while the document is still loading) and `ow-main` gets the window event `did-navigate-in-page` with `{ url, isMainFrame: true }`; the facade emits `did-navigate-in-page(event, url, isMainFrame)` on `webContents` (B.2.2), as Electron does. Reporting the current URL again does nothing. |
 | `adview_mount` | `AdviewMount` | `{ guestLabel: string }` | `invalid-argument`, `io` | Creates the guest for one `<owadview>` (B.3, D). Never waits for consent; the guest's first navigation is sequenced by D.6.5. Counts InsertStats Kind 400025 (E.2). |
 | `adview_update` | `{ elementId: string; rect?: AdviewRect; visible?: boolean; attributes?: Partial<AdviewAttributes> }` | `void` | `not-found` | Moves, resizes, shows or hides the guest; attribute changes per B.3.4. |
 | `adview_unmount` | `{ elementId: string }` | `void` | none (idempotent) | Closes the guest. |
@@ -690,7 +693,7 @@ remote page, a soft restart, a guest unmount) and from the window's
 `show`, `hide`, `minimize`, `maximize`, `unmaximize`, `restore`, `resize`,
 `move`, `enter-full-screen`, `leave-full-screen`, `ready-to-show`,
 `did-finish-load`, `dom-ready`, `did-fail-load`, `render-process-gone`,
-`will-navigate`, `new-window`.
+`will-navigate`, `did-navigate-in-page`, `new-window`.
 
 | Event | `data` |
 |---|---|
@@ -700,6 +703,7 @@ remote page, a soft restart, a guest unmount) and from the window's
 | `did-fail-load` | `{ errorCode, errorDescription, validatedURL }` |
 | `render-process-gone` | `{ exitCode }` |
 | `will-navigate` | `{ url }`: a top-level navigation the A.2.3.1 policy cancelled |
+| `did-navigate-in-page` | `{ url, isMainFrame: true }`: a same-document URL change of the top document (`navigation_in_page`, A.2.5) |
 | `new-window` | `{ url, frameName?, features?, disposition? }`: a `window.open` / `target="_blank"` request, always denied natively (A.2.3.1). Rust sends `url` only today; the main runtime uses `''`, `''` and `'new-window'` for the others |
 | others | none |
 
@@ -778,7 +782,8 @@ fn main() {
 | `Overwolf::packages` | `(&self) -> &Packages<R>` | `snapshot`, `set_channel`, `get_available_channels`, `get_channel`, `relaunch`, with the results of H.1 |
 | `Overwolf::updater` | `(&self) -> &Updater<R>` | `configure`, `check`, `download`, `quit_and_install` |
 | `Overwolf::emit_second_instance` | `(&self, argv: Vec<String>, cwd: String)` | call from the app's `tauri-plugin-single-instance` callback; fires `app.on('second-instance')` in `ow-main` (B.2.1) |
-| `Overwolf::report_main_webview_crash` | `(&self)` | macOS: call from `tauri::Builder::on_web_content_process_terminate` for the webview labelled `ow-main`; Tauri offers that hook only on the app's builder (A.6) |
+| `Overwolf::report_web_content_terminated` | `(&self, label: &str)` | macOS: call from `tauri::Builder::on_web_content_process_terminate` for every webview; Tauri offers that hook only on the app's builder. `ow-main` restarts (A.6), an ad guest recovers (D.7), a consent window takes its failure path (D.6.1), a `bw-*` or `bwr-*` webview emits `render-process-gone` (A.3); other labels are ignored |
+| `Overwolf::report_main_webview_crash` | `(&self)` | the `ow-main` case of `report_web_content_terminated` alone (A.6) |
 | `Flags`, `LogLevel` | types at the crate root | the session switches (`HostSnapshot.flags`) and the `log` levels |
 | `build::embed_manifest` | `(path: impl AsRef<Path>) -> Result<(), BuildError>` | in the app's `build.rs` (G.3) |
 
@@ -793,7 +798,7 @@ the app registers it, not ow-tauri. The order also matters for
 `app.relaunch()`: Tauri delivers `RunEvent::Exit` to plugins in registration
 order, so the single-instance lock is released before ow-tauri starts the new
 process (A.6). On macOS the app also forwards web-content process
-terminations of `ow-main`:
+terminations, which Tauri reports only on the app's builder:
 
 ```rust
 let builder = tauri::Builder::default()
@@ -803,9 +808,9 @@ let builder = tauri::Builder::default()
     .plugin(tauri_plugin_overwolf::Builder::new() /* ... */ .build());
 #[cfg(target_os = "macos")]
 let builder = builder.on_web_content_process_terminate(|webview| {
-    if webview.label() == "ow-main" {
-        webview.overwolf().report_main_webview_crash();
-    }
+    webview
+        .overwolf()
+        .report_web_content_terminated(webview.label());
 });
 ```
 
@@ -855,7 +860,7 @@ own code.
 | Platform | Crash signal |
 |---|---|
 | Windows | WebView2 `ProcessFailed` on the `ow-main` webview |
-| macOS | WKWebView web-content termination; Tauri exposes it only on the app's builder, so the app forwards it to `Overwolf::report_main_webview_crash` (A.5) |
+| macOS | WKWebView web-content termination; Tauri exposes it only on the app's builder, so the app forwards it to `Overwolf::report_web_content_terminated` (A.5) |
 | Linux | WebKitGTK `web-process-terminated` |
 | all | the `ow-main` window's `WindowEvent::Destroyed` while the app is not exiting |
 
@@ -1135,7 +1140,7 @@ Constructor options:
 | Option | Status | Notes |
 |---|---|---|
 | `width`, `height`, `x`, `y`, `center`, `minWidth`, `minHeight`, `maxWidth`, `maxHeight` | S | logical pixels |
-| `useContentSize` | P | ignored: sizes are always the window's inner size |
+| `useContentSize` | P | ignored: sizes are always the window's inner (content) size. ow-electron sizes a framed window's outer frame by default and fits it to the work area, so the same `width` / `height` gives an ow-tauri window a larger content area (1200 x 800 gives an outer 1216 x 839 on Windows) and a window larger than the screen is clamped differently [OBS: Windows lab]. Not changed: it needs a product decision |
 | `show`, `title` (default `<PN>`; also the `title` field of `<label>_window_closed`, E.2), `resizable`, `movable`, `minimizable`, `maximizable`, `closable`, `focusable`, `alwaysOnTop`, `fullscreen`, `skipTaskbar`, `transparent`, `backgroundColor`, `parent` | S | |
 | `frame` | P | `false` = no decorations; on macOS mapped to an overlay title bar with a hidden title so native dragging works (ARCHITECTURE section 6) |
 | `fullscreenable` | P | `false` is honoured by the facade (ignores `setFullScreen(true)`); no native flag |
@@ -1196,6 +1201,7 @@ Instance members:
 | `on('did-finish-load' \| 'dom-ready')` | S | |
 | `on('did-fail-load')` | P | Windows only (WebView2 navigation status) |
 | `on('render-process-gone')` | P | reason is always `'crashed'` |
+| `on('did-navigate-in-page')` | S | `(event, url, isMainFrame)` for a fragment change, `history.pushState` / `replaceState`, or back and forward between such entries in the top document; `getURL()` follows it (A.2.5 `navigation_in_page`). Only the top document is reported, so `isMainFrame` is always `true` |
 | `setWindowOpenHandler(handler)` | P | the handler is called with `{ url, frameName, features, disposition }` from the `new-window` message (A.3); `{ action: 'allow' }` is treated as deny + open in the system browser (`http`, `https` only) |
 | `on('will-navigate')` | P | emitted for top-level navigations the A.2.3.1 policy cancels (Windows: the navigation hook; macOS and Linux: link clicks and form submissions the bootstrap intercepts); the navigation has already been cancelled and the URL opened in the system browser, so `preventDefault()` has no further effect |
 | `session`, `debugger`, `print()`, `printToPDF()`, `capturePage()`, `setAudioMuted()`, `startDrag()`, `insertCSS()`, `savePage()`, `sendInputEvent()`, `postMessage()` | U | |
@@ -1258,18 +1264,21 @@ for tests).
 
 1. **Default style.** At document start it adds a constructed style sheet to
    `document.adoptedStyleSheets` with
-   `:where(owadview) { display: inline-flex; width: 100%; height: 100%; }`
-   (ow-electron's element computes `inline-flex` [OBS]; a performance
-   element is a 0 x 0 `block`). `:where()` has zero specificity, so any app
-   rule wins. Without it an
+   `:where(owadview) { display: inline-flex; width: 100%; height: 100%; }
+   :where(owadview[performance]) { display: block; width: 0; height: 0; }
+   :where(owadview[performance]) > :where(div) { display: flex; }`
+   (ow-electron's element computes `inline-flex`; a performance element is
+   a 0 x 0 `block` whose overlay `div` is a flex box [OBS]). `:where()` has
+   zero specificity, so any app rule wins. Without it an
    unknown element is `display: inline` with no content and a 0 x 0 box, and
    the sample's ads (an unstyled `owadview` appended to a sized
    `div.ad-container`) would never mount.
 2. **Upgrade at creation.** It wraps `Document.prototype.createElement` and
    `createElementNS` so that an element created with the local name
-   `owadview` (any case) is upgraded before it is returned. Upgrading defines
-   the element's properties and methods with `Object.defineProperties` on the
-   instance and assigns it an `elementId`.
+   `owadview` (any case) is upgraded before it is returned. Upgrading tracks
+   the element and assigns it an `elementId`; its properties and methods are
+   defined later, at attach (B.3.3), because ow-electron's element is a plain
+   `HTMLElement` until then [OBS].
 3. **Upgrade on insertion.** A `MutationObserver` on the document
    (`childList`, `subtree`, and `attributes` filtered to the lower-case names
    in B.3.2) upgrades every `OWADVIEW` element that was not created through the
@@ -1302,11 +1311,11 @@ and `pageurl`.
 |---|---|---|
 | `cid` | container id reported with the ad; trimmed to 20 characters [DOC] | remount |
 | `slotsize` | requested inventory `"WxH"`; Overwolf documents `400x300`, `400x600`, `300x250`, `160x600`, `728x90`, `970x90`, `400x60` with fallbacks [DOC], and all seven load and fill in ow-electron [OBS]; the host enforces no size and passes other values through | remount |
-| `adstyle` | `"high-impact-ad;"` and other style tokens; passed through | remount |
+| `adstyle` | `"high-impact-ad;"`, `"rewarded-ad;"` and other style tokens; passed through unchanged. The ad page matches the tokens itself (a substring match: `"rewarded-ads;"` also gives the rewarded flow) [OBS]; the host interprets none of them | remount |
 | `customTracking` / `customtracking` (also the `customTracking` property) | JSON string; invalid JSON clears it silently; an update replaces it; the last value survives guest reloads and crash recovery [DOC] | delivered live (`{ type: 'customTracking' }`, D.5) and again after every later guest reload [OBS]; no remount. The guest's `__overwolf__.customTracking` keeps the attach-time value [OBS] |
-| `performance` (boolean) | performance ad (B.3.4); at most one per window, a second is ignored with a warning [DEC from DOC] | remount |
+| `performance` (boolean) | performance ad (B.3.4); one per window: a second `performance` element that would attach while one is mounted is removed from the document in the same task, with no guest, no event and only a debug log, as ow-electron removes it [OBS] | remount |
 | `unit` | ad unit override (the sample shows it commented out on its performance ad) | remount |
-| `pageurl` | the guest's `__overwolf__.pageUrl` (D.2), read at mount [OBS] | applies at the next guest load [DEC; **Unknown (R3-2)**] |
+| `pageurl` | the guest's `__overwolf__.pageUrl` (D.2), read at mount [OBS] | applies at the next guest load; no message to the running page (`setPageUrl()` sends one, B.3.3) [OBS] |
 | `id` | ordinary DOM id; not used by the runtime | none |
 
 Any other attribute is ignored.
@@ -1319,8 +1328,8 @@ Any other attribute is ignored.
 | `setAudioMuted(muted: boolean): void` | `adview_command setAudioMuted`; guests start muted [DOC] |
 | `reload(): void` | reloads the guest |
 | `pageUrl: string` | getter returns the `pageurl` attribute (`""` when absent); setter sets it [OBS: an own property after attach] |
-| `setPageUrl(url: string): void` | sets the `pageurl` attribute; the value reaches the guest at its next load [OBS: present; behaviour **Unknown (R3-2)**, interim DEC] |
-| `sendCommand(...args): void` | `adview_command sendCommand`; logged once at debug level, no other effect [OBS: present; behaviour **Unknown (R3-2)**, interim DEC] |
+| `setPageUrl(url: string): void` | sets the `pageurl` attribute (applied at the next guest load) and, on an attached element, sends `adview_command setPageUrl [url]`; Rust forwards it to the running ad page as the private message `{ type: 'setPageUrl', data: [url] }` (D.5) [OBS]. On an element that is not attached, or is dead (B.3.4), only the attribute is set. No visible effect was observed in ow-electron (OQ-32) |
+| `sendCommand(...args): void` | `adview_command sendCommand` with the arguments copied as JSON (JSON values unchanged, `undefined` and functions inside arrays become `null`, a `bigint` its decimal string; arguments that cannot be encoded give `[]`); Rust forwards them to the running ad page as the private message `{ type: 'sendCommand', data: [...args] }` (D.5) [OBS]. Before attach the call is ignored with a debug log. The ad page decides what, if anything, it does with it; no visible effect was observed in ow-electron (OQ-32) |
 
 After attach, ow-electron upgrades the element: its prototype becomes an
 `OwAdViewElement` class carrying Electron's `<webview>` methods
@@ -1328,8 +1337,15 @@ After attach, ow-electron upgrades the element: its prototype becomes an
 `setPageUrl` and `sendCommand`, and the instance gets own properties (`src`,
 `cid`, `slotsize`, `pageUrl`, `performance`, `unit`, `adstyle`,
 `customTracking`, `contentWindow`, ...) [OBS]. Before attach it is a plain
-`HTMLElement` [OBS]. ow-tauri defines the members above on each element
-instance and changes no prototype. Electron's generic `<webview>` methods are
+`HTMLElement` [OBS]. ow-tauri does the same at attach: the attribute-backed
+properties `cid`, `slotsize`, `pageUrl`, `performance`, `unit`, `adstyle`
+and `customTracking` become own accessors of the instance, in ow-electron's
+order, and the methods `setPageUrl`, `sendCommand`, `setAudioMuted` and
+`reload` live on a prototype inserted between the element and
+`HTMLUnknownElement.prototype` (one per base prototype), so they are not own
+properties, as on ow-electron's element [OBS]. A value an app assigned to one
+of those properties on the plain element is moved into its attribute first.
+Electron's generic `<webview>` methods are
 not provided: Overwolf does not document them for `<owadview>`, and several
 would give app code control over remote ad content [DEC].
 
@@ -1352,15 +1368,30 @@ an element removed for good hears nothing. ow-electron sends `destroyed` after
 the guest closed and only an attached element receives it [OBS lab
 standard-remove, perf-remove].
 
-A performance element turns `pointer-events: auto`, and its guest stops
-passing input through, at its first `performance_ad_loaded`; it is still
-`none` after `display_ad_loaded` in ow-electron [OBS].
+Attribute changes do not reopen a dead element, and inserting it again only
+logs a debug line; the app creates a new element instead. A live element
+whose "remount" attribute changes (B.3.2) is closed and mounted again under
+a new `elementId`.
 
-**Shadow root.** At mount the runtime attaches an open shadow root to the
-element holding a `<style>` and a transparent `about:blank` `<iframe>`
-(`pointer-events: none`, 100 % of the box), because ow-electron's element has
-an open shadow root with exactly those two children after attach [OBS]. The
-iframe is the geometry anchor; the ad itself is the native guest webview.
+**Performance element DOM.** At attach a `performance` element gets no
+shadow root, the inline style `pointer-events: none;`, and one light-DOM
+child `div` whose inline style is, character for character,
+`position: fixed; top: 0px; left: 0px; width: 100vw; height: 100vh; background: transparent; z-index: 999999;`
+as ow-electron writes it [OBS]. The element turns `pointer-events: auto`
+just before its first `performance_ad_loaded` is dispatched (the `div`
+inherits it; its style does not change); it is still `none` after
+`display_ad_loaded` in ow-electron [OBS]. At the same event Rust stops
+passing the guest's input through (below).
+
+**Shadow root.** At attach the runtime tries to attach an open shadow root to
+any other element, holding a `<style>` and a transparent `about:blank`
+`<iframe>` (`pointer-events: none`, 100 % of the box), because ow-electron's
+element has an open shadow root with exactly those two children after attach
+[OBS]. Outside Electron the engines refuse `attachShadow()` on `owadview`
+(not a valid custom element name), so in practice the element has no shadow
+root: the runtime logs one debug line and does not try again in that
+document. Nothing depends on the anchor; the ad itself is the native guest
+webview.
 
 **Visibility.** In ow-electron a guest whose embedder window was never shown
 loads, logs `<owadview> is not visible. waiting...` and never fills; a shown
@@ -1420,14 +1451,57 @@ ad (menus, modals) needs the app to hide the element; the runtime does that
 automatically when an ancestor is hidden. CSS transforms and `clip-path` on
 ancestors are not reflected in the guest's geometry.
 
+**Z-order.** ow-electron's performance overlay (`z-index: 999999`) covers
+every other ad of the page [OBS]. Native guests stack in creation order, so
+after every guest mount in a window Rust raises that window's newest
+performance guest to the top: Windows `SetWindowPos(HWND_TOP)` on the
+WebView2 controller's parent window (no move, no size, no activation); macOS
+re-adds the guest view above its siblings
+(`addSubview:positioned:NSWindowAbove relativeTo:nil`); Linux
+`gdk_window_raise`, best effort. Standard guests keep creation order among
+themselves [OBS lab L2, L2-W].
+
+**Transparency.** ow-electron's guest is part of the page, so a slot with no
+ad shows the app's own container background and an interstitial's dim shows
+the app behind it [OBS]. With `ads.transparentGuests` (default `true`, A.1)
+every guest webview is created transparent: Windows and Linux use the
+webview's transparent background; macOS also clears the `WKWebView`
+background (the `drawsBackground` key-value key, used only when the view
+responds to it, and the public `underPageBackgroundColor`) without Tauri's
+`macos-private-api` feature [DEC]. `false` keeps opaque guests [OBS lab L1,
+L1-W].
+
+**Input pass-through.** ow-electron's performance element takes no input
+until its ad has loaded (`pointer-events: none`, above) [OBS], so the page
+under an empty interstitial stays usable. A native guest would swallow every
+click over the whole window, so Rust mounts a performance guest
+pass-through until its first `performance_ad_loaded` (`MODAL_EVENT`):
+Windows an empty window region (`SetWindowRgn`), cleared at the event;
+macOS a `hitTest:` that returns `nil` for that view, installed once on the
+web view's own class and switched per view; Linux an empty input shape
+[DEC]. From the event on the guest takes input like any other [OBS lab L3,
+L3-W].
+
+**Linux.** tauri-runtime-wry packs a window's child webviews into a
+`GtkBox` (`pack_start`), so guests never overlap the page or each other: on
+Linux the ad rectangles, the z-order and the pass-through above do not
+apply. This is a known gap (PARITY); the raise and the input shape are
+applied best effort [DEC].
+
 High-impact ads: the app grows the container (the sample sets it to the zone's
 size after `high-impact-ad-loaded`); `ResizeObserver` reports the new rect.
 Performance ads [DOC] (OQ-29): the element's own box is ignored; the guest
 covers the embedder window's content area (the sample appends a bare
 `<owadview performance>` to `document.body`) and follows its size; `adstyle`
-is passed through; one per window; the element is closed after its
-`shutdown` event. The documented 1000 x 600 minimum window size is not
-enforced [DEC].
+and `unit` are passed through; one per window (B.3.2). On `shutdown` the
+runtime dispatches the event (and nothing after it), closes the guest, and
+removes the element from the document in the next task (`setTimeout(0)`),
+after the `shutdown` listeners ran; no `destroyed` follows. ow-electron
+removes it about 185 ms after `shutdown`, ow-tauri after about 1 ms [OBS lab
+perf-remove]. The host enforces no minimum window size: the ad page itself
+answers an embedder smaller than 500 x 500 with `performance_ad_error`
+(a string) and `shutdown` [OBS]; the documented 1000 x 600 minimum is
+Overwolf's guidance.
 
 Conformance tests use the sample's exact DOM: an unstyled `owadview` in a
 400 x 600 `div`, and a bare `performance` element appended to `body`; both
@@ -1444,9 +1518,13 @@ Object.assign(event, data);   // own properties; detail stays null
 element.dispatchEvent(event);
 ```
 
-`data` fields are copied as own properties only when `data` is a plain object;
-names that the `Event` prototype already defines (`type`, `target`, ...) are
-skipped. Every name that passes the A.2.6 checks is forwarded unchanged and in
+`data` is copied as `Object.assign` copies it [OBS]: the own enumerable keys
+of `Object(data)` become own properties of the event, so an object gives its
+fields, an array its indexes, and a string one property per character (seen
+with `performance_ad_error`, whose data is a string: `event[0]` is its first
+character); `null`, `undefined`, numbers and booleans add nothing. Keys the
+event already has (`type`, `target`, `isTrusted`, ...) are skipped, where
+`Object.assign` would throw on the read-only ones. Every name that passes the A.2.6 checks is forwarded unchanged and in
 order; `display_ad_loaded` arrives twice per fill in ow-electron and is
 passed through twice [OBS]. The runtime keeps no list of names. Spelling
 variants that Overwolf documents in both forms are also dispatched in the
@@ -1460,11 +1538,15 @@ other spelling, the received spelling first:
 | `house-ad-action` | `house_ad_action` |
 
 Names seen from the ad page [OBS] or documented [DOC]: `display_ad_loaded`,
-`impression`, `play`, `player_loaded`, `complete`, `house-ad-action` /
-`house_ad_action` (`{ action }`), `high-impact-ad-loaded`,
-`high-impact-ad-removed`, `shutdown`, `performance_ad_no_fill`,
-`performance_ad_dismiss`, `performance_ad_loaded`, `performance_ad_clicked`,
-`performance_ad_video_complete`, `performance_ad_video_skipped`.
+`impression`, `play`, `pause`, `ended`, `player_loaded`, `video_ad_ready`,
+`complete`, `house-ad-action` / `house_ad_action` (`{ action }`),
+`high-impact-ad-loaded`, `high-impact-ad-removed`, `shutdown`,
+`performance_ad_loaded`, `performance_ad_error` (a string), `performance_ad_dismiss`,
+`performance_ad_clicked`, `performance_ad_video_complete`,
+`performance_ad_video_skipped`, and the documented `performance_ad_no_fill`,
+which no lab run has seen: a performance ad without fill sent only
+`shutdown` [OBS]. The orders observed per ad format are in
+[AD-FORMATS.md](AD-FORMATS.md).
 
 Host lifecycle events (`source: 'host'`) dispatched the same way [OBS]:
 
@@ -1478,6 +1560,7 @@ Host lifecycle events (`source: 'host'`) dispatched the same way [OBS]:
 | `did-start-navigation`, `load-commit` | the guest started or committed a navigation, where the platform reports it | Electron's documented `<webview>` properties where available [DEC] |
 | `console-message` | a console call in the guest's main frame, reported by the shim | Electron's documented `<webview>` properties [DEC] |
 | `ad-clicked` | a popup or gesture navigation opened the system browser (D.7) | `url` |
+| `destroyed` | dispatched by the runtime itself once `adview_unmount` returned: the guest of an element removed or moved after attach has closed, and the element is in the document again (a move, B.3.4); an element removed for good gets nothing [OBS lab standard-remove, perf-remove] | none |
 
 ow-electron forwards all of Electron's standard `<webview>` events to the
 element, including `did-frame-*` and `media-*` events and focus changes
@@ -1810,8 +1893,8 @@ an empty value is `""` [OBS].
 | 16 | `windowTitle` | string | the embedder window's current document title |
 | 17 | `windowFocused` | boolean | embedder focus when the guest document started (`false` observed) |
 | 18 | `testAd` | boolean | `true` in test mode, `false` live (D.7) |
-| 19 | `consent` | string | `""`, always: the ad page reads consent from the cookies (D.6.3) [OBS] |
-| 20 | `consentFull` | string | `""`, always [OBS] |
+| 19 | `consent` | string | `cmp.unifiedConsentString` of `ow-electron.json` as it was at launch (URL-encoded, `cmp%3D...`), or `""` before the first consent; a consent saved later reaches running guests as a message (D.5) and new guests through the cookies (D.6.3), not through this key [OBS] |
+| 20 | `consentFull` | string | the same value as `consent` [OBS] |
 | 21 | `slotSize` | string | element `slotsize` (`"400x600"`) |
 | 22 | `containerId` | string | element `cid` (at most 20 characters) |
 | 23 | `systemInfo` | object | below |
@@ -1821,18 +1904,19 @@ an empty value is `""` [OBS].
 | 27 | `pageUrl` | string | element `pageurl` at mount, or `""` [OBS] |
 | 28 | `performanceAd` | boolean | element has `performance` |
 | 29 | `adStyle` | string | element `adstyle`, or `""` |
-| 30 | `unit` | string | element `unit`, or `""`; in test mode a non-empty value becomes `"testAd"` (below) |
+| 30 | `unit` | string | element `unit`, or `""`; passed through unchanged in test mode too, as ow-electron does [OBS] |
 | 31 | `customTracking` | object or null | parsed element `customTracking` at mount, kept across reloads (the live value arrives as a message, D.5) [OBS]; `null` when unset [INF] |
 
 Keys that earlier drafts had and ow-electron does not expose: `runTimeInfo`
 and `emailHashes`. Email hashes reach the page only as `eHashes` messages
 (D.5) [OBS].
 
-**Test-mode `unit` guard [DEC], a known deviation.** ow-electron passes `unit`
-through unchanged in test mode [OBS]. ow-tauri rewrites a non-empty `unit` to
-`"testAd"` in test mode as a safety guard, so a test build can never request
-a live performance ad. It is listed as a deviation in
-[PARITY.md](PARITY.md#deviations).
+**`unit` in test mode.** ow-electron passes `unit` through unchanged in test
+mode [OBS], and so does ow-tauri. An earlier ow-tauri rewrote a non-empty
+`unit` to `"testAd"` in test mode; that guard is removed (wave 3e,
+[ADR 0005](adr/0005-ads-test-live-parity.md) amendment): the ad page already
+serves test inventory whenever `testAd` is `true`, and the rewrite changed
+what the page saw.
 
 **`systemInfo`** (`getSystemInformation()` returns a copy of the same object).
 Shape observed on macOS [OBS]:
@@ -1917,7 +2001,9 @@ ow-tauri sends the same:
 | `customTracking` | object or `null` | the element's `customTracking` changed, and again after every later reload of that guest [OBS]; Overwolf documents that updates reach the running ad page [DOC] |
 | `eHashes` | `{ sha1, md5, sha256 }` | `setUserEmailHashes()` or `generateUserEmailHashes()` was called (A.2.2); sent to every existing guest; not resent after a reload [OBS] |
 | `window-minimized` | none | the embedder window was minimized, when the minimize ends, before `window-hidden`; the guest document turns `hidden` after both [OBS]. A running performance ad then dismisses itself (`performance_ad_dismiss`) and shuts down about 1 s later [OBS] (ow-tauri: with the hidden-page timer alignment of B.3.4) |
-| `window-hidden` | none | the embedder window was hidden or minimized (not again when a hidden window is minimized); nothing is sent when it is shown or restored again [OBS] |
+| `window-hidden` | none | the embedder window was hidden or minimized (not again when a hidden window is minimized; on Windows a minimize sends `window-minimized` only, B.3.4); nothing is sent when it is shown or restored again [OBS] |
+| `sendCommand` | array: the arguments of `element.sendCommand(...args)`, as JSON (B.3.3) | the app called `sendCommand()` on the attached element [OBS] |
+| `setPageUrl` | array: `[url]` | the app called `setPageUrl(url)` on the attached element; the URL is also the `pageUrl` of the guest's next load (D.2) [OBS] |
 | `ad-clicked` | URL string | a popup or gesture navigation was opened in the system browser (D.7); ow-tauri only [DEC, Low; OQ-17] |
 
 `disableAdsFPD()`, `disableAdsOptimization()` and resizes send nothing
@@ -2129,8 +2215,8 @@ existing guest (D.5) [OBS], and does not recreate guests.
 - **Sizes:** see B.3.2. The guest webview is created at the element's rect;
   `slotSize` tells the page what to request.
 - **Test mode** (`--test-ad`, `OW_TAURI_TEST_AD=1`, `ads.testAd`, or
-  `Builder::test_ad(true)`): `testAd: true` and the `unit` guard (D.2).
-  Otherwise the host runs live, as ow-electron does without `--test-ad`
+  `Builder::test_ad(true)`): `testAd: true`; `unit` and every other
+  attribute pass through unchanged (D.2). Otherwise the host runs live, as ow-electron does without `--test-ad`
   ([ADR 0005](adr/0005-ads-test-live-parity.md)). The wire shaping is the same
   in both modes; only `testAd` and the demand the ad page picks differ [OBS].
   Live mode does not touch the guest's `localStorage`, so the documented
@@ -2147,7 +2233,9 @@ existing guest (D.5) [OBS], and does not recreate guests.
   `NewWindowRequested.IsUserInitiated` for popups; elsewhere, and for
   navigations, a `__host:gesture` in the window above. One gesture allows one
   open. On top of that, a guest may open at most
-  `ads.guestLimits.externalOpensPerMinute` URLs per minute (default 5); only
+  `ads.guestLimits.externalOpensPerMinute` URLs per minute (default 20, so
+  Overwolf's ad QA step of clicking one ad five times in a row passes with
+  room to spare; the gesture rule is the real safeguard); only
   `http` and `https` URLs without credentials are opened. Everything else is
   dropped and logged.
 - **Mute:** guests start muted [DOC]; `setAudioMuted` changes it.
@@ -2168,7 +2256,7 @@ existing guest (D.5) [OBS], and does not recreate guests.
 
 | Setting | ow-electron [OBS] | ow-tauri |
 |---|---|---|
-| data store | the default session, shared with app windows and host requests | the **ads data store**, shared by `ow-cmp-startup`, `ow-cmp`, every ad guest and the cookie reads of host requests (E.1); per platform in A.1.1 |
+| data store | the default session, shared with app windows (host requests use none of its cookies, E.1) | the **ads data store**, shared by `ow-cmp-startup`, `ow-cmp` and every ad guest; per platform in A.1.1 |
 | web security | disabled (the guest logs Electron's "Disabled webSecurity" warning) | Windows: `--disable-web-security` in the ads environment (A.1.1); Linux: `WebKitSettings` `enable-web-security` off (WebKitGTK 2.40 or newer [INF]); macOS: no public API, so it stays on (a known gap, D.8.3) |
 | insecure content | allowed (`allowRunningInsecureContent`) | Windows: `--allow-running-insecure-content`; macOS and Linux: platform default |
 | user agent | the app UA | `<UA>` (E.1) |
@@ -2287,6 +2375,13 @@ before any app code runs:
   `Tauri/2.12.1`) immediately after the `Chrome/<x>` token. This is where
   Electron places its tokens.
 - Otherwise (WKWebView, WebKitGTK): append ` <PNNS>/<ver> <Label>/<hostVersion>`.
+  The WKWebView default carries no browser product tokens, and ad stacks
+  rate such a UA as an unknown browser. When the default has an
+  `AppleWebKit/<w>` token but no `Safari/` token and the installed Safari's
+  version is known, Safari's own tokens are added around the labels the way
+  Electron keeps Chromium's:
+  ` <PNNS>/<ver> Version/<safari major.minor> <Label>/<hostVersion> Safari/<w>`
+  [DEC].
 - The engine part is never faked: no `Chrome/` token is added to a WebKit UA.
   Ad-quality scripts check that the UA matches the engine, and Overwolf's ad
   policy forbids invalid traffic [DOC].
@@ -2307,18 +2402,13 @@ user-agent: <UA>
 accept-encoding: gzip, deflate, br, zstd
 accept-language: <locale>
 priority: u=4, i
-[cookie: <ads data store cookies for the request URL>]
 ```
 
-- **Cookies.** ow-electron's host requests carry the default session's
-  cookies for the request URL (on a second launch: `euconsent-v2`,
-  `acconsent` and the ad partners' `.overwolf.com` cookies) [OBS]. ow-tauri
-  reads the cookies for each request URL from the ads data store (D.8.1) just
-  before sending, and writes `Set-Cookie` response headers back to it [INF].
-  Requests made before the data store is ready go without cookies. API: the
-  Tauri webview cookie API if 2.12.1 has a per-URL getter [INF], else
-  `WKHTTPCookieStore`, `ICoreWebView2CookieManager::GetCookies` or
-  `webkit_cookie_manager_get_cookies`.
+- **No cookies.** ow-electron's host requests send no cookie and store none:
+  its net log shows every cookie of the session excluded by the request's
+  credentials mode, and no `Set-Cookie` stored [OBS]. ow-tauri's client has
+  no cookie jar, sends no `cookie` header and ignores `Set-Cookie`.
+- **No `accept`.** No `accept` header is sent [OBS]; the client adds none.
 - `accept-language` is the app locale in Chromium's format (`en-US`) [OBS],
   from `sys-locale` converted to BCP 47 [DEC].
 - No `Origin`, no `Referer` [OBS].
@@ -2373,7 +2463,7 @@ priority: u=4, i
 | 6 | each ad guest attaches (one per `<owadview>`, test and live) | none | 400025 | dropped | [OBS] |
 | 7 | a visible period of a window ends: `hide()`, close, or quit while it is visible | `<label>_window_closed` (`name`, `title`, `length`) | none | dropped | [OBS] |
 | 8 | an ad guest crashes, unless it crashed shortly after its previous recovery (below) | `<label>_owadview_crashed` (`sessionTS`, `reason`) | 400024 | dropped [INF] | [OBS] |
-| 9 | periodic heartbeat: an hourly check that sends when 12 h have passed since the last heartbeat of the session | as #4, `hasVisibleWindow` = current | 400023 | kept | [POC]; **Unknown (R2-9)** (none was sent in a 6-minute session [OBS]; a 13-hour observation is running) |
+| 9 | periodic heartbeat: an hourly check that sends when 12 h have passed since the last heartbeat of the session | as #4, `hasVisibleWindow` = current | 400023 | kept | [OBS] (R2-9, below); the hourly check is [DEC] |
 | 10 | `setExternalPaymentUserId(options)` | `<label>_sub_info` (below) | none | kept [DEC]; **Unknown (R3-3)** | [OBS] |
 
 **Order and timing.** In ow-electron #1, #2, #3, the #4 Counter, 400022 and
@@ -2393,6 +2483,23 @@ ow-electron creates the guests mounted together within about 100 ms, while
 on Windows WebView2 creates them on the main thread one after another
 (80 to 150 ms each), so their 400025 reports spread over that time [OBS:
 Windows lab].
+
+**Periodic heartbeat (#9)** [OBS: R2-9, a 13-hour session of ow-electron
+42.11.4 whose window was never shown]. After the launch burst (#1 to #4,
+400022, 400023) and the startup consent page's own request at 1.4 s, the
+session sent nothing for 12 hours. At 43 200.2 s it sent one
+`<label>_app_heartbeat` Counter (`hasVisibleWindow`: `false`) and 54 ms
+later one 400023; nothing followed in the remaining hour, and quitting a
+session whose window was never shown sends no `<label>_window_closed`
+(#7 needs a visible period). ow-electron's 12-hour Counter went out as a
+conditional request (`if-none-match` / `if-modified-since`, answered 304)
+because Chromium's HTTP cache held the URL; ow-tauri has no HTTP cache for
+host requests and sends the plain request, which reaches the same server
+(PARITY, optimised). ow-tauri sends #9 from an hourly check once 12 hours
+have passed since the session's last heartbeat, which matches this run. Not
+settled by it: whether ow-electron uses a 12-hour timer or an hourly check
+with a 12-hour threshold (the two differ by at most an hour), and whether
+the first-show heartbeat (#5) restarts the 12 hours (no window was shown).
 
 **Second launch:** #1 and 400022 are not sent; everything else is unchanged
 [OBS].
@@ -2554,11 +2661,12 @@ Exact shape and encoding, as ow-electron writes it [OBS]:
 | `cmp.timeStamp` | **Unix seconds**, refreshed on every launch by the startup consent flow (D.6.1) |
 | `cmp.unifiedConsentString` | stored **URL-encoded**: `cmp%3D<tcf>%26ac%3D<ac>` |
 | `utmParams` | written by Overwolf's installer; absent for apps installed any other way, and `app.overwolf.utmParams` is then `undefined`, not `null` [OBS] [TYPES] |
+| `eHashes` | `{ sha1, md5, sha256 }`: the last email hashes the app set (`setUserEmailHashes()` or `generateUserEmailHashes()`, A.2.2), written after `cmp` and replaced by every later call; absent until the first call [OBS]. Not written after `disableAdsFPD()` |
 
 Rules:
 
 - Compact JSON, keys in the order above. ow-tauri reads `firstLaunch`, `cmp.*`
-  and `utmParams`, and writes `firstLaunch` and `cmp.*`. It never writes
+  and `utmParams`, and writes `firstLaunch`, `cmp.*` and `eHashes`. It never writes
   `utmParams`, never removes keys, and preserves unknown keys and their
   values.
 - Writes are read-modify-write under an in-process lock, written to a temp file
@@ -2712,11 +2820,22 @@ Test vectors. Each is observed in ow-electron 42.11.4 and agrees with
 ### G.3 Build helper
 
 ```rust
-// src-tauri/build.rs
-fn main() {
-    tauri_plugin_overwolf::build::embed_manifest("../package.json")
-        .expect("package.json overwolf manifest");
-    tauri_build::build();
+// src-tauri/build.rs (as in examples/packages-sample)
+use std::path::Path;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tauri_plugin_overwolf::build::embed_manifest("../package.json")?;
+    let dir = std::env::var("CARGO_MANIFEST_DIR")?;
+    let dir = Path::new(&dir);
+    // The NSIS hooks of I.6; tauri.conf.json points installerHooks here.
+    tauri_plugin_overwolf::build::write_nsis_installer_hooks(
+        &dir.join("../package.json"),
+        None,     // the plugin's `uid` override, if the app sets one
+        "tauri",  // analytics.hostLabel
+        &dir.join("windows/hooks.nsh"),
+    )?;
+    tauri_build::try_build(tauri_build::Attributes::new())?;
+    Ok(())
 }
 ```
 

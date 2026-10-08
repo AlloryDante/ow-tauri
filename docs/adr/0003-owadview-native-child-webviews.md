@@ -1,6 +1,6 @@
 # ADR 0003: Implement `<owadview>` with a MutationObserver and native child webviews
 
-- Status: Accepted
+- Status: Accepted (amended 2026-10-07)
 - Date: 2026-10-06
 
 ## Context
@@ -29,15 +29,17 @@ renders test creatives and reports events.
 
 - `ow-tauri/renderer` wraps `document.createElement` and watches the document
   with a `MutationObserver`, and upgrades each `OWADVIEW` element in place
-  (properties and methods defined on the instance). It tracks the element's rect (`ResizeObserver`, scroll,
+  (at attach: own attribute-backed properties, and the methods on an inserted
+  prototype, as on ow-electron's element). It tracks the element's rect (`ResizeObserver`, scroll,
   resize) and visibility (`IntersectionObserver` at 0.5, a 500 ms
   `checkVisibility` poll, document visibility).
 - The plugin creates one native child webview per mounted element, labelled
   `owad-<embedder>-<n>`, positioned over the element, with `adview-host.js`
   injected as an initialization script.
-- A zero-specificity default style (`:where(owadview) { display: block;
-  width: 100%; height: 100% }`) makes the element fill its container, as the
-  sample expects; `performance` elements cover the embedder viewport.
+- A zero-specificity default style (`:where(owadview) { display: inline-flex;
+  width: 100%; height: 100% }`, a 0 x 0 block for `performance`) makes the
+  element fill its container, as the sample expects; `performance` elements
+  cover the embedder viewport.
 - Guest events come back as `adview-event` host messages and are dispatched
   on the element as plain non-bubbling `Event`s with the data as own
   properties, as ow-electron does (CONTRACT B.3.5), in both spellings where the
@@ -51,6 +53,11 @@ renders test creatives and reports events.
 - App ad code runs unchanged, including the sample's high-impact zone logic.
 - Native webviews paint above HTML. Anything that must overlap an ad has to
   hide the element; hidden ancestors hide the guest automatically.
+- What ow-electron gets from the guest being part of the page has to be
+  rebuilt natively per platform: transparency, the interstitial on top of
+  other ads, and input passing through an interstitial that has not loaded.
+  On Linux, where tauri-runtime-wry packs child webviews into a `GtkBox`,
+  guests never overlap, so those three do not apply (a known gap).
 - CSS transforms and clipping on ancestors are not reflected.
 - Geometry updates are asynchronous (one IPC hop per animation frame at most),
   so very fast scrolling can show the ad a frame late.
@@ -92,3 +99,14 @@ renders test creatives and reports events.
   `render-process-gone`, navigation and console events. The host passes the
   guest ow-electron's four message types and its visibility and focus
   signals; guests are recovered without a cap (CONTRACT B.3, D.5, D.7).
+- 2026-10-07, ad formats (wave 3e): the element follows ow-electron's
+  lifecycle (an element removed or moved after attach is dead; a plain
+  `destroyed` reaches it only when it is back in the document; a
+  performance element leaves the document after `shutdown`, and a second one
+  is removed at once), its DOM (`inline-flex` default; a performance element
+  gets an overlay `div` and `pointer-events` instead of a shadow root),
+  `Object.assign` payload copies, and the `sendCommand` / `setPageUrl`
+  messages. Guests are transparent from creation (`ads.transparentGuests`),
+  the newest performance guest is raised above the others after each mount,
+  and it passes input through until its first `performance_ad_loaded`
+  (CONTRACT B.3.4). The host now passes six message types (D.5).
