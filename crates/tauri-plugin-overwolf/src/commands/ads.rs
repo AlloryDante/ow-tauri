@@ -1,6 +1,5 @@
 //! `<owadview>` commands (DESIGN §3.5, §4.4) and the ad guests' own
-//! command. Signatures are final; guest hosting arrives in W2, until then
-//! `adview_mount` answers `unsupported` and no element is ever mounted.
+//! command. The guests themselves live in `host::ads`.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -56,17 +55,8 @@ pub(crate) async fn adview_mount<R: Runtime>(
     }
     // 400025 never precedes the launch burst (DESIGN §4.2).
     core.lifecycle.wait_started().await;
-    drop(on_event);
-    if !core.ads.supported() {
-        return Err(Error::unsupported(if cfg!(target_os = "linux") {
-            "ads are not available on Linux"
-        } else {
-            "ads are not available in this build"
-        }));
-    }
-    Err(Error::unsupported(
-        "ad guests are not available in this build yet",
-    ))
+    let guest_label = crate::host::ads::mount(core, &webview, request, on_event).await?;
+    Ok(Mounted { guest_label })
 }
 
 /// Updates a mounted element (rectangle, visibility, attributes).
@@ -79,9 +69,7 @@ pub(crate) async fn adview_update<R: Runtime>(
     let core = core(&state);
     require_app_webview(core, &webview)?;
     mounted(core, &webview, &request.element_id)?;
-    Err(Error::unsupported(
-        "ad guests are not available in this build yet",
-    ))
+    crate::host::ads::update(core, &webview, request)
 }
 
 /// Unmounts an element: destroys its guest.
@@ -94,9 +82,8 @@ pub(crate) async fn adview_unmount<R: Runtime>(
     let core = core(&state);
     require_app_webview(core, &webview)?;
     mounted(core, &webview, &element_id)?;
-    Err(Error::unsupported(
-        "ad guests are not available in this build yet",
-    ))
+    crate::host::ads::unmount(core, &webview, &element_id);
+    Ok(())
 }
 
 /// An element method (`setAudioMuted`, `reload`, `setPageUrl`,
@@ -112,10 +99,13 @@ pub(crate) async fn adview_command<R: Runtime>(
     let core = core(&state);
     require_app_webview(core, &webview)?;
     mounted(core, &webview, &element_id)?;
-    let _ = (command, args);
-    Err(Error::unsupported(
-        "ad guests are not available in this build yet",
-    ))
+    crate::host::ads::command(
+        core,
+        &webview,
+        &element_id,
+        command,
+        args.as_deref().unwrap_or_default(),
+    )
 }
 
 /// A guest page event (CONTRACT A.2.6). Synchronous, so a guest's events
@@ -137,6 +127,63 @@ pub(crate) fn adview_event<R: Runtime>(
     if !label.starts_with(ADVIEW_LABEL_PREFIX) {
         return Err(Error::forbidden(format!("{label} is not an ad guest")));
     }
-    let _ = (core(&state), slot_id, name, data);
-    Err(Error::not_found(format!("no ad guest {label}")))
+    // The guest capability admits the ad page's scope only; checked again
+    // here (§7.3): a guest webview off the ad page is no live guest.
+    if !webview
+        .url()
+        .is_ok_and(|url| crate::host::ads::guest_url_allowed(&url))
+    {
+        return Err(Error::not_found(format!("{label} is not on the ad page")));
+    }
+    crate::host::ads::guest_event(core(&state), label, slot_id.as_deref(), &name, data)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use tauri::Manager;
+
+    use super::*;
+    use crate::error::ErrorCode;
+    use crate::host::windows::tests::{Capture, mock_app, window};
+
+    /// §7.3: only an `owad-*` webview on the ad page may send guest events;
+    /// the label, not the claimed slot id, names the guest.
+    #[test]
+    fn guest_events_come_only_from_the_ad_page() {
+        let (app, dir, _core) = mock_app(
+            "commands-adview-event",
+            &json!({}),
+            &[],
+            Capture::answering("{}"),
+        );
+        window(&app, "main");
+        window(&app, "owad-7");
+        let send = |label: &str| {
+            let webview = crate::compat::webview(&app, label).unwrap();
+            adview_event(
+                webview,
+                app.state::<Overwolf<tauri::test::MockRuntime>>(),
+                Some("owad-1".into()),
+                "impression".into(),
+                None,
+            )
+        };
+        let code = |r: Result<()>| r.unwrap_err().code();
+        assert_eq!(code(send("main")), ErrorCode::Forbidden, "not an ad guest");
+        let off_page = send("owad-7").unwrap_err();
+        assert_eq!(off_page.code(), ErrorCode::NotFound);
+        assert!(off_page.to_string().contains("not on the ad page"));
+        let guest = crate::compat::webview(&app, "owad-7").unwrap();
+        guest
+            .navigate(url::Url::parse(crate::ads::ADVIEW_URL).unwrap())
+            .unwrap();
+        let on_page = send("owad-7").unwrap_err();
+        assert_eq!(on_page.code(), ErrorCode::NotFound);
+        assert!(
+            on_page.to_string().contains("no ad guest owad-7"),
+            "{on_page}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
