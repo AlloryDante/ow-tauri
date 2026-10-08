@@ -6,17 +6,34 @@
 //! read natively (Tauri's per-URL getter compares domains exactly, so it
 //! misses `.overwolf.com` cookies on `www.overwolf.com`) and matched with
 //! RFC 6265 here; on Windows `ICoreWebView2CookieManager::GetCookies`
-//! matches natively through an `owad-*` or `ow-cmp*` webview. The store
-//! reads come back with the consent host (W2); the matching rules are
-//! pinned here.
-#![allow(
-    dead_code,
-    reason = "the consent host (W2) reads the store through these"
+//! matches natively through an `owad-*` or `ow-cmp*` webview, never an app
+//! webview (CRIT §2.5). Only the consent cookies' names leave a read
+//! (SEC-m8): no value and no other cookie is kept.
+#![cfg_attr(
+    not(target_os = "macos"),
+    allow(
+        dead_code,
+        reason = "only macOS matches the store's cookies here; WebView2 matches natively"
+    )
 )]
 
 use std::cmp::Reverse;
+use std::sync::Arc;
+use std::time::Duration;
 
+use tauri::Runtime;
 use url::Url;
+
+use super::Core;
+
+/// The consent cookies (D.6.3).
+pub(crate) const CONSENT_COOKIES: [&str; 2] = ["euconsent-v2", "acconsent"];
+
+/// The page whose cookies the consent fallback checks (D.6.3).
+pub(crate) const CONSENT_COOKIE_URL: &str = "https://www.overwolf.com/";
+
+/// How long a store read may take.
+const STORE_READ_LIMIT: Duration = Duration::from_secs(3);
 
 /// A cookie as a platform store holds it.
 #[derive(Debug, Clone, PartialEq)]
@@ -89,6 +106,76 @@ pub(crate) fn matching_cookies<'a>(
     matched
 }
 
+/// The names of the consent cookies among `cookies` that a request to
+/// `url` carries (SEC-m8: names only, consent cookies only).
+pub(crate) fn consent_cookie_names(
+    cookies: &[StoredCookie],
+    url: &Url,
+    now_secs: f64,
+) -> Vec<String> {
+    matching_cookies(cookies, url, now_secs)
+        .into_iter()
+        .filter(|c| CONSENT_COOKIES.contains(&c.name.as_str()))
+        .map(|c| c.name.clone())
+        .collect()
+}
+
+/// Unix seconds now.
+fn now_secs() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |d| d.as_secs_f64())
+}
+
+/// The consent cookies of the ads data store that a request to
+/// [`CONSENT_COOKIE_URL`] carries, by name; `None` when the store does not
+/// answer (or on Linux, which has no ads store). `via_label` is the consent
+/// window that reads it on Windows.
+pub(crate) async fn consent_cookies_in_store<R: Runtime>(
+    core: &Arc<Core<R>>,
+    via_label: &str,
+) -> Option<Vec<String>> {
+    let url = Url::parse(CONSENT_COOKIE_URL).ok()?;
+    #[cfg(target_os = "macos")]
+    {
+        let _ = via_label;
+        if !super::windows::native_runtime::<R>() {
+            return None;
+        }
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        core.app
+            .run_on_main_thread(move || {
+                crate::platform::webview::default_store_cookies(move |cookies| {
+                    let _ = tx.send(consent_cookie_names(&cookies, &url, now_secs()));
+                });
+            })
+            .ok()?;
+        tokio::time::timeout(STORE_READ_LIMIT, rx).await.ok()?.ok()
+    }
+    #[cfg(windows)]
+    {
+        let webview = crate::compat::webview(&core.app, via_label)?;
+        let read = tauri::async_runtime::spawn_blocking(move || webview.cookies_for_url(url));
+        let cookies = tokio::time::timeout(STORE_READ_LIMIT, read)
+            .await
+            .ok()?
+            .ok()?
+            .ok()?;
+        Some(
+            cookies
+                .iter()
+                .map(|c| c.name().to_owned())
+                .filter(|n| CONSENT_COOKIES.contains(&n.as_str()))
+                .collect(),
+        )
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        let _ = (core, via_label, url, STORE_READ_LIMIT);
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,6 +234,24 @@ mod tests {
         // Secure cookies stay off plain http.
         assert_eq!(names("http://analyticsnew.overwolf.com/"), ["live"]);
         assert!(names("https://example.org/").is_empty());
+    }
+
+    #[test]
+    fn only_consent_cookie_names_leave_a_read() {
+        let mut tcf = stored("euconsent-v2", ".overwolf.com", "/", true);
+        tcf.value = "CQ-secret".into();
+        let jar = vec![
+            tcf,
+            stored("acconsent", ".overwolf.com", "/", true),
+            stored("_session", ".overwolf.com", "/", true),
+            stored("euconsent-v2", ".example.com", "/", true),
+        ];
+        let url = Url::parse(CONSENT_COOKIE_URL).unwrap();
+        assert_eq!(
+            consent_cookie_names(&jar, &url, 1_000.0),
+            ["euconsent-v2", "acconsent"]
+        );
+        assert!(consent_cookie_names(&jar[2..], &url, 1_000.0).is_empty());
     }
 
     #[test]

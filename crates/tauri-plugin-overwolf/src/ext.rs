@@ -205,14 +205,8 @@ impl<R: Runtime> Overwolf<R> {
     /// }
     /// # }
     /// ```
-    #[allow(
-        unknown_lints,
-        clippy::unused_async,
-        clippy::unused_async_trait_impl,
-        reason = "frozen async interface; the consent host (W2) awaits"
-    )]
     pub async fn is_cmp_required(&self) -> bool {
-        self.0.consent.is_cmp_required()
+        self.0.consent.is_cmp_required(&self.0).await
     }
 
     /// Opens the ad privacy settings window (CONTRACT D.6.4). A Rust caller

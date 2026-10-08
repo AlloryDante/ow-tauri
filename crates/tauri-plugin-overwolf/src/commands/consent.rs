@@ -6,6 +6,7 @@ use tauri::{Runtime, State, Webview};
 
 use super::{core, require_app_webview};
 use crate::config::CMP_LABEL_PREFIX;
+use crate::consent::{CmpEventData, CmpEventName};
 use crate::error::{Error, Result};
 use crate::ext::Overwolf;
 use crate::types::CmpWindowOptions;
@@ -18,7 +19,7 @@ pub(crate) async fn is_cmp_required<R: Runtime>(
 ) -> Result<bool> {
     let core = core(&state);
     require_app_webview(core, &webview)?;
-    Ok(core.consent.is_cmp_required())
+    Ok(core.consent.is_cmp_required(core).await)
 }
 
 /// Opens the settings window for a JavaScript caller: `cmpURL` must match
@@ -79,6 +80,21 @@ pub(crate) fn cmp_event<R: Runtime>(
     if !label.starts_with(CMP_LABEL_PREFIX) {
         return Err(Error::forbidden(format!("{label} is not a consent window")));
     }
-    let _ = (core(&state), name, data);
-    Err(Error::not_found(format!("no consent window {label}")))
+    let core = core(&state);
+    if !core.consent.owns_window(label) {
+        return Err(Error::not_found(format!("no consent window {label}")));
+    }
+    let name: CmpEventName = serde_json::from_value(Value::String(name))
+        .map_err(|_| Error::invalid_argument("unknown cmp_event name"))?;
+    let data: Option<CmpEventData> = match data {
+        None | Some(Value::Null) => None,
+        Some(d) => Some(
+            serde_json::from_value(d)
+                .map_err(|_| Error::invalid_argument("invalid cmp_event data"))?,
+        ),
+    };
+    let url = webview.url().ok();
+    core.consent
+        .cmp_event(core, label, url.as_ref(), name, data)?;
+    Ok(Value::Null)
 }
