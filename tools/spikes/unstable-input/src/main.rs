@@ -305,6 +305,43 @@ fn run(app: &AppHandle, main: WebviewWindow, mode: &str) -> Value {
         focus.push(json!({ "step": "after clicking the app input again", "click": back, "state": focus_state(app, &main) }));
     }
 
+    // A guest webview created while the user types (an ad mounting or being
+    // recreated): does the keyboard focus stay in the app's input?
+    #[cfg(feature = "unstable")]
+    if mode == "unstable-child" {
+        let prep = eval(&main, "__spike.prep('input')");
+        let click = platform.click(&prep);
+        sleep(150);
+        for k in chars("ab") {
+            platform.key(k);
+            sleep(35);
+        }
+        let created = main
+            .as_ref()
+            .window()
+            .add_child(
+                tauri::webview::WebviewBuilder::new("guest2", WebviewUrl::App("child.html".into()))
+                    .focused(child_focused()),
+                tauri::LogicalPosition::new(600.0, 300.0),
+                tauri::LogicalSize::new(300.0, 300.0),
+            )
+            .is_ok();
+        sleep(800);
+        for k in chars("cd") {
+            platform.key(k);
+            sleep(35);
+        }
+        sleep(400);
+        let after = platform.after_keys();
+        let read = eval(&main, "__spike.read('input')");
+        let value = read["value"].as_str().unwrap_or_default().to_owned();
+        results.push(json!({
+            "target": "input", "case": "guest-created-while-typing", "expect": "abcd", "value": value,
+            "ok": value == "abcd", "created": created, "childFocused": child_focused(), "click": click,
+            "afterKeys": after, "log": read["log"],
+        }));
+    }
+
     // Windows: Alt-Tab away to a second app window and back (no click),
     // then keep typing into the input that had focus.
     #[cfg(windows)]
@@ -351,11 +388,20 @@ fn run(app: &AppHandle, main: WebviewWindow, mode: &str) -> Value {
         "tauri": tauri::VERSION,
         "mitigation": std::env::var("SPIKE_MITIGATE").unwrap_or_default(),
         "focusAtOpen": std::env::var("SPIKE_FOCUS_AT_OPEN").unwrap_or_default(),
+        "childFocused": child_focused(),
         "environment": env,
         "summary": { "cases": results.len(), "failed": failed.len(), "failures": failed },
         "focus": focus,
         "results": results,
     })
+}
+
+/// Whether child webviews are built with `focused(true)` (Tauri's default;
+/// `SPIKE_CHILD_FOCUSED=1`) or `focused(false)` (default here, as
+/// tauri-plugin-overwolf builds its ad guests).
+#[cfg_attr(not(feature = "unstable"), allow(dead_code))]
+fn child_focused() -> bool {
+    std::env::var("SPIKE_CHILD_FOCUSED").is_ok_and(|v| v == "1")
 }
 
 fn main() {
@@ -393,7 +439,8 @@ fn main() {
         #[cfg(feature = "unstable")]
         if mode_setup == "unstable-child" {
             main.as_ref().window().add_child(
-                tauri::webview::WebviewBuilder::new("guest", WebviewUrl::App("child.html".into())),
+                tauri::webview::WebviewBuilder::new("guest", WebviewUrl::App("child.html".into()))
+                    .focused(child_focused()),
                 tauri::LogicalPosition::new(600.0, 0.0),
                 tauri::LogicalSize::new(300.0, 600.0),
             )?;

@@ -51,17 +51,21 @@ jobs:
           New-Item -ItemType Directory -Force out | Out-Null
           Get-WinUserLanguageList | Format-List | Out-File out/language-list.txt
           Get-CimInstance Win32_VideoController | Select-Object CurrentHorizontalResolution, CurrentVerticalResolution | Format-List | Out-File out/display.txt
-      - name: Run the three modes
+      - name: Run the modes
         shell: pwsh
         run: |
           $out = (Resolve-Path out).Path
+          # unstable-child-focused: the child built with Tauri's default
+          # focused(true) instead of focused(false) (what the plugin uses).
           $runs = @(
-            @{ name = 'stable'; exe = 'target/stable/debug/unstable-input-spike.exe' },
-            @{ name = 'unstable-nochild'; exe = 'target/unstable/debug/unstable-input-spike.exe' },
-            @{ name = 'unstable-child'; exe = 'target/unstable/debug/unstable-input-spike.exe' }
+            @{ name = 'stable'; mode = 'stable'; exe = 'target/stable/debug/unstable-input-spike.exe'; focused = '0' },
+            @{ name = 'unstable-nochild'; mode = 'unstable-nochild'; exe = 'target/unstable/debug/unstable-input-spike.exe'; focused = '0' },
+            @{ name = 'unstable-child'; mode = 'unstable-child'; exe = 'target/unstable/debug/unstable-input-spike.exe'; focused = '0' },
+            @{ name = 'unstable-child-focused'; mode = 'unstable-child'; exe = 'target/unstable/debug/unstable-input-spike.exe'; focused = '1' }
           )
           foreach ($r in $runs) {
-            $env:SPIKE_MODE = $r.name
+            $env:SPIKE_MODE = $r.mode
+            $env:SPIKE_CHILD_FOCUSED = $r.focused
             $env:SPIKE_OUT = "$out/$($r.name).json"
             $p = Start-Process -FilePath $r.exe -PassThru -RedirectStandardError "$out/$($r.name).log" -RedirectStandardOutput "$out/$($r.name).stdout.log"
             if (-not $p.WaitForExit(600000)) { Stop-Process -Id $p.Id -Force; Write-Host "timeout: $($r.name)" }

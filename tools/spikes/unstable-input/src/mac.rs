@@ -112,6 +112,59 @@ fn note(kind: &str, event: &AnyObject) {
         v.push(format!("{kind} keyCode={code}"));
     }
 }
+/// `SPIKE_MITIGATE=responder`: no swizzling; each app webview gets a small
+/// responder spliced between it and tao's view (`-[NSResponder
+/// setNextResponder:]`) whose `keyDown:` does what wry's `WryWebViewParent`
+/// does in a stable build (offer the key to the main menu, nothing else).
+/// Every other responder message passes through to tao's view unchanged.
+fn mitigate_responder() -> bool {
+    std::env::var("SPIKE_MITIGATE").is_ok_and(|v| v == "responder")
+}
+
+extern "C-unwind" fn sink_key_down(_this: *mut AnyObject, _cmd: Sel, event: *mut AnyObject) {
+    let event: &AnyObject = unsafe { &*event };
+    note("KeySink keyDown: swallowed (mitigation)", event);
+    unsafe {
+        let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        let menu: *mut AnyObject = msg_send![app, mainMenu];
+        if !menu.is_null() {
+            let _: Bool = msg_send![menu, performKeyEquivalent: event];
+        }
+    }
+}
+
+fn sink_class() -> &'static AnyClass {
+    static CLASS: OnceLock<usize> = OnceLock::new();
+    let addr = *CLASS.get_or_init(|| {
+        let mut b = objc2::runtime::ClassBuilder::new(c"SpikeKeySink", class!(NSResponder)).expect("class");
+        unsafe {
+            b.add_method(sel!(keyDown:), sink_key_down as extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject));
+        }
+        b.register() as *const AnyClass as usize
+    });
+    unsafe { &*(addr as *const AnyClass) }
+}
+
+/// Splices a key sink after every WKWebView in the window (main thread).
+fn splice_key_sinks() -> Vec<String> {
+    let mut done = Vec::new();
+    unsafe {
+        let win = obj(MAIN.load(Ordering::SeqCst));
+        let cv: *mut AnyObject = msg_send![win, contentView];
+        let mut tree = Vec::new();
+        views(cv, &mut tree);
+        for (name, v) in tree.iter().filter(|(n, _)| n.contains("WryWebView")) {
+            let wv = *v as *mut AnyObject;
+            let next: *mut AnyObject = msg_send![wv, nextResponder];
+            let sink: *mut AnyObject = msg_send![sink_class(), new];
+            let () = msg_send![sink, setNextResponder: next];
+            let () = msg_send![wv, setNextResponder: sink];
+            done.push(format!("{name} -> SpikeKeySink -> {}", class_name(next)));
+        }
+    }
+    done
+}
+
 /// `SPIKE_MITIGATE=native`: a key that bubbled up to tao's content view
 /// from a focused webview (WebKit re-sends keys the page did not handle) is
 /// handled as wry's `WryWebViewParent` handles it in a stable build: offered
@@ -347,6 +400,10 @@ impl Driver {
     pub fn new(app: &AppHandle, _main: &WebviewWindow) -> Self {
         let d = Self { app: app.clone() };
         d.on_main(install_diagnostics);
+        if mitigate_responder() {
+            let spliced = d.on_main(splice_key_sinks);
+            eprintln!("spike: key sinks {spliced:?}");
+        }
         if fake_key() {
             d.on_main(|| unsafe {
                 let w = obj(MAIN.load(Ordering::SeqCst));
@@ -395,8 +452,17 @@ impl Driver {
             let fr: *mut AnyObject = msg_send![win, firstResponder];
             let cur: *mut AnyObject = msg_send![class!(NSTextInputContext), currentInputContext];
             let client: *mut AnyObject = if cur.is_null() { std::ptr::null_mut() } else { msg_send![cur, client] };
+            let chain: Vec<Value> = {
+                let mut tree = Vec::new();
+                let cv: *mut AnyObject = msg_send![win, contentView];
+                views(cv, &mut tree);
+                tree.iter().filter(|(n, _)| n.contains("WryWebView")).map(|(_, v)| {
+                    let next: *mut AnyObject = msg_send![*v as *mut AnyObject, nextResponder];
+                    class_name(next)
+                }).collect()
+            };
             let reached: Vec<String> = SUPER_KEYDOWNS.lock().map(|mut v| std::mem::take(&mut *v)).unwrap_or_default();
-            json!({ "firstResponder": class_name(fr), "currentInputContextClient": class_name(client), "reachedSuperview": reached })
+            json!({ "firstResponder": class_name(fr), "currentInputContextClient": class_name(client), "reachedSuperview": reached, "webviewNextResponders": chain })
         })
     }
 
