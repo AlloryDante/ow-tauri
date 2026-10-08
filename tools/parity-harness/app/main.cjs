@@ -1103,6 +1103,11 @@ app.whenReady().then(async () => {
   if (process.platform === 'darwin' && typeof app.setActivationPolicy === 'function') {
     app.setActivationPolicy('accessory');
   }
+  // Electron gives framed windows on Windows and Linux its default menu bar
+  // (26 px on Windows), which takes height from the content area; ow-tauri
+  // windows have no menu (CONTRACT B.2.2, PARITY deviations). The lab
+  // compares like with like, so the harness app has no menu either.
+  if (process.platform !== 'darwin') require('electron').Menu.setApplicationMenu(null);
   await featureServerReady;
   return config.probeOnly ? probeOnly() : fullRun();
 });

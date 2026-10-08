@@ -49,10 +49,6 @@ the npm package share one version number.
   49 % is hidden, both axes); `addAd` takes `slotId` and `slotStyle`.
 - Ad showcase lab: `--theme dark|light` for the stills, and in-process
   stills of each ow-electron ad guest with how much of it is painted.
-- CI: the macOS job requires that the Safari version is read from Safari's
-  `Info.plist` (`OW_TAURI_EXPECT_SAFARI`) and logs which plist it read.
-  Dependabot ignores React majors, which only `examples/packages-sample`
-  uses (it mirrors the upstream sample on React 18).
 
 - Upstream `ow-electron-packages-sample` imported verbatim at commit `8a27053`
   into `examples/packages-sample` (MIT, Overwolf Ltd.).
@@ -125,6 +121,17 @@ the npm package share one version number.
 
 ### Changed
 
+- Windows lab: G1 reads the app window's own `index.html` load (it read
+  ow-electron's internal `owepm://index.html/` window, so G1 failed on every
+  scenario), and the ow-electron harness app has no default menu on Windows
+  and Linux, as ow-tauri windows have none (PARITY, deviations).
+- Packages sample e2e (ow-electron baseline): the upstream main window,
+  built with `show: true`, no longer activates the app (it became the
+  frontmost app on macOS); the runner kills an app that becomes frontmost.
+- CI: the macOS job requires that the Safari version is read from Safari's
+  `Info.plist` (`OW_TAURI_EXPECT_SAFARI`) and logs which plist it read.
+  Dependabot ignores React majors, which only `examples/packages-sample`
+  uses (it mirrors the upstream sample on React 18).
 - `<owadview>` in-view rule is now measured, not chosen: visible from half of
   the element inside the viewport, as ow-electron (CONTRACT B.3.4,
   AD-FORMATS); a boundary test pins 0.49 hidden / 0.5 visible.

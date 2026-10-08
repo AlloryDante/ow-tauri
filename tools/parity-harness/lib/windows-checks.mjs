@@ -212,10 +212,18 @@ export function audioChecks(electronDir, tauriDir) {
   });
 }
 
-/** The app window's `did-finish-load` record of a run (its `index.html`). */
+/**
+ * The app window's `did-finish-load` record of a run: the harness page's
+ * `index.html` from the app's own origin (`file:` on ow-electron, the Tauri
+ * asset origin on ow-tauri). ow-electron's own internal windows also load an
+ * `index.html` (`owepm://index.html/`, a 32 x 31 window, after the app's),
+ * which is not the app window.
+ */
 function appWindowLoaded(runDir) {
   const loads = readJsonl(join(runDir, 'windows.jsonl')).filter(
-    (r) => r.kind === 'did-finish-load' && /\/index\.html/.test(String(r.url ?? '')),
+    (r) =>
+      r.kind === 'did-finish-load' &&
+      /^(file|tauri|https?):\/\/[^?#]*\/index\.html(?:[?#]|$)/.test(String(r.url ?? '')),
   );
   return loads.length ? loads[loads.length - 1] : null;
 }

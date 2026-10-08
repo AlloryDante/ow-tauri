@@ -237,6 +237,9 @@ test('G1 compares the app window frame, G2 the content area (advisory)', () => {
         rect(0, 0, 1000, 720),
         rect(8, 31, 984, 681),
       ),
+      // Regression (Windows lab): ow-electron's own window loads an
+      // index.html after the app's; it is not the app window.
+      loaded('owepm://index.html/', rect(944, 500, 32, 31), rect(944, 500, 32, 31)),
     ],
   });
   const same = run('t-geometry-same', {
