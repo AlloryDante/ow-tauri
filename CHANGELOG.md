@@ -116,6 +116,12 @@ the npm package share one version number.
 
 ### Changed
 
+- Invisible lab (feature `lab`, `OW_TAURI_LAB_INVISIBLE=1`, macOS): the app
+  is never activated for the whole run. App activation is a no-op and
+  `makeKeyAndOrderFront:` orders the window front without making it key, so
+  a later `BrowserWindow.show()` / `focus()` and the ad privacy window keep
+  the app in the background. The showcase lab no longer needs its
+  `show()` override or `--no-privacy-window` (removed).
 - The test-mode `unit` guard is gone: `unit` passes through to the ad
   library in test mode too, as ow-electron forwards it (ADR 0005 amended).
 - `ads.guestLimits.externalOpensPerMinute` defaults to 20 per guest
