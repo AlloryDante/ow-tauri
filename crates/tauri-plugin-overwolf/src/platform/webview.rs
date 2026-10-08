@@ -628,6 +628,10 @@ pub(crate) enum MinimizeStage {
 /// `NSWindowWillMiniaturizeNotification` and
 /// `NSWindowDidMiniaturizeNotification`, on the main thread). Elsewhere
 /// does nothing: Windows and Linux report a minimized window at once.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "only macOS reports minimize stages")
+)]
 pub(crate) fn observe_minimize(on: impl Fn(usize, MinimizeStage) + Send + Sync + 'static) {
     #[cfg(target_os = "macos")]
     macos::observe_minimize(Box::new(on));
@@ -694,6 +698,13 @@ impl NativeView {
     /// Evaluates `script` in the view's page and gives the retain back in the
     /// evaluation's completion handler (on the main thread). Call it on the
     /// main thread; elsewhere it is queued there.
+    #[cfg_attr(
+        not(target_os = "macos"),
+        allow(
+            clippy::needless_pass_by_value,
+            reason = "macOS moves the script into the evaluation"
+        )
+    )]
     pub(crate) fn eval_then_release(self, script: String) {
         let address = std::mem::ManuallyDrop::new(self).address;
         if address == 0 {
@@ -790,6 +801,10 @@ pub(crate) fn remove_user_scripts_marked<R: Runtime>(
 /// Whether the view at `address` has its input pass-through flag set
 /// ([`set_input_passthrough`]; macOS, main thread). Always `false`
 /// elsewhere.
+#[cfg_attr(
+    not(target_os = "macos"),
+    allow(dead_code, reason = "the macOS gesture monitor reads it")
+)]
 pub(crate) fn passthrough_on(address: usize) -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -1900,13 +1915,17 @@ mod windows_impl {
     pub(super) fn show_no_activate(hwnd: isize) {
         // SAFETY: a window handle of this process; a stale one makes the
         // call fail, which is ignored.
-        let _ = unsafe { ShowWindow(HWND(hwnd as *mut std::ffi::c_void), SW_SHOWNOACTIVATE) };
+        let _ = unsafe { ShowWindow(HWND(hwnd as *mut c_void), SW_SHOWNOACTIVATE) };
     }
 
     /// [`show_no_activate`] from a new helper thread, so the calling thread
     /// never runs the window's show messages itself: they reach the window's
     /// own thread when it next pumps (see `show_inactive`). `then` runs on
     /// the helper once the window was shown; the handle ends after it.
+    #[allow(
+        dead_code,
+        reason = "the window host shows windows without activation through it (change request W2-fix-r1 CR-3)"
+    )]
     pub(super) fn show_no_activate_detached(
         hwnd: isize,
         then: impl FnOnce() + Send + 'static,
@@ -1966,8 +1985,12 @@ mod windows_impl {
     /// then calls `ShowWindow(SW_SHOW)`, which would show and activate it
     /// anew; with the bit kept that call finds the window shown and changes
     /// nothing. Skipped when the window is no longer shown.
+    #[allow(
+        dead_code,
+        reason = "the window host shows windows without activation through it (change request W2-fix-r1 CR-3)"
+    )]
     pub(super) fn count_as_shown(hwnd: isize, show: impl FnOnce()) {
-        let hwnd = HWND(hwnd as *mut std::ffi::c_void);
+        let hwnd = HWND(hwnd as *mut c_void);
         // SAFETY: Win32 calls on a window of this thread; the subclass is
         // removed again before this returns.
         unsafe {
@@ -1990,7 +2013,7 @@ mod windows_impl {
         pw: &tauri::webview::PlatformWebview,
     ) -> Option<ICoreWebView2Controller> {
         let theirs = pw.controller();
-        if std::mem::size_of_val(&theirs) != std::mem::size_of::<*mut c_void>() {
+        if size_of_val(&theirs) != size_of::<*mut c_void>() {
             return None;
         }
         // SAFETY: a COM interface value is exactly one interface pointer
@@ -2049,7 +2072,7 @@ mod windows_impl {
                 return None;
             }
             let mut info = LASTINPUTINFO {
-                cbSize: u32::try_from(std::mem::size_of::<LASTINPUTINFO>()).ok()?,
+                cbSize: u32::try_from(size_of::<LASTINPUTINFO>()).ok()?,
                 dwTime: 0,
             };
             if !GetLastInputInfo(&raw mut info).as_bool() {

@@ -43,7 +43,7 @@ pub(crate) fn read_native<R: Runtime>(
         let ua = crate::platform::webview::own_controller(&pw)
             .and_then(|controller| windows_impl::user_agent(&controller));
         #[cfg(not(any(target_os = "macos", windows)))]
-        let ua = {
+        let ua: Option<String> = {
             let _ = pw;
             None
         };
