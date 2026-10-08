@@ -1384,8 +1384,9 @@ hidden (plus a `window-hidden` message, D.5); a resize signals nothing, and
 the window's position on the screen plays no part (an off-screen window
 still fills test ads) [OBS]. A minimize signals `hidden` plus the
 `window-minimized` and `window-hidden` messages (D.5) [OBS]; on Windows the
-guest turns `hidden` first and then gets only `window-minimized`, so a running
-performance ad stops without `performance_ad_dismiss` [OBS: Windows lab].
+guest turns `hidden` first and then gets only `window-minimized`; a running
+performance ad then stops, with `performance_ad_dismiss` before its `shutdown`
+in some ow-electron runs and without it in others [OBS: Windows lab].
 There a minimized window has an empty client area, so the guests stop
 rendering; ow-tauri hides each guest webview natively on a Windows minimize
 and shows it again on restore unless the app hid the element meanwhile

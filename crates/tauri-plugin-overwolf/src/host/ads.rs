@@ -175,10 +175,9 @@ enum Next {
 /// `window-minimized` only, no `window-hidden` [OBS: Windows lab,
 /// `perf-minimize`]. On macOS (and Linux, not observed) the guest gets
 /// `window-minimized` and `window-hidden` first and then turns `hidden`
-/// [OBS]. The order matters to a running performance ad: told it was
-/// minimized while still visible, it dismisses itself
-/// (`performance_ad_dismiss`); already hidden, it stops as a hidden page
-/// does (`shutdown` only).
+/// [OBS]. A running performance ad then stops; on Windows ow-electron's
+/// sends `performance_ad_dismiss` before its `shutdown` in some runs and
+/// not in others [OBS: Windows lab, `perf-minimize`].
 pub(crate) const MINIMIZE_HIDES_FIRST: bool = cfg!(windows);
 
 /// Whether a minimize also hides the guest webviews natively until the

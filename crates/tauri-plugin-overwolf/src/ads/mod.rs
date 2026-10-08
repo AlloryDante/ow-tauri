@@ -33,7 +33,8 @@ pub const MODAL_EVENT: &str = "performance_ad_loaded";
 /// just before `window-hidden` (D.5). ow-electron sends both on minimize,
 /// and a running performance ad then dismisses itself
 /// (`performance_ad_dismiss`) (observed). On Windows the guest turns hidden
-/// first and gets this one only; the ad then just stops (observed).
+/// first and gets this one only; the ad then stops, with or without
+/// `performance_ad_dismiss` from one run to the next (observed).
 ///
 /// ```
 /// assert_eq!(tauri_plugin_overwolf::ads::WINDOW_MINIMIZED, "window-minimized");

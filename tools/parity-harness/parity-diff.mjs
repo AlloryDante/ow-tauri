@@ -572,6 +572,23 @@ export function guestHiddenSpans(runDir) {
   return spans;
 }
 
+/**
+ * Whether `events` are only `performance_ad_dismiss` in runs where the app
+ * minimized the embedder window on both hosts: on Windows ow-electron's
+ * performance ad sends it before its `shutdown` in some runs and not in
+ * others [OBS: Windows lab, runs 37699128161 and 37708723866].
+ */
+export function minimizeDismiss(events, e, t) {
+  const minimized = (m) =>
+    (m.actions ?? []).some((a) => a.do === 'window' && a.method === 'minimize');
+  return (
+    events.length > 0 &&
+    events.every((n) => n === 'performance_ad_dismiss') &&
+    minimized(e) &&
+    minimized(t)
+  );
+}
+
 /** Hidden spells shorter than this are brief hides (the reward opt-in probes). */
 export const BRIEF_HIDE_MS = 100;
 
@@ -948,6 +965,14 @@ const RULES = [
         (d.section === 'element-event' && d.field === 'count')),
     cls: 'intended:deviation',
     why: "the app removed this zone on both hosts, ow-tauri's copy before any ad loaded: the documented high-impact listener drops the 400x60 container when the 400x600 ad loads, and ow-tauri's first ad navigation waits for the startup consent window (at most 3 s, D.6.5), so the other zone can fill first",
+  },
+  {
+    when: (d) =>
+      d.minimizeDismiss &&
+      ((d.section === 'element-event' && d.field === 'count') ||
+        (d.section === 'adformat-element' && d.field === 'events')),
+    cls: 'variance',
+    why: "after a minimize ow-electron's performance ad stops with performance_ad_dismiss in some Windows runs and without it in others (D.5); both hosts shut the ad down",
   },
   {
     when: (d) => d.section === 'element-event' && d.field === 'count' && d.briefHide,
@@ -1796,6 +1821,7 @@ export function compareAdformats(e, t, out) {
         extra,
         adDriven: [...missing, ...extra].every((n) => AD_DRIVEN.has(n)),
         removedUnfilled: removedUnfilled(key, e, t),
+        minimizeDismiss: minimizeDismiss([...missing, ...extra], e, t),
       });
     const common = (list, other) => list.filter((n) => other.includes(n));
     if (stable(common(a.order, b.order)) !== stable(common(b.order, a.order)))
@@ -1993,6 +2019,7 @@ function compareElementEvents(e, t, out) {
         b - a <= (t.pageReloads?.[key.split(' ')[0]] ?? 0),
       removedUnfilled:
         b === 0 && AD_DRIVEN.has(key.split(' ')[1]) && removedUnfilled(key.split(' ')[0], e, t),
+      minimizeDismiss: minimizeDismiss([key.split(' ').at(-1)], e, t),
       // A reward play (play, impression, complete) after a brief hide.
       briefHide:
         /\s(play|impression|complete|userPlay)$/.test(key) &&

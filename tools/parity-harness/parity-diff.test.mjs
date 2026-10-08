@@ -28,6 +28,7 @@ import {
   packageRuntimeLog,
   removedUnfilled,
   briefHideDiffers,
+  minimizeDismiss,
   modalPhaseDiffers,
   sameElement,
   sentOsClick,
@@ -888,4 +889,22 @@ test('a reward play after a brief hide measured differently is variance', () => 
   const d = { section: 'element-event', key: 's1 play', field: 'count', electron: 1, tauri: 0 };
   assert.equal(classify({ ...d, briefHide: true }).class, 'variance');
   assert.equal(classify({ ...d, briefHide: false }).class, 'BUG');
+});
+
+test('a performance dismiss after a minimize is variance, other events are not', () => {
+  const run = { actions: [{ do: 'window', method: 'minimize' }] };
+  const plain = { actions: [] };
+  assert.equal(minimizeDismiss(['performance_ad_dismiss'], run, run), true);
+  assert.equal(minimizeDismiss(['performance_ad_dismiss'], run, plain), false);
+  assert.equal(minimizeDismiss(['performance_ad_dismiss', 'shutdown'], run, run), false);
+  assert.equal(minimizeDismiss([], run, run), false);
+  const count = {
+    section: 'element-event',
+    key: 'null performance_ad_dismiss',
+    field: 'count',
+    electron: 1,
+    tauri: 0,
+  };
+  assert.equal(classify({ ...count, minimizeDismiss: true }).class, 'variance');
+  assert.equal(classify({ ...count, minimizeDismiss: false }).class, 'BUG');
 });
