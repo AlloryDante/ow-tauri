@@ -360,8 +360,13 @@ fn b3(app: &tauri::AppHandle, events: &Arc<Events>) -> Value {
 
 #[cfg(windows)]
 fn b5(app: &tauri::AppHandle, events: &Arc<Events>, guest_origin: &str) -> Value {
-    let raw = eval(app, GUEST_RAW, "await window.__secB1()");
-    let guarded = eval(app, GUEST_GUARD, "await window.__secB1()");
+    // Kick off the async attack in each guest, then poll the stashed result
+    // (eval cannot await through ExecuteScript).
+    let _ = eval(app, GUEST_RAW, "window.__runSec()");
+    let _ = eval(app, GUEST_GUARD, "window.__runSec()");
+    sleep(4000);
+    let raw = eval(app, GUEST_RAW, "window.__secResult");
+    let guarded = eval(app, GUEST_GUARD, "window.__secResult");
     json!({
         "guest_origin": guest_origin,
         "raw_no_guard": raw,
@@ -403,5 +408,7 @@ fn b3(_app: &tauri::AppHandle, _events: &Arc<Events>) -> Value {
 }
 #[cfg(not(windows))]
 fn b5(app: &tauri::AppHandle, _events: &Arc<Events>, guest_origin: &str) -> Value {
-    json!({ "unsupported": "windows-only frame guard", "guest_origin": guest_origin, "raw_no_guard": eval(app, GUEST_RAW, "await window.__secB1()") })
+    let _ = eval(app, GUEST_RAW, "window.__runSec()");
+    sleep(4000);
+    json!({ "unsupported": "windows-only frame guard", "guest_origin": guest_origin, "raw_no_guard": eval(app, GUEST_RAW, "window.__secResult") })
 }

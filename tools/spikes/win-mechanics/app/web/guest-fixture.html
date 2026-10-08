@@ -79,6 +79,15 @@
         }, 50);
       });
 
+      // The driver cannot `await` through eval (ExecuteScript does not await
+      // promises), so it kicks __secB1 off and polls __secResult.
+      window.__secResult = 'idle';
+      window.__runSec = () => {
+        window.__secResult = 'pending';
+        window.__secB1().then((r) => { window.__secResult = r; }).catch((e) => { window.__secResult = { error: String(e) }; });
+        return 'started';
+      };
+
       // B4: a liveness beacon the driver reads after a close is posted.
       window.__alive = () => Date.now();
     </script>
