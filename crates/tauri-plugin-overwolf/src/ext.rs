@@ -1,22 +1,25 @@
-//! The Rust API (CONTRACT A.5): [`Overwolf`] and [`OverwolfExt`].
+//! The Rust API (DESIGN §3.3): [`Overwolf`] and [`OverwolfExt`].
+//!
+//! The signatures are frozen (DESIGN §10.0); bodies that need the guests,
+//! the consent windows or the update client return `unsupported` until
+//! their owners fill them (W2, W3).
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use serde_json::{Map, Value};
 use tauri::{Manager, Runtime};
 
 use crate::config::Config;
-use crate::host::Host;
+use crate::error::{Error, Result};
+use crate::host::{Core, LOG_TARGET};
 use crate::identity::{EmailHashes, email_hashes};
-use crate::ipc::messages::HostMessage;
-use crate::manifest::EmbeddedManifest;
-use crate::snapshot::Flags;
-use crate::state::log::LogLevel;
+use crate::types::{CmpWindowOptions, Info};
 
 /// The plugin's per-app state, reachable from any Tauri manager through
 /// [`OverwolfExt::overwolf`] once the plugin's setup has run.
-pub struct Overwolf<R: Runtime>(pub(crate) Arc<Host<R>>);
+pub struct Overwolf<R: Runtime>(pub(crate) Arc<Core<R>>);
 
 impl<R: Runtime> std::fmt::Debug for Overwolf<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -26,22 +29,59 @@ impl<R: Runtime> std::fmt::Debug for Overwolf<R> {
     }
 }
 
+/// Maps a failed `ow-electron.json` write to [`Error`] (no paths).
+fn state_error(err: &crate::state::ow_electron::WriteError) -> Error {
+    match err {
+        crate::state::ow_electron::WriteError::Io(io) => {
+            Error::from_io("Updating ow-electron.json", io)
+        }
+        crate::state::ow_electron::WriteError::InvalidExisting => {
+            Error::backend("ow-electron.json is not valid JSON; it was left untouched")
+        }
+    }
+}
+
 impl<R: Runtime> Overwolf<R> {
-    /// The effective app uid (G.2).
+    /// What `getInfo()` returns (machine ids are [`Overwolf::muid`] and
+    /// [`Overwolf::muid_v2`]).
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::OverwolfExt;
     /// # fn example(app: &tauri::AppHandle) {
-    /// let uid = app.overwolf().uid();
-    /// assert!(!uid.is_empty());
+    /// let info = app.overwolf().info();
+    /// println!("{} {}", info.name, info.version);
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn info(&self) -> Info {
+        let id = &self.0.identity;
+        Info::new(
+            &id.app.uid,
+            &id.app.cuid,
+            id.phase_percent,
+            id.utm_params.clone(),
+            id.test_ad,
+            self.0.ads.supported(),
+            &id.app.name,
+            &id.app.version,
+            id.host.clone(),
+        )
+    }
+
+    /// The effective app uid (CONTRACT G.2).
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// assert!(!app.overwolf().uid().is_empty());
     /// # }
     /// ```
     #[must_use]
     pub fn uid(&self) -> &str {
-        &self.0.info.identity.uid
+        &self.0.identity.app.uid
     }
 
-    /// The computed uid, even when an override applies (G.2).
+    /// The computed uid, even when `uid` overrides it (CONTRACT G.2).
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::OverwolfExt;
@@ -54,24 +94,24 @@ impl<R: Runtime> Overwolf<R> {
     /// ```
     #[must_use]
     pub fn cuid(&self) -> &str {
-        &self.0.info.identity.cuid
+        &self.0.identity.app.cuid
     }
 
-    /// The machine/user id used by analytics (E.4).
+    /// The machine id the analytics send as `muid` (CONTRACT E.4).
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::OverwolfExt;
     /// # fn example(app: &tauri::AppHandle) {
-    /// println!("muid {}", app.overwolf().muid());
+    /// assert_eq!(app.overwolf().muid().len(), 36);
     /// # }
     /// ```
     #[must_use]
     pub fn muid(&self) -> &str {
-        &self.0.info.muid
+        &self.0.identity.machine.muid
     }
 
-    /// `muidV2` (E.4): equal to [`Overwolf::muid`] except on Windows when the
-    /// shared registry values differ.
+    /// `muidV2` (CONTRACT E.4): equal to [`Overwolf::muid`] except on
+    /// Windows when the shared registry values differ.
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::OverwolfExt;
@@ -81,10 +121,10 @@ impl<R: Runtime> Overwolf<R> {
     /// ```
     #[must_use]
     pub fn muid_v2(&self) -> &str {
-        &self.0.info.muid_v2
+        &self.0.identity.machine.muid_v2
     }
 
-    /// The phase percent derived from the muid.
+    /// The phase bucket of this machine, 0 to 99.
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::OverwolfExt;
@@ -94,122 +134,236 @@ impl<R: Runtime> Overwolf<R> {
     /// ```
     #[must_use]
     pub fn phase_percent(&self) -> u8 {
-        self.0.info.phase_percent
+        self.0.identity.phase_percent
     }
 
-    /// `ow-electron.json` `utmParams`, or `None` when there are none.
+    /// The UTM parameters stored at install (`ow-electron.json`), if any.
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::OverwolfExt;
     /// # fn example(app: &tauri::AppHandle) {
-    /// if let Some(source) = app.overwolf().utm_params().and_then(|u| u.get("utm_source")) {
-    ///     println!("installed from {source}");
+    /// if let Some(utm) = app.overwolf().utm_params() {
+    ///     println!("installed from {utm}");
     /// }
     /// # }
     /// ```
     #[must_use]
     pub fn utm_params(&self) -> Option<&Value> {
-        self.0.info.utm_params.as_ref()
+        self.0.identity.utm_params.as_ref()
     }
 
-    /// The embedded manifest.
+    /// Whether test ads are on (configuration, builder, `--test-ad` or
+    /// `OW_TAURI_TEST_AD=1`).
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::OverwolfExt;
     /// # fn example(app: &tauri::AppHandle) {
-    /// println!("{} {}", app.overwolf().manifest().product_name, app.overwolf().manifest().version);
+    /// println!("test ads: {}", app.overwolf().is_test_ad());
     /// # }
     /// ```
     #[must_use]
-    pub fn manifest(&self) -> &EmbeddedManifest {
-        &self.0.info.manifest
+    pub fn is_test_ad(&self) -> bool {
+        self.0.identity.test_ad
     }
 
-    /// The update client (CONTRACT A.5, I): `configure`, `check`,
-    /// `download` and `quit_and_install`, with the behaviour of the
-    /// `updater_*` commands.
-    ///
-    /// ```no_run
-    /// use tauri_plugin_overwolf::OverwolfExt;
-    /// # async fn example(app: &tauri::AppHandle) -> tauri_plugin_overwolf::Result<()> {
-    /// if let Some(result) = app.overwolf().updater().check().await? {
-    ///     println!("latest {}", result.update_info.version);
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[must_use]
-    pub fn updater(&self) -> &crate::updater::Updater<R> {
-        &self.0.updater_api
-    }
-
-    /// The effective configuration (file, builder, environment, switches).
+    /// The validated `plugins.overwolf` configuration, with the builder's
+    /// overrides applied.
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::OverwolfExt;
     /// # fn example(app: &tauri::AppHandle) {
-    /// let config = app.overwolf().config();
-    /// println!("main document {}", config.main.url);
+    /// println!("{:?}", app.overwolf().config().analytics.host_label);
     /// # }
     /// ```
     #[must_use]
     pub fn config(&self) -> &Config {
-        &self.0.info.config
+        &self.0.identity.config
     }
 
-    /// The per-app state directory `<appData>/ow-electron/<uid>` (F.1).
+    /// `<appData>/ow-electron/<uid>`, the directory of `ow-electron.json`
+    /// and `ow-tauri.json`.
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::OverwolfExt;
     /// # fn example(app: &tauri::AppHandle) {
-    /// let log_dir = app.overwolf().state_dir().join("logs");
-    /// println!("{}", log_dir.display());
+    /// assert!(app.overwolf().state_dir().ends_with(app.overwolf().uid()));
     /// # }
     /// ```
     #[must_use]
     pub fn state_dir(&self) -> &Path {
-        self.0.info.state_dir.root()
+        self.0.identity.state_dir.root()
     }
 
-    /// The session switches.
+    /// `isCMPRequired()` (CONTRACT D.6.2): never fails; `true` when the
+    /// answer is not known.
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # async fn example(app: tauri::AppHandle) {
+    /// if app.overwolf().is_cmp_required().await {
+    ///     println!("show the privacy settings entry");
+    /// }
+    /// # }
+    /// ```
+    #[allow(
+        unknown_lints,
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "frozen async interface; the consent host (W2) awaits"
+    )]
+    pub async fn is_cmp_required(&self) -> bool {
+        self.0.consent.is_cmp_required()
+    }
+
+    /// Opens the ad privacy settings window (CONTRACT D.6.4). A Rust caller
+    /// may use any `https:` `cmp_url`.
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::{CmpTab, CmpWindowOptions, OverwolfExt};
+    /// # async fn example(app: tauri::AppHandle) -> tauri_plugin_overwolf::Result<()> {
+    /// app.overwolf()
+    ///     .open_ad_privacy_settings_window(CmpWindowOptions::new().tab(CmpTab::Vendors))
+    ///     .await
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// `invalid-argument` for a bad option, `not-found` for an unknown
+    /// parent window, `unsupported` where the window cannot open.
+    #[allow(
+        unknown_lints,
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "frozen async interface; the consent host (W2) awaits"
+    )]
+    pub async fn open_ad_privacy_settings_window(&self, options: CmpWindowOptions) -> Result<()> {
+        if let Some(url) = &options.cmp_url
+            && !crate::config::is_https_url(url)
+        {
+            return Err(Error::invalid_argument("cmpURL must be an https: URL"));
+        }
+        self.0.consent.open_settings_window(&self.0, &options, None)
+    }
+
+    /// `openCMPWindow`: the deprecated alias of
+    /// [`Overwolf::open_ad_privacy_settings_window`].
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::{CmpWindowOptions, OverwolfExt};
+    /// # async fn example(app: tauri::AppHandle) -> tauri_plugin_overwolf::Result<()> {
+    /// app.overwolf().open_cmp_window(CmpWindowOptions::new()).await
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// As [`Overwolf::open_ad_privacy_settings_window`].
+    pub async fn open_cmp_window(&self, options: CmpWindowOptions) -> Result<()> {
+        self.open_ad_privacy_settings_window(options).await
+    }
+
+    /// `generateUserEmailHashes(email)` (CONTRACT A.2.2): hashes the
+    /// normalised address in `emailHashes.encoding`, and also sends and
+    /// stores the hashes as [`Overwolf::set_user_email_hashes`] does.
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::OverwolfExt;
     /// # fn example(app: &tauri::AppHandle) {
-    /// if app.overwolf().flags().ads_fpd_disabled {
-    ///     println!("first-party data is off for this session");
-    /// }
+    /// let hashes = app.overwolf().generate_user_email_hashes("user@example.com");
+    /// assert!(hashes.sha256.is_some());
     /// # }
     /// ```
     #[must_use]
-    pub fn flags(&self) -> Flags {
-        self.0.with_core(|c| c.flags)
+    pub fn generate_user_email_hashes(&self, email: &str) -> EmailHashes {
+        let hashes = email_hashes(email, self.0.identity.config.email_hashes.encoding);
+        self.set_user_email_hashes(&hashes);
+        hashes
     }
 
-    fn set_flag(&self, path: &str, edit: impl FnOnce(&mut Flags)) {
-        self.0.with_core(|c| {
-            edit(&mut c.flags);
-            c.patch(vec![(format!("flags.{path}"), Value::Bool(true))]);
-        });
+    /// `setUserEmailHashes(hashes)` (CONTRACT A.2.2): the hashes go to every
+    /// ad guest and are stored as `eHashes` in `ow-electron.json`, as
+    /// ow-electron does. Empty hashes are ignored; so is every call after
+    /// [`Overwolf::disable_ads_fpd`] (one warning).
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::{EmailHashes, OverwolfExt};
+    /// # fn example(app: &tauri::AppHandle) {
+    /// let hashes = EmailHashes { sha256: Some("ab12".into()), ..EmailHashes::default() };
+    /// app.overwolf().set_user_email_hashes(&hashes);
+    /// # }
+    /// ```
+    pub fn set_user_email_hashes(&self, hashes: &EmailHashes) {
+        if hashes.is_empty() {
+            return;
+        }
+        if self.0.flags.ads_fpd_disabled.load(Ordering::SeqCst) {
+            log::warn!(target: LOG_TARGET, "setUserEmailHashes() after disableAdsFPD() is ignored");
+            return;
+        }
+        let get = |h: &Option<String>| h.clone().unwrap_or_default();
+        let (sha1, md5, sha256) = (get(&hashes.sha1), get(&hashes.md5), get(&hashes.sha256));
+        if let Err(err) = self
+            .0
+            .state
+            .ow_electron
+            .write_e_hashes(&sha1, &md5, &sha256)
+        {
+            log::warn!(target: LOG_TARGET, "eHashes not stored: {err}");
+        }
+        self.0.ads.set_email_hashes(Some(hashes.clone()));
     }
 
-    /// `app.overwolf.disableAnonymousAnalytics()` (A.2.2).
+    /// `clearUserEmailHashes()` (SEC-M9): forgets the hashes and removes
+    /// `eHashes` from `ow-electron.json`.
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) -> tauri_plugin_overwolf::Result<()> {
+    /// app.overwolf().clear_user_email_hashes()
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// `io` or `backend` when `ow-electron.json` could not be updated.
+    pub fn clear_user_email_hashes(&self) -> Result<()> {
+        self.0.ads.set_email_hashes(None);
+        self.0
+            .state
+            .ow_electron
+            .clear_e_hashes()
+            .map_err(|e| state_error(&e))
+    }
+
+    /// `disableAnonymousAnalytics()` (CONTRACT E.3): only the mandatory
+    /// events are sent from now on. Called before `RunEvent::Ready` (for
+    /// example in the app's setup closure) it applies to the launch burst;
+    /// later, one warning says the burst was already sent (R10).
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::OverwolfExt;
     /// # fn example(app: &tauri::AppHandle) {
     /// app.overwolf().disable_anonymous_analytics();
-    /// assert!(app.overwolf().flags().anonymous_analytics_disabled);
     /// # }
     /// ```
     pub fn disable_anonymous_analytics(&self) {
-        self.set_flag("anonymousAnalyticsDisabled", |f| {
-            f.anonymous_analytics_disabled = true;
-        });
-        self.0.disable_anonymous_analytics();
+        let late = self.0.analytics.disable_anonymous();
+        if late
+            && !self
+                .0
+                .flags
+                .late_disable_warned
+                .swap(true, Ordering::SeqCst)
+        {
+            log::warn!(
+                target: LOG_TARGET,
+                "disableAnonymousAnalytics() was called after the launch analytics were sent; call it in the app's setup, or use setAnonymousAnalyticsPreference(false) for the next launch"
+            );
+        }
     }
 
-    /// `disableAdsOptimization()` (A.2.2).
+    /// `disableAdsOptimization()` (CONTRACT D.2).
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::OverwolfExt;
@@ -218,12 +372,14 @@ impl<R: Runtime> Overwolf<R> {
     /// # }
     /// ```
     pub fn disable_ads_optimization(&self) {
-        self.set_flag("adsOptimizationDisabled", |f| {
-            f.ads_optimization_disabled = true;
-        });
+        self.0
+            .flags
+            .ads_optimization_disabled
+            .store(true, Ordering::SeqCst);
     }
 
-    /// `disableAdsFPD()` (A.2.2).
+    /// `disableAdsFPD()` (CONTRACT D.2): no first-party data reaches the
+    /// guests from now on.
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::OverwolfExt;
@@ -232,378 +388,188 @@ impl<R: Runtime> Overwolf<R> {
     /// # }
     /// ```
     pub fn disable_ads_fpd(&self) {
-        self.set_flag("adsFpdDisabled", |f| f.ads_fpd_disabled = true);
+        self.0.flags.ads_fpd_disabled.store(true, Ordering::SeqCst);
     }
 
-    /// Hashes an email address with the configured encoding (A.2.2).
+    /// Persists the user's anonymous-analytics choice in `ow-tauri.json`;
+    /// `false` applies from the next launch's burst, as
+    /// [`Overwolf::disable_anonymous_analytics`] before Ready (R10).
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::OverwolfExt;
-    /// # fn example(app: &tauri::AppHandle) {
-    /// let hashes = app.overwolf().generate_user_email_hashes("someone@example.com");
-    /// println!("{hashes:?}");
+    /// # fn example(app: &tauri::AppHandle) -> tauri_plugin_overwolf::Result<()> {
+    /// app.overwolf().set_anonymous_analytics_preference(false)
     /// # }
     /// ```
-    #[must_use]
-    pub fn generate_user_email_hashes(&self, email: &str) -> EmailHashes {
-        email_hashes(email, self.0.info.config.email_hashes.encoding)
-    }
-
-    /// Fires `app.on('second-instance')` in `ow-main`. Call it from the app's
-    /// `tauri-plugin-single-instance` callback (A.5).
     ///
-    /// ```no_run
-    /// use tauri_plugin_overwolf::OverwolfExt;
-    /// # fn example(app: &tauri::AppHandle) {
-    /// // In the `tauri-plugin-single-instance` callback:
-    /// let argv = vec!["app".to_owned(), "--open=settings".to_owned()];
-    /// app.overwolf().emit_second_instance(argv, "/".to_owned());
-    /// # }
-    /// ```
-    pub fn emit_second_instance(&self, argv: Vec<String>, cwd: String) {
-        let mut extra = Map::new();
-        extra.insert("argv".into(), Value::from(argv));
-        extra.insert("cwd".into(), Value::from(cwd));
-        self.0.send_main(HostMessage::Lifecycle {
-            event: "second-instance".into(),
-            request_id: None,
-            exit_code: None,
-            extra,
-        });
-    }
-
-    /// Reports that the `ow-main` render process died (A.6). Apps forward
-    /// `tauri::Builder::on_web_content_process_terminate` (macOS) here for
-    /// the webview labelled `ow-main`.
+    /// # Errors
     ///
-    /// ```no_run
-    /// use tauri_plugin_overwolf::OverwolfExt;
-    /// # fn example(app: &tauri::AppHandle) {
-    /// // From `tauri::Builder::on_web_content_process_terminate` for `ow-main`:
-    /// app.overwolf().report_main_webview_crash();
-    /// # }
-    /// ```
-    pub fn report_main_webview_crash(&self) {
-        self.0.main_crashed();
-    }
-
-    /// Reports that the web content process of a webview ended. Apps forward
-    /// every `tauri::Builder::on_web_content_process_terminate` call (macOS)
-    /// here: for `ow-main` it is [`Self::report_main_webview_crash`], for an
-    /// ad guest (`owad-*`) the crash recovery of D.7, for a consent window
-    /// (`ow-cmp*`) its failure path (D.6.1), for a `BrowserWindow` webview
-    /// (`bw-*`, `bwr-*`) its `render-process-gone` event (A.3). Other labels
-    /// are ignored.
-    ///
-    /// ```no_run
-    /// use tauri_plugin_overwolf::OverwolfExt;
-    /// # fn example(webview: &tauri::Webview) {
-    /// // From `tauri::Builder::on_web_content_process_terminate`:
-    /// webview.overwolf().report_web_content_terminated(webview.label());
-    /// # }
-    /// ```
-    pub fn report_web_content_terminated(&self, label: &str) {
-        match crate::window::classify(label) {
-            crate::window::WebviewClass::Main => self.0.main_crashed(),
-            crate::window::WebviewClass::AdviewGuest | crate::window::WebviewClass::Cmp => {
-                self.0.web_content_terminated(label);
-            }
-            crate::window::WebviewClass::Ui(id) | crate::window::WebviewClass::Remote(id) => {
-                self.0
-                    .window_render_process_gone(id, crate::ads::GoneReason::Crashed, 0);
-            }
-            crate::window::WebviewClass::Other => {}
-        }
-    }
-
-    /// Lab mode (feature `lab`, `OW_TAURI_LAB_DIR` set): writes what every
-    /// live ad guest's page sees now to `guest-<n>-<phase>.json` in the
-    /// trace directory. Does nothing when the trace is off. For the parity
-    /// harness only.
-    ///
-    /// ```no_run
-    /// use tauri_plugin_overwolf::OverwolfExt;
-    /// # fn example(app: &tauri::AppHandle) {
-    /// app.overwolf().lab_probe_guests("end");
-    /// # }
-    /// ```
-    #[cfg(feature = "lab")]
-    pub fn lab_probe_guests(&self, phase: &str) {
-        crate::lab::probe_guests(&self.0.app, phase);
-    }
-
-    /// Lab mode (feature `lab`, `OW_TAURI_LAB_DIR` set): appends `entry`, with
-    /// the trace's `t` and `wall` fields, as one JSON line to `file` (a plain
-    /// file name) in the trace directory, next to the plugin's own trace.
-    /// Does nothing when the trace is off or the name is not a plain file
-    /// name. For lab drivers only (the example's end-to-end run).
-    ///
-    /// ```no_run
-    /// use tauri_plugin_overwolf::OverwolfExt;
-    /// # fn example(app: &tauri::AppHandle) {
-    /// app.overwolf()
-    ///     .lab_record("e2e.jsonl", serde_json::json!({ "step": "start" }));
-    /// # }
-    /// ```
-    #[cfg(feature = "lab")]
-    pub fn lab_record(&self, file: &str, entry: Value) {
-        crate::lab::record(file, || entry);
-    }
-
-    /// Starts the graceful quit sequence (A.6), as `app.quit()` does.
-    ///
-    /// ```no_run
-    /// use tauri_plugin_overwolf::OverwolfExt;
-    /// # fn example(app: &tauri::AppHandle) {
-    /// app.overwolf().quit();
-    /// # }
-    /// ```
-    pub fn quit(&self) {
-        self.0.begin_quit(0);
-    }
-
-    /// Appends a line to the ow-tauri log (F.4).
-    ///
-    /// ```no_run
-    /// use tauri_plugin_overwolf::OverwolfExt;
-    /// # fn example(app: &tauri::AppHandle) {
-    /// use tauri_plugin_overwolf::LogLevel;
-    /// app.overwolf().log(LogLevel::Info, "tray menu opened");
-    /// # }
-    /// ```
-    pub fn log(&self, level: LogLevel, message: &str) {
-        self.0.log(level, message);
-    }
-}
-
-/// Drives the plugin's Tauri event handlers directly, for tests on Tauri's
-/// mock runtime, which emits no window, navigation or page-load events. Not
-/// part of the stable API.
-#[cfg(feature = "test-util")]
-#[doc(hidden)]
-impl<R: Runtime> Overwolf<R> {
-    /// As if the window `label` sent `WindowEvent::Destroyed`.
-    pub fn test_window_destroyed(&self, label: &str) {
-        crate::plugin::window_event(&self.0, label, &tauri::WindowEvent::Destroyed);
-    }
-
-    /// As if the webview `label` asked to navigate to `url`; returns whether
-    /// the navigation may proceed.
-    #[must_use]
-    pub fn test_navigation(&self, label: &str, url: &url::Url) -> bool {
-        crate::plugin::navigation(&self.0, label, url)
-    }
-
-    /// As if the webview `label` reported a page load of `url`.
-    pub fn test_page_load(&self, label: &str, url: &url::Url, finished: bool) {
-        let event = if finished {
-            tauri::webview::PageLoadEvent::Finished
-        } else {
-            tauri::webview::PageLoadEvent::Started
-        };
-        crate::plugin::page_load(&self.0, label, event, url);
-    }
-
-    /// As if the OS asked the app to exit (`ExitRequested` without a code,
-    /// after the plugin prevented it).
-    pub fn test_exit_requested(&self) {
-        self.0.exit_requested();
-    }
-
-    /// Whether a soft restart of `ow-main` is in progress.
-    #[must_use]
-    pub fn test_soft_restart_pending(&self) -> bool {
-        self.0.with_core(|c| c.soft_restart.is_some())
-    }
-
-    /// Whether the app is exiting through the plugin.
-    #[must_use]
-    pub fn test_exiting(&self) -> bool {
-        self.0.with_core(|c| c.exiting)
-    }
-
-    /// Milliseconds since setup on the host clock.
-    #[must_use]
-    pub fn test_now(&self) -> u64 {
-        self.0.now()
-    }
-
-    /// As `main_ready`: starts this launch's consent round (D.6.1).
-    pub fn test_start_consent(&self) {
-        self.0.start_consent();
-    }
-
-    /// Whether ad guests may start their first navigation (D.6.5).
-    #[must_use]
-    pub fn test_consent_gate_open(&self) -> bool {
-        self.0.consent_gate_open()
-    }
-
-    /// In one snapshot: whether the consent gate is open (D.6.5) and the
-    /// guests still waiting for their first navigation.
-    #[must_use]
-    pub fn test_consent_gate_snapshot(&self) -> (bool, Vec<String>) {
-        self.0.with_core(|c| {
-            let waiting = c
-                .ads
-                .guests
-                .iter()
-                .filter(|(_, g)| !g.navigated)
-                .map(|(l, _)| l.clone())
-                .collect();
-            (c.consent.gate_open, waiting)
-        })
-    }
-
-    /// The hidden consent windows that are still open.
-    #[must_use]
-    pub fn test_hidden_consent_windows(&self) -> Vec<String> {
+    /// `io` when `ow-tauri.json` could not be written.
+    pub fn set_anonymous_analytics_preference(&self, enabled: bool) -> Result<()> {
         self.0
-            .with_core(|c| c.consent.hidden.keys().cloned().collect())
+            .state
+            .ow_tauri
+            .update(|s| s.anonymous_analytics = Some(enabled))
+            .map_err(|e| Error::from_io("Writing ow-tauri.json", &e))
     }
 
-    /// `isCMPRequired()` (D.6.2).
-    pub async fn test_is_cmp_required(&self) -> bool {
-        self.0.is_cmp_required().await
-    }
-
-    /// One ads timer step at `now_ms` on the host clock (a fake clock).
-    pub fn test_ads_tick(&self, now_ms: u64) {
-        self.0.ads_tick(now_ms);
-    }
-
-    /// One consent timer step at `now_ms` on the host clock.
-    pub fn test_consent_tick(&self, now_ms: u64) {
-        self.0.consent_tick(now_ms);
-    }
-
-    /// As if the poll saw the window `id` hidden (`false`) or shown again
-    /// (`true`): its guests' visibility follows (D.5).
-    pub fn test_ads_window_visible(&self, id: u32, visible: bool) {
-        if visible {
-            self.0.ads_window_shown(id);
-        } else {
-            self.0.ads_window_hidden(id);
-        }
-    }
-
-    /// What a guest's mount does once its webview exists: the visibility
-    /// poll, then the guest's `400025` (E.2 #5, #6). Lets a test attach
-    /// guests from several threads at once; the mock runtime cannot create
-    /// webviews from several threads at once.
-    pub fn test_ads_guest_attached(&self) {
-        self.0.poll_visibility();
-        self.0.analytics_guest_attached();
-    }
-
-    /// As if the window `id` were about to be destroyed: its guests'
-    /// documents become hidden first (D.5).
-    pub fn test_ads_window_closing(&self, id: u32) {
-        self.0.ads_window_closing(id);
-    }
-
-    /// The install-at-exit step of the update client (I.4) without the
-    /// exit; returns every install recorded so far (the mock runtime runs
-    /// no installer).
-    pub async fn test_updater_install_at_exit(&self) -> Vec<Value> {
-        self.0.updater_install_at_exit().await;
-        self.0.with_core(|c| c.updater.test_installs.clone())
-    }
-
-    /// As if window `id` was minimized (`true`) or restored (`false`): the
-    /// `minimize` / `restore` window events and its guests' visibility follow.
-    pub fn test_window_minimized(&self, id: u32, minimized: bool) {
-        let mut state = self
-            .0
-            .with_core(|c| c.windows.get(id).map(|e| e.state))
-            .unwrap_or_default();
-        state.minimized = minimized;
-        self.0.apply_window_state(id, state);
-    }
-
-    /// As if the OS reported the minimize of window `id` started (`done`
-    /// false: macOS animates it into the Dock, reporting it neither visible
-    /// nor minimized) or ended (`done` true).
-    pub fn test_window_minimize_stage(&self, id: u32, done: bool) {
-        let stage = if done {
-            crate::platform::webview::MinimizeStage::Did
-        } else {
-            crate::platform::webview::MinimizeStage::Will
+    /// `setExternalPaymentUserId(options)` (CONTRACT E.2 #10): one
+    /// `<label>_sub_info` request with the options in their key order.
+    /// Resolves after the response or the failure.
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::{OverwolfExt, PaymentUserIdOptions};
+    /// # async fn example(app: tauri::AppHandle) -> tauri_plugin_overwolf::Result<()> {
+    /// let options = PaymentUserIdOptions::new("user-1").provider("tebex").into_map();
+    /// app.overwolf().set_external_payment_user_id(&options).await
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// `invalid-argument` (ow-electron's message) when `userId` is missing
+    /// or empty.
+    pub async fn set_external_payment_user_id(&self, options: &Map<String, Value>) -> Result<()> {
+        let user_id_ok = match options.get("userId") {
+            Some(Value::String(s)) => !s.is_empty(),
+            Some(Value::Number(_)) => true,
+            _ => false,
         };
-        self.0.window_minimize_stage(id, stage);
+        if !user_id_ok {
+            return Err(Error::invalid_argument(
+                "providerName and userId are mandatory",
+            ));
+        }
+        self.0.analytics.sub_info(options).await;
+        Ok(())
     }
 
-    /// As if the visibility poll saw window `id` with this OS state; the
-    /// window's analytics periods and its guests follow (E.2 #7, D.5).
-    pub fn test_poll_window(&self, id: u32, visible: bool, minimized: bool) {
-        self.0.apply_poll(&[(id, visible, minimized)]);
+    /// The app-level analytics switch (`analytics.userSwitch` only),
+    /// persisted in `ow-tauri.json`.
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) -> tauri_plugin_overwolf::Result<()> {
+    /// app.overwolf().set_analytics_user_enabled(false)
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// `unsupported` without `analytics.userSwitch`; `io` when
+    /// `ow-tauri.json` could not be written.
+    pub fn set_analytics_user_enabled(&self, enabled: bool) -> Result<()> {
+        if !self.0.identity.config.analytics.user_switch {
+            return Err(Error::unsupported(
+                "setAnalyticsUserEnabled needs plugins.overwolf.analytics.userSwitch",
+            ));
+        }
+        self.0.analytics.set_user_enabled(enabled);
+        self.0
+            .state
+            .ow_tauri
+            .update(|s| s.analytics_user_enabled = Some(enabled))
+            .map_err(|e| Error::from_io("Writing ow-tauri.json", &e))
     }
 
-    /// The URLs the plugin would have opened in the system browser (a host
-    /// without OS queries only records them).
+    /// Names window `window_label` in the analytics (`x-ow-window`, the
+    /// `name` of `window_closed`, D4).
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) -> tauri_plugin_overwolf::Result<()> {
+    /// app.overwolf().set_window_name("main", "home")
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// `invalid-argument` unless `name` is 1 to 128 printable ASCII
+    /// characters; `forbidden` for a plugin window; `not-found` for an
+    /// unknown window.
+    pub fn set_window_name(&self, window_label: &str, name: &str) -> Result<()> {
+        if !crate::host::windows::valid_window_name(name) {
+            return Err(Error::invalid_argument(
+                "a window name is 1 to 128 printable ASCII characters",
+            ));
+        }
+        if crate::config::is_reserved_label(window_label) {
+            return Err(Error::forbidden("plugin windows cannot be renamed"));
+        }
+        if crate::compat::window(&self.0.app, window_label).is_none() {
+            return Err(Error::not_found(format!("no window {window_label}")));
+        }
+        self.0.windows.set_name(window_label, name);
+        Ok(())
+    }
+
+    /// Ends the visible periods and drains the analytics requests now (at
+    /// most 1.5 s), as every exit and restart does by itself (the restart
+    /// sentinel, DESIGN §4.2). Idempotent; kept for explicit callers.
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// app.overwolf().prepare_for_restart();
+    /// app.restart();
+    /// # }
+    /// ```
+    pub fn prepare_for_restart(&self) {
+        crate::host::lifecycle::on_exit(&self.0);
+    }
+
+    /// The update client with the configured feed (CONTRACT I).
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # async fn example(app: tauri::AppHandle) -> tauri_plugin_overwolf::Result<()> {
+    /// if let Some(update) = app.overwolf().updater()?.check().await? {
+    ///     println!("version {} is available", update.version);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// As [`UpdaterBuilder::build`](crate::updater::UpdaterBuilder::build).
+    #[cfg(all(feature = "updater", windows))]
+    pub fn updater(&self) -> Result<crate::updater::Updater<R>> {
+        self.updater_builder().build()
+    }
+
+    /// An update client builder with the configured defaults.
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) -> tauri_plugin_overwolf::Result<()> {
+    /// let updater = app.overwolf().updater_builder().channel("beta").build()?;
+    /// # let _ = updater;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(all(feature = "updater", windows))]
     #[must_use]
-    pub fn test_browser_opens(&self) -> Vec<String> {
-        self.0.with_core(|c| c.browser_opens.clone())
-    }
-
-    /// The state of the ad guest `label`: `{ embedder, elementId, navigated,
-    /// ready, domReady, loads, recoveries, visible, embedderHidden, embedderMinimized,
-    /// visibilityState, reloadScheduled, passthrough }`, or `None` when it is
-    /// gone.
-    #[must_use]
-    pub fn test_guest(&self, label: &str) -> Option<Value> {
-        self.0.with_core(|c| {
-            c.ads.guests.get(label).map(|g| {
-                serde_json::json!({
-                    "embedder": g.embedder,
-                    "elementId": g.element_id,
-                    "navigated": g.navigated,
-                    "ready": g.ready,
-                    "domReady": g.dom_ready,
-                    "loads": g.loads,
-                    "recoveries": g.recoveries,
-                    "visible": g.visible,
-                    "embedderHidden": g.embedder_hidden,
-                    "embedderMinimized": g.embedder_minimized,
-                    "visibilityState": if g.sent_visible { "visible" } else { "hidden" },
-                    "reloadScheduled": g.reload_at.is_some(),
-                    "passthrough": g.passthrough,
-                })
-            })
-        })
-    }
-
-    /// What the host sent to its ad guests and did to them natively, in
-    /// order, as lab trace records: host messages (`via:
-    /// "private-message"`) and the native steps (`kind` `transparent`,
-    /// `zorder`, `passthrough`). A host without OS queries records them.
-    #[must_use]
-    pub fn test_guest_trace(&self) -> Vec<Value> {
-        self.0.with_core(|c| c.ads.test_trace.clone())
-    }
-
-    /// As if the platform reported a crash of the ad guest `label`.
-    pub fn test_guest_crashed(&self, label: &str, reason: crate::ads::GoneReason) {
-        self.0.guest_crashed(label, reason, 0);
+    pub fn updater_builder(&self) -> crate::updater::UpdaterBuilder<R> {
+        crate::updater::UpdaterBuilder::new(self.0.app.clone())
     }
 }
 
-/// Access to [`Overwolf`] from `App`, `AppHandle`, `Window`, `Webview` and
-/// `WebviewWindow`.
+/// Access to [`Overwolf`] from any Tauri manager (`App`, `AppHandle`,
+/// `Window`, `Webview`, ...).
 ///
 /// ```no_run
 /// use tauri_plugin_overwolf::OverwolfExt;
-/// fn show_uid<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
-///     println!("uid {}", app.overwolf().uid());
-/// }
+/// # fn example(app: &tauri::AppHandle) {
+/// println!("uid {}", app.overwolf().uid());
+/// # }
 /// ```
 pub trait OverwolfExt<R: Runtime> {
-    /// The plugin state.
+    /// The plugin's state.
     ///
     /// # Panics
     ///
-    /// When called before the plugin's setup has run (the state is not
-    /// registered yet).
+    /// When the plugin is not registered.
     fn overwolf(&self) -> &Overwolf<R>;
 }
 

@@ -1,59 +1,39 @@
-//! Host side of the analytics (CONTRACT E): the session state, the user
-//! agent, and the hooks the window, ads and lifecycle code call.
+//! Host side of the analytics (CONTRACT E, DESIGN §4.8, §4.10): the session,
+//! the request builder, `<UA>`, and the calls the lifecycle, windows and
+//! ads code make.
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use serde_json::{Map, Value};
-use tauri::{Manager, Runtime};
+use tauri::Runtime;
 
-use super::Host;
+use super::{Core, lock};
 use crate::analytics::session::{Event, Session};
-use crate::analytics::transport::Dispatcher;
+use crate::analytics::transport::{BoxFuture, Dispatcher, RequestHooks};
 use crate::analytics::{HostLabel, HostRequest, HostResponse, Reporter, compose_user_agent};
-use crate::state::log::LogLevel;
-use crate::window::VisibilityChange;
+use crate::app_identity::AppIdentity;
 
-/// How long host requests, consent windows and ad guests wait at startup
-/// for `ow-main`'s real user agent before they use the fallback (E.1).
-const UA_WAIT: Duration = Duration::from_millis(2500);
+/// How long host requests wait after `RunEvent::Ready` for the app
+/// webview's real user agent before they use the template (DESIGN §4.10).
+pub(crate) const UA_WAIT: Duration = Duration::from_millis(2500);
 
-/// Where `<UA>` comes from (E.1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UaState {
-    /// The fallback; nobody asked `ow-main` yet.
-    Fallback,
-    /// `ow-main` was asked for `navigator.userAgent`.
-    Requested,
-    /// Composed from the platform user agent.
-    Reported,
+/// A label for `HostLabel` from the configuration: `analytics.hostLabel`
+/// and `analytics.hostVersion` (the Tauri version by default).
+pub(crate) fn host_label(config: &crate::config::AnalyticsConfig) -> HostLabel {
+    HostLabel::new(
+        config.host_label.clone(),
+        config
+            .host_version
+            .clone()
+            .unwrap_or_else(|| tauri::VERSION.to_owned()),
+    )
 }
 
-/// The analytics service of one host.
-#[derive(Debug)]
-pub(crate) struct AnalyticsHost {
-    pub(crate) dispatcher: Dispatcher,
-    state: Mutex<AnalyticsCore>,
-    /// Woken when the platform user agent is reported.
-    ua_ready: tokio::sync::Notify,
-}
-
-#[derive(Debug)]
-struct AnalyticsCore {
-    session: Session,
-    reporter: Reporter,
-    /// Where `<UA>` comes from (E.1).
-    ua: UaState,
-    /// `firstLaunch` was absent from `ow-electron.json` at setup.
-    first_launch: bool,
-    /// `firstLaunch: true` was written this launch.
-    first_launch_recorded: bool,
-}
-
-/// The platform webview's default user agent, used until `ow-main`'s real
-/// one is known (E.1): the stock WKWebView string on macOS; on Windows
-/// WebView2's reduced string, which carries only the runtime's major
-/// version (`Chrome/141.0.0.0`); a WebKitGTK string on Linux.
+/// The platform webview's default user agent, the template used until the
+/// app webview's real one is known (DESIGN §4.10): the stock `WKWebView`
+/// string on macOS; on Windows `WebView2`'s reduced string, which carries
+/// only the runtime's major version.
 pub(crate) fn fallback_platform_ua(webview_version: &str) -> String {
     if cfg!(windows) {
         let major = webview_version.split('.').next().unwrap_or_default();
@@ -68,58 +48,48 @@ pub(crate) fn fallback_platform_ua(webview_version: &str) -> String {
     }
 }
 
+/// `<UA>` composed from the template (E.1).
+pub(crate) fn template_user_agent(app: &AppIdentity, label: &HostLabel) -> String {
+    compose_user_agent(
+        &fallback_platform_ua(&tauri::webview_version().unwrap_or_default()),
+        &app.name,
+        &app.version,
+        label,
+        crate::platform::safari_version(),
+    )
+}
+
+/// The analytics service of one app.
+#[derive(Debug)]
+pub(crate) struct AnalyticsHost {
+    /// The host request lane.
+    pub(crate) dispatcher: Dispatcher,
+    state: Mutex<AnalyticsState>,
+}
+
+#[derive(Debug)]
+struct AnalyticsState {
+    session: Session,
+    reporter: Reporter,
+}
+
 impl AnalyticsHost {
+    /// A session; `disable_anonymous` is the configuration and builder
+    /// switch, which applies before the burst.
     pub(crate) fn new(
         dispatcher: Dispatcher,
         reporter: Reporter,
         user_enabled: bool,
-        first_launch: bool,
+        disable_anonymous: bool,
     ) -> Self {
+        let mut session = Session::new(user_enabled);
+        if disable_anonymous {
+            session.disable_anonymous();
+        }
         AnalyticsHost {
             dispatcher,
-            state: Mutex::new(AnalyticsCore {
-                session: Session::new(user_enabled),
-                reporter,
-                ua: UaState::Fallback,
-                first_launch,
-                first_launch_recorded: false,
-            }),
-            ua_ready: tokio::sync::Notify::new(),
+            state: Mutex::new(AnalyticsState { session, reporter }),
         }
-    }
-
-    fn lock(&self) -> MutexGuard<'_, AnalyticsCore> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// A request for `navigator.userAgent` failed: the next page load asks
-    /// again.
-    fn retry_user_agent(&self) {
-        let mut core = self.lock();
-        if core.ua == UaState::Requested {
-            core.ua = UaState::Fallback;
-        }
-    }
-
-    /// `<UA>` as currently known.
-    pub(crate) fn user_agent(&self) -> String {
-        self.lock().reporter.user_agent.clone()
-    }
-
-    /// Whether the ow-tauri user switch is on (`false` sends nothing).
-    pub(crate) fn user_enabled(&self) -> bool {
-        self.lock().session.user_enabled()
-    }
-
-    /// `firstLaunch` was absent from `ow-electron.json` at setup: this is
-    /// the app's first launch.
-    pub(crate) fn first_launch(&self) -> bool {
-        self.lock().first_launch
-    }
-
-    /// A copy of the request builder.
-    pub(crate) fn reporter(&self) -> Reporter {
-        self.lock().reporter.clone()
     }
 
     fn requests(reporter: &Reporter, events: Vec<Event>) -> Vec<HostRequest> {
@@ -132,97 +102,123 @@ impl AnalyticsHost {
             .collect()
     }
 
-    /// Runs `f` on the session and sends the events it returns, in order.
-    fn run(&self, f: impl FnOnce(&mut Session) -> Vec<Event>) -> usize {
-        let requests = {
-            let mut core = self.lock();
-            let events = f(&mut core.session);
-            Self::requests(&core.reporter, events)
-        };
+    /// Runs `f` on the session and queues the requests of the events it
+    /// returns, in order, under the session lock (so two callers never
+    /// interleave their requests). Returns how many were queued.
+    pub(crate) fn run(&self, f: impl FnOnce(&mut Session) -> Vec<Event>) -> usize {
+        let state = &mut *lock(&self.state);
+        let events = f(&mut state.session);
+        let requests = Self::requests(&state.reporter, events);
         let n = requests.len();
         for r in requests {
             drop(self.dispatcher.send(r, true));
         }
         n
     }
-}
 
-/// A label for `HostLabel` from the configuration.
-pub(crate) fn host_label(config: &crate::config::AnalyticsConfig) -> HostLabel {
-    HostLabel::new(
-        config.host_label.clone(),
-        config
-            .host_version
-            .clone()
-            .unwrap_or_else(|| tauri::VERSION.to_owned()),
-    )
-}
-
-impl<R: Runtime> Host<R> {
-    /// The platform user agent of `ow-main`, from its first `ipc_subscribe`
-    /// or read by the host when its page loads ([`Self::request_user_agent`]);
-    /// `<UA>` is composed from the first report (E.1).
-    pub(crate) fn report_user_agent(&self, default_ua: &str) {
-        let default_ua = default_ua.trim();
-        if default_ua.is_empty() || default_ua.len() > 1024 {
-            return;
-        }
-        {
-            let mut core = self.analytics.lock();
-            if core.ua == UaState::Reported {
-                return;
-            }
-            core.ua = UaState::Reported;
-            let label = core.reporter.label.clone();
-            core.reporter.user_agent = compose_user_agent(
-                default_ua,
-                &self.info.manifest.product_name,
-                &self.info.manifest.version,
-                &label,
-                crate::platform::safari_version(),
-            );
-        }
-        self.analytics.ua_ready.notify_waiters();
+    /// Whether the launch burst was queued.
+    #[allow(dead_code, reason = "the window tracker (W2) checks it")]
+    pub(crate) fn is_started(&self) -> bool {
+        lock(&self.state).session.is_started()
     }
 
-    /// Asks `ow-main` for `navigator.userAgent` once, so `<UA>` does not
-    /// depend on the bootstrap reporting it (E.1). Called on its page loads.
-    pub(crate) fn request_user_agent(self: &Arc<Self>) {
-        {
-            let mut core = self.analytics.lock();
-            if core.ua != UaState::Fallback {
-                return;
+    /// The launch burst (E.2 #1, #3, #4, 400022, 400023). Idempotent.
+    pub(crate) fn start(&self, now_ms: u64, first_launch: bool) -> usize {
+        self.run(|s| {
+            if s.is_started() {
+                Vec::new()
+            } else {
+                s.start(now_ms, first_launch)
             }
-            core.ua = UaState::Requested;
-        }
-        let Some(main) = self.app.get_webview_window(crate::ipc::router::MAIN_LABEL) else {
-            self.analytics.retry_user_agent();
-            return;
+        })
+    }
+
+    /// `disableAnonymousAnalytics()`; returns whether the burst had already
+    /// been queued (a late call, R10).
+    pub(crate) fn disable_anonymous(&self) -> bool {
+        let state = &mut *lock(&self.state);
+        let late = state.session.is_started();
+        state.session.disable_anonymous();
+        late
+    }
+
+    /// The user switch (`analytics.userSwitch` only).
+    pub(crate) fn set_user_enabled(&self, enabled: bool) {
+        lock(&self.state).session.set_user_enabled(enabled);
+    }
+
+    /// Replaces `<UA>` in the request builder.
+    #[allow(dead_code, reason = "UA discovery (W2, DESIGN §4.10) sets it")]
+    pub(crate) fn set_user_agent(&self, ua: String) {
+        lock(&self.state).reporter.user_agent = ua;
+    }
+
+    /// `<UA>` as currently known.
+    pub(crate) fn user_agent(&self) -> String {
+        lock(&self.state).reporter.user_agent.clone()
+    }
+
+    /// `<label>_sub_info` (E.2 #10). Resolves after the response or the
+    /// failure, never with an error.
+    pub(crate) async fn sub_info(&self, options: &Map<String, Value>) {
+        let requests = {
+            let state = lock(&self.state);
+            Self::requests(&state.reporter, state.session.sub_info(options))
         };
-        let weak = Arc::downgrade(self);
-        let asked = main.eval_with_callback("navigator.userAgent", move |json| {
-            let Some(host) = weak.upgrade() else { return };
-            match serde_json::from_str::<String>(&json) {
-                Ok(ua) => host.report_user_agent(&ua),
-                Err(_) => host.analytics.retry_user_agent(),
+        for r in requests {
+            match self.dispatcher.send(r, true).await {
+                Ok(HostResponse { status, .. }) if status < 400 => {}
+                Ok(HostResponse { status, .. }) => {
+                    log::debug!(target: super::LOG_TARGET, "sub_info: HTTP {status}");
+                }
+                Err(err) => log::debug!(target: super::LOG_TARGET, "sub_info failed: {err}"),
             }
-        });
-        if asked.is_err() {
-            self.analytics.retry_user_agent();
+        }
+    }
+}
+
+/// Where `<UA>` stands (DESIGN §4.10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UaState {
+    /// The template; discovery has not finished.
+    Pending,
+    /// Final: discovered, or the template after discovery gave up.
+    Final,
+}
+
+/// `<UA>` discovery state: host requests wait until it is final, at most
+/// [`UA_WAIT`] after Ready.
+#[derive(Debug)]
+pub(crate) struct UserAgent {
+    state: Mutex<UaState>,
+    ready: tokio::sync::Notify,
+}
+
+impl UserAgent {
+    /// Discovery pending.
+    pub(crate) fn new() -> Self {
+        UserAgent {
+            state: Mutex::new(UaState::Pending),
+            ready: tokio::sync::Notify::new(),
         }
     }
 
-    /// Waits until `<UA>` is final: at once when it is known or there is no
-    /// `ow-main` to report it, otherwise until it is reported or [`UA_WAIT`]
-    /// after startup has passed.
-    pub(crate) async fn wait_user_agent(self: &Arc<Self>) {
-        if !self.options.main_webview {
-            return;
-        }
-        let deadline = self.started + UA_WAIT;
+    /// Whether `<UA>` is final.
+    pub(crate) fn is_final(&self) -> bool {
+        *lock(&self.state) == UaState::Final
+    }
+
+    /// Marks `<UA>` final and wakes the waiting requests.
+    pub(crate) fn finish(&self) {
+        *lock(&self.state) = UaState::Final;
+        self.ready.notify_waiters();
+    }
+
+    /// Waits until `<UA>` is final or `deadline` has passed.
+    pub(crate) async fn wait(&self, deadline: std::time::Instant) {
         loop {
-            let notified = self.analytics.ua_ready.notified();
-            if self.analytics.lock().ua == UaState::Reported {
+            let notified = self.ready.notified();
+            if self.is_final() {
                 return;
             }
             let left = deadline.saturating_duration_since(std::time::Instant::now());
@@ -231,248 +227,67 @@ impl<R: Runtime> Host<R> {
             }
         }
     }
+}
 
-    /// `<UA>` for guests, consent windows and host requests.
-    pub(crate) fn user_agent(&self) -> String {
-        self.analytics.user_agent()
-    }
+/// Starts `<UA>` discovery at Ready (DESIGN §4.10). Discovery reads an app
+/// webview's user agent asynchronously (W2); until then the template is
+/// final at once.
+pub(crate) fn start_user_agent_discovery<R: Runtime>(core: &Arc<Core<R>>) {
+    core.ua.finish();
+}
 
-    /// The launch sequence (E.2): at `main_ready`, or after the 10 s
-    /// fallback. Idempotent.
-    pub(crate) fn start_analytics(&self) {
-        let now = self.now();
-        let (requests, first_launch) = {
-            let mut core = self.analytics.lock();
-            if core.session.is_started() {
-                return;
+/// The dispatcher's hooks into the core (E.1): requests wait for the final
+/// `<UA>`.
+pub(crate) struct CoreRequestHooks<R: Runtime>(pub(crate) Weak<Core<R>>);
+
+impl<R: Runtime> RequestHooks for CoreRequestHooks<R> {
+    fn wait_user_agent(&self) -> BoxFuture<()> {
+        let core = self.0.upgrade();
+        Box::pin(async move {
+            if let Some(core) = core {
+                let deadline = core
+                    .lifecycle
+                    .ready_at()
+                    .unwrap_or_else(std::time::Instant::now)
+                    + UA_WAIT;
+                core.ua.wait(deadline).await;
             }
-            let first_launch = core.first_launch;
-            let events = core.session.start(now, first_launch);
-            (
-                AnalyticsHost::requests(&core.reporter, events),
-                first_launch,
-            )
-        };
-        let n = requests.len();
-        for r in requests {
-            drop(self.analytics.dispatcher.send(r, true));
-        }
-        if first_launch {
-            self.record_first_launch();
-        }
-        self.log(
-            LogLevel::Debug,
-            &format!("analytics started ({n} requests)"),
-        );
+        })
     }
 
-    /// Writes `firstLaunch: true` to `ow-electron.json` once per launch,
-    /// on a first launch only. The consent start calls it before the startup
-    /// consent flow can save `cmp`, so the file's keys come in ow-electron's
-    /// order (`firstLaunch`, then `cmp`, observed); the analytics start calls
-    /// it again in case consent never started.
-    pub(crate) fn record_first_launch(&self) {
-        {
-            let mut core = self.analytics.lock();
-            if !core.first_launch || std::mem::replace(&mut core.first_launch_recorded, true) {
-                return;
-            }
-        }
-        if let Err(err) = self.ow_electron.set_first_launch() {
-            self.log(
-                LogLevel::Warn,
-                &format!("could not record the first launch: {err}"),
-            );
-        }
+    fn user_agent(&self) -> Option<String> {
+        self.0.upgrade().map(|c| c.analytics.user_agent())
     }
+}
 
-    /// `disable_anonymous_analytics`.
-    pub(crate) fn disable_anonymous_analytics(&self) {
-        self.analytics.run(|s| {
-            s.disable_anonymous();
-            Vec::new()
-        });
-    }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    /// `analytics_set_user_enabled`.
-    pub(crate) fn set_analytics_user_enabled(&self, enabled: bool) {
-        self.analytics.run(|s| {
-            s.set_user_enabled(enabled);
-            Vec::new()
-        });
-    }
-
-    /// An app window became visible.
-    pub(crate) fn analytics_window_shown(&self) {
-        let now = self.now();
-        self.analytics.run(|s| s.window_shown(now));
-    }
-
-    /// A visible period of an app window ended.
-    pub(crate) fn analytics_window_closed(&self, name: &str, title: &str, visible_ms: u64) {
-        self.analytics
-            .run(|s| s.window_closed(name, title, visible_ms));
-    }
-
-    /// The periodic heartbeat check (E.2 #9).
-    pub(crate) fn analytics_tick(&self, has_visible_window: bool) {
-        let now = self.now();
-        self.analytics.run(|s| s.tick(now, has_visible_window));
-    }
-
-    /// Kind 400025 (E.2 #6).
-    pub(crate) fn analytics_guest_attached(&self) {
-        self.analytics.run(Session::guest_attached);
-    }
-
-    /// The crash Counter (E.2 #8), before the reload.
-    pub(crate) fn analytics_guest_crash_counter(&self, session_secs: u64, reason: &str) {
-        self.analytics
-            .run(|s| s.guest_crash_counter(session_secs, reason));
-    }
-
-    /// The crash Kind 400024 (E.2 #8), after the reload.
-    pub(crate) fn analytics_guest_crash_stats(&self, session_secs: u64, reason: &str) {
-        self.analytics
-            .run(|s| s.guest_crash_stats(session_secs, reason));
-    }
-
-    /// The document URL window `id` shows (its app or remote webview).
-    fn window_url(core: &super::Core, id: u32) -> Option<String> {
-        let kind = core.windows.get(id)?.kind;
-        let label = if kind == crate::window::WindowKind::Remote {
-            crate::window::remote_label(id)
+    #[test]
+    fn templates_name_the_platform() {
+        let ua = fallback_platform_ua("141.0.3537.57");
+        if cfg!(windows) {
+            assert!(ua.contains("Chrome/141.0.0.0") && ua.ends_with("Edg/141.0.0.0"));
         } else {
-            crate::window::ui_label(id)
-        };
-        core.urls.get(&label).cloned()
-    }
-
-    /// Polls the visibility of every window (each timer step): starts and
-    /// ends visible periods (E.2 #5, #7) and runs the heartbeat check (#9).
-    pub(crate) fn poll_visibility(self: &Arc<Self>) {
-        let ids = self.with_core(|c| c.windows.ids());
-        // (id, visible, minimized). macOS reports a minimized window as not
-        // visible; its minimize is not a hide (the guests' minimize messages
-        // come from `ads_window_minimized`).
-        let visible: Vec<(u32, bool, bool)> = ids
-            .into_iter()
-            .map(|id| {
-                let w = self.app.get_window(&crate::window::ui_label(id));
-                let v = w.as_ref().is_some_and(|w| w.is_visible().unwrap_or(false));
-                let m = w
-                    .as_ref()
-                    .is_some_and(|w| w.is_minimized().unwrap_or(false));
-                (id, v, m)
-            })
-            .collect();
-        let any_visible = self.apply_poll(&visible);
-        self.analytics_tick(any_visible);
-    }
-
-    /// One visibility poll's observations, `(id, visible, minimized)` as
-    /// the OS reports them: starts and ends visible periods and moves the
-    /// guests with their window. Returns whether any window is in a visible
-    /// period.
-    pub(crate) fn apply_poll(self: &Arc<Self>, visible: &[(u32, bool, bool)]) -> bool {
-        let now = self.now();
-        let (ended, guests, any_visible) = self.with_core(|c| {
-            let mut shown = false;
-            let mut ended = Vec::new();
-            let mut guests = Vec::new();
-            for &(id, v, minimized) in visible {
-                let url = Self::window_url(c, id);
-                let Some(entry) = c.windows.get_mut(id) else {
-                    continue;
-                };
-                match entry.observe_window(v, minimized, now, url.as_deref()) {
-                    VisibilityChange::Shown => shown = true,
-                    VisibilityChange::Ended(p) => ended.push(p),
-                    VisibilityChange::None => {}
-                }
-                // The guests follow the window itself, not its analytics
-                // periods; a minimize reaches them through
-                // `ads_window_minimized`.
-                if let Some(v) = entry.guests_follow(v, minimized) {
-                    guests.push((id, v));
-                }
-            }
-            let any_visible = c.windows.ids().iter().any(|id| {
-                c.windows
-                    .get(*id)
-                    .is_some_and(|e| e.visible_since.is_some())
-            });
-            // The first-visible-window heartbeat is queued under the same
-            // lock that starts the visible period: a guest attaching on
-            // another thread right after sees the window visible, and its
-            // 400025 must not overtake the heartbeat (E.2 #5, #6). The
-            // analytics session never takes the core lock.
-            if shown {
-                self.analytics_window_shown();
-            }
-            (ended, guests, any_visible)
-        });
-        for (id, v) in guests {
-            if v {
-                self.ads_window_shown(id);
-            } else {
-                self.ads_window_hidden(id);
-            }
-        }
-        for p in ended {
-            self.analytics_window_closed(&p.name, &p.title, p.visible_ms);
-        }
-        any_visible
-    }
-
-    /// A page of window `id` finished loading: fixes its analytics name
-    /// when it is visible.
-    pub(crate) fn analytics_page_finished(self: &Arc<Self>, id: u32, url: &str) {
-        self.with_core(|c| {
-            if let Some(entry) = c.windows.get_mut(id) {
-                let visible = entry.state.visible;
-                entry.page_finished(visible, Some(url));
-            }
-        });
-    }
-
-    /// Ends the visible period of window `id` (closed or destroyed).
-    pub(crate) fn analytics_window_gone(self: &Arc<Self>, id: u32) {
-        let now = self.now();
-        let period = self.with_core(|c| {
-            let url = Self::window_url(c, id);
-            c.windows
-                .get_mut(id)
-                .and_then(|e| e.end_visible_period(now, url.as_deref()))
-        });
-        if let Some(p) = period {
-            self.analytics_window_closed(&p.name, &p.title, p.visible_ms);
+            assert!(ua.starts_with("Mozilla/5.0 ("));
         }
     }
 
-    /// Quit while windows are visible: each visible period ends (E.2 #7).
-    pub(crate) fn analytics_end_all_periods(self: &Arc<Self>) {
-        let ids = self.with_core(|c| c.windows.ids());
-        for id in ids {
-            self.analytics_window_gone(id);
-        }
-    }
-
-    /// `<label>_sub_info` (E.2 #10); resolves after the response or the
-    /// failure, never with an error.
-    pub(crate) async fn analytics_sub_info(self: &Arc<Self>, options: Map<String, Value>) {
-        let requests = {
-            let core = self.analytics.lock();
-            AnalyticsHost::requests(&core.reporter, core.session.sub_info(&options))
-        };
-        for r in requests {
-            match self.analytics.dispatcher.send(r, true).await {
-                Ok(HostResponse { status, .. }) if status < 400 => {}
-                Ok(HostResponse { status, .. }) => {
-                    self.log(LogLevel::Debug, &format!("sub_info: HTTP {status}"));
-                }
-                Err(err) => self.log(LogLevel::Debug, &format!("sub_info failed: {err}")),
-            }
-        }
+    #[test]
+    fn user_agent_waits_end_at_the_deadline_or_when_final() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let ua = UserAgent::new();
+        let start = std::time::Instant::now();
+        rt.block_on(ua.wait(start + Duration::from_millis(30)));
+        assert!(start.elapsed() >= Duration::from_millis(30));
+        assert!(!ua.is_final());
+        ua.finish();
+        let start = std::time::Instant::now();
+        rt.block_on(ua.wait(start + Duration::from_secs(30)));
+        assert!(start.elapsed() < Duration::from_secs(5));
     }
 }

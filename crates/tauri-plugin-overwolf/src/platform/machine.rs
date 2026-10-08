@@ -11,6 +11,10 @@ pub(crate) struct MachineIds {
     pub(crate) muid: String,
     /// `muidV2`.
     pub(crate) muid_v2: String,
+    /// Windows: a value was missing from the registry, so both are written
+    /// back at `RunEvent::Ready` ([`persist_machine_ids`]); nothing is
+    /// written before (DESIGN §4.2).
+    pub(crate) unsaved: bool,
 }
 
 impl MachineIds {
@@ -24,6 +28,18 @@ impl MachineIds {
         MachineIds {
             muid_v2: muid.clone(),
             muid,
+            unsaved: false,
+        }
+    }
+
+    /// One per-install muid for both ids (`analytics.muidStrategy`
+    /// `per-install`, or when the OS id is unavailable); it lives in
+    /// `ow-tauri.json`, not the registry.
+    pub(crate) fn per_install(muid: String) -> Self {
+        MachineIds {
+            muid_v2: muid.clone(),
+            muid,
+            unsaved: false,
         }
     }
 }
@@ -33,7 +49,8 @@ impl MachineIds {
 /// macOS: `IOPlatformUUID` through `IOKit` (matches ow-electron, observed).
 /// Windows: the registry values ow-electron apps share, else `muid` derived
 /// from `MachineGuid` and `muidV2` from `new_install_id` (a random UUID v4,
-/// as ow-electron creates it), both written back ([`windows_ids`]). Linux
+/// as ow-electron creates it), written back at `RunEvent::Ready`
+/// ([`windows_ids`], [`persist_machine_ids`]). Reading never writes. Linux
 /// (inferred): `/etc/machine-id`, else `/var/lib/dbus/machine-id`.
 pub(crate) fn machine_ids(new_install_id: impl FnOnce() -> String) -> Result<MachineIds, String> {
     #[cfg(not(windows))]
@@ -80,7 +97,20 @@ pub(crate) fn windows_ids(
     Ok(MachineIds {
         muid,
         muid_v2: muid_v2.unwrap_or_else(new_install_id),
+        unsaved: true,
     })
+}
+
+/// Writes machine ids that were missing from the registry (Windows, at
+/// `RunEvent::Ready`; best effort: the uninstaller reads both values, I.6).
+/// Nothing on other platforms, whose ids are derived from the OS.
+pub(crate) fn persist_machine_ids(ids: &MachineIds) {
+    #[cfg(windows)]
+    if ids.unsaved {
+        windows::persist(ids);
+    }
+    #[cfg(not(windows))]
+    let _ = ids;
 }
 
 /// The first non-empty, trimmed content among `paths`.
@@ -95,6 +125,7 @@ pub(crate) fn linux_machine_id(paths: &[&std::path::Path]) -> Option<String> {
 }
 
 /// The CPU brand string, or `""` when it cannot be read.
+#[allow(dead_code, reason = "the ads host (W2) reports it to the guests (D.2)")]
 pub(crate) fn cpu_brand() -> String {
     #[cfg(target_os = "macos")]
     {
@@ -343,9 +374,10 @@ mod windows {
             return Ok(MachineIds {
                 muid: muid.clone(),
                 muid_v2: muid_v2.clone(),
+                unsaved: false,
             });
         }
-        let ids = super::windows_ids(
+        super::windows_ids(
             muid,
             muid_v2,
             || {
@@ -356,11 +388,13 @@ mod windows {
                 )
             },
             new_install_id,
-        )?;
-        // Best effort: the uninstaller reads both values (I.6).
+        )
+    }
+
+    /// Writes both ids to the registry values ow-electron apps share.
+    pub(super) fn persist(ids: &MachineIds) {
         let _ = write_string("Software\\OverwolfElectron", "MUID", &ids.muid);
         let _ = write_string("Software\\OverwolfPersist", "MUIDV2", &ids.muid_v2);
-        Ok(ids)
     }
 
     pub(super) fn cpu_brand() -> Option<String> {
@@ -391,6 +425,9 @@ mod tests {
         let install = || "0f0e0d0c-0b0a-4908-8706-050403020100".to_owned();
         let shared = windows_ids(Some("m".into()), Some("v".into()), || None, install).unwrap();
         assert_eq!((shared.muid.as_str(), shared.muid_v2.as_str()), ("m", "v"));
+        // Filled values are written back at Ready, never while reading.
+        assert!(shared.unsaved && !MachineIds::from_platform_id("x").unsaved);
+        persist_machine_ids(&MachineIds::from_platform_id("x"));
         let fresh = windows_ids(None, None, guid, install).unwrap();
         assert_eq!(fresh.muid, "601860a3-90c7-b77b-a42e-636035921a81");
         assert_eq!(fresh.muid_v2, install());

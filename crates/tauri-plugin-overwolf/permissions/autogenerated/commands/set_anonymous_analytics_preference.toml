@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-set-anonymous-analytics-preference"
+description = "Enables the set_anonymous_analytics_preference command without any pre-configured scope."
+commands.allow = ["set_anonymous_analytics_preference"]
+
+[[permission]]
+identifier = "deny-set-anonymous-analytics-preference"
+description = "Denies the set_anonymous_analytics_preference command without any pre-configured scope."
+commands.deny = ["set_anonymous_analytics_preference"]

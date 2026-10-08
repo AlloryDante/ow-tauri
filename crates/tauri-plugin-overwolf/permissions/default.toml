@@ -1,9 +1,21 @@
 "$schema" = "schemas/schema.json"
 
-# Grants nothing. Every webview class gets exactly the set its capability names
-# (ARCHITECTURE section 5.2): `overwolf:main` through the plugin's runtime
-# capability for `ow-main`, `overwolf:renderer` through the app's capability
-# for its `bw-*` webviews.
+# What an app webview needs to show ads and run the consent flow. Grant it to
+# the app's own webviews by label (`"webviews": ["main"]`), never to a
+# `windows` selector that could match a window hosting an ad (DESIGN §3.6).
 [default]
-description = "Grants nothing; capabilities name `overwolf:main` or `overwolf:renderer` per webview class."
-permissions = []
+description = "Overwolf ads (<owadview>), consent queries and the ad privacy settings window, read-only identity (no machine ids), naming the caller's window, and the switches that reduce what is sent."
+permissions = [
+  "allow-adview-mount",
+  "allow-adview-update",
+  "allow-adview-unmount",
+  "allow-adview-command",
+  "allow-set-window-name",
+  "allow-get-info",
+  "allow-is-cmp-required",
+  "allow-open-ad-privacy-settings-window",
+  "allow-open-cmp-window",
+  "allow-disable-anonymous-analytics",
+  "allow-disable-ads-optimization",
+  "allow-disable-ads-fpd",
+]

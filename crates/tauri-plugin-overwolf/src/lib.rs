@@ -1,58 +1,70 @@
 //! # tauri-plugin-overwolf
 //!
-//! A Tauri 2 plugin that hosts the Overwolf runtime services an app used under
-//! ow-electron: ads (`<owadview>`), anonymous analytics, consent, email hashes,
-//! the package manager and the update client.
+//! Overwolf ads (`<owadview>`), consent and anonymous analytics for Tauri 2
+//! apps, sending Overwolf the same data an ow-electron app sends.
 //!
-//! This crate is the Rust half of ow-tauri. The JavaScript half, the npm
-//! package `ow-tauri`, runs the app's existing main-process code in a hidden
-//! webview and talks to this plugin over Tauri IPC: commands from webviews to
-//! Rust, and one ordered `tauri::ipc::Channel` per webview from Rust back. The
-//! wire contract between the two is specified in `docs/CONTRACT.md` at the
-//! repository root, and the design in `docs/ARCHITECTURE.md`.
+//! The JavaScript half is the npm package `tauri-plugin-overwolf-api`
+//! (`getInfo`, consent, email hashes, the analytics switches and the
+//! `<owadview>` element). The wire contract is `docs/CONTRACT.md` at the
+//! repository root.
+//!
+#![cfg_attr(
+    feature = "plugin",
+    doc = r#"
+```no_run
+# fn example(context: tauri::Context) {
+tauri::Builder::default()
+    .plugin(tauri_plugin_overwolf::init())
+    .run(context)
+    .expect("error while running the app");
+# }
+```
+"#
+)]
 //!
 //! ## Features
 //!
-//! - `plugin` (default): the Tauri plugin. Without it the crate is only the
-//!   manifest parser, the identity functions and the [`build`] helper, which
-//!   is what an app's build script needs.
-//! - `devtools`: lets `window_devtools` open devtools in release builds.
-//! - `test-util`: `Builder::skip_os_queries` and hidden hooks that drive the
-//!   plugin's event handlers on Tauri's mock runtime, which fires none. Not a
-//!   stable API.
-//! - `lab`: the parity lab's trace and invisible windows, switched on by
-//!   `OW_TAURI_LAB_DIR` and `OW_TAURI_LAB_INVISIBLE` (the harness README in
-//!   `tools/parity-harness`). Never enable it in a shipped app.
+//! - `plugin` (default): the Tauri plugin.
+//! - `ads` (default): ad guests. On Windows and macOS it enables Tauri's
+//!   `unstable` feature (child webviews) through a helper crate; on Linux
+//!   ads are unsupported and Tauri stays stable.
+//! - `updater`: the update client (Windows; `unsupported` elsewhere).
+//! - `build`: the app's build step ([`build::run`]); use it as a build
+//!   dependency with `default-features = false`.
+//! - `test-util`, `lab`: test hooks and the parity lab. Refused in release
+//!   builds; never enable them in a shipped app.
 //!
-//! The documented modules are the public API. Modules hidden from the docs
-//! are internal building blocks, public only for their tests.
-//!
-//! ## Example
+//! Modules hidden from the docs are internal building blocks, public only
+//! for their tests and not covered by semver.
 //!
 //! ```
 //! assert_eq!(tauri_plugin_overwolf::PLUGIN_NAME, "overwolf");
-//! assert!(tauri_plugin_overwolf::COMMAND_PREFIX.starts_with("plugin:"));
 //! let uid = tauri_plugin_overwolf::identity::computed_uid("Example Studio", "Example App");
 //! assert_eq!(uid.len(), 40);
 //! ```
 #![deny(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+// Release guard (DESIGN §6.3): the test hooks and the parity lab never ship.
+#[cfg(all(
+    any(feature = "lab", feature = "test-util"),
+    any(not(debug_assertions), ow_tauri_release_profile),
+    not(ow_tauri_allow_dev_features)
+))]
+compile_error!(
+    "tauri-plugin-overwolf: the `lab` and `test-util` features must not be enabled in release builds (set OW_TAURI_ALLOW_DEV_FEATURES_IN_RELEASE=1 only for lab builds; see CONTRIBUTING.md)"
+);
+
+#[cfg(feature = "build")]
 pub mod build;
 pub mod config;
 pub mod error;
-pub mod fs_scope;
 pub mod identity;
-pub mod manifest;
-pub mod packages;
 pub mod paths;
-pub mod shell;
+#[cfg(feature = "updater")]
+pub mod updater;
 
-// Internal building blocks: public so their doctests run and so the
-// mock-runtime suite can reach them, but not part of the documented API and
-// not covered by semver.
-#[doc(hidden)]
-pub mod accelerator;
+// Internal building blocks: public for their doctests and tests only.
 #[doc(hidden)]
 pub mod ads;
 #[doc(hidden)]
@@ -60,50 +72,51 @@ pub mod analytics;
 #[doc(hidden)]
 pub mod consent;
 #[doc(hidden)]
-pub mod ipc;
-#[doc(hidden)]
-pub mod lifecycle;
-#[doc(hidden)]
-pub mod screen;
-#[doc(hidden)]
-pub mod snapshot;
-#[doc(hidden)]
 pub mod state;
-#[doc(hidden)]
-pub mod updater;
-#[doc(hidden)]
-pub mod window;
 
-mod lab;
-mod platform;
-
+#[cfg(any(feature = "plugin", feature = "build"))]
+mod app_identity;
 #[cfg(feature = "plugin")]
 mod capabilities;
 #[cfg(feature = "plugin")]
 mod commands;
 #[cfg(feature = "plugin")]
+mod compat;
+#[cfg(feature = "plugin")]
 mod ext;
 #[cfg(feature = "plugin")]
 mod host;
+mod lab;
+#[cfg(all(
+    feature = "plugin",
+    any(target_os = "android", target_os = "ios", test)
+))]
+mod mobile;
+mod platform;
 #[cfg(feature = "plugin")]
 mod plugin;
+mod types;
 
+pub use config::{
+    AdsConfig, AnalyticsConfig, Config, ConfigError, ConsentConfig, EmailHashesConfig,
+    SigningConfig, StateConfig, UpdaterConfig,
+};
 pub use error::{Error, ErrorCode, Result};
-pub use packages::PackagesBackend;
-pub use snapshot::Flags;
-pub use state::log::LogLevel;
+pub use identity::{EmailHashes, HashEncoding};
+pub use types::{CmpTab, CmpWindowOptions, HostInfo, Info, MachineIds, PaymentUserIdOptions};
 
 #[cfg(feature = "plugin")]
 pub use ext::{Overwolf, OverwolfExt};
+#[cfg(all(feature = "plugin", target_os = "macos"))]
+pub use platform::terminate::{
+    handle_web_content_process_terminate, web_content_process_terminate_hook,
+};
 #[cfg(feature = "plugin")]
-pub use plugin::{Builder, COMMANDS};
+pub use plugin::{Builder, init};
 
 /// Whether lab windows are invisible (feature `lab` and
-/// `OW_TAURI_LAB_INVISIBLE=1`): every window the plugin builds is built
-/// hidden and then shown at alpha 0, and dialogs, the file manager and the
-/// system browser do not open. An app shell built for the lab uses it to keep
-/// the app out of the Dock as well (`ActivationPolicy::Accessory`, set on the
-/// `App` before the event loop starts). Never enable `lab` in a shipped app.
+/// `OW_TAURI_LAB_INVISIBLE=1`). A lab app shell uses it to keep the app out
+/// of the Dock as well. Never enable `lab` in a shipped app.
 ///
 /// ```
 /// // The doc test process never sets OW_TAURI_LAB_INVISIBLE.
@@ -115,10 +128,8 @@ pub fn lab_invisible() -> bool {
     lab::invisible()
 }
 
-/// The plugin name registered with Tauri.
-///
-/// Permissions are namespaced with it (`overwolf:default`,
-/// `overwolf:allow-ipc-invoke`, ...) and so are command names on the wire.
+/// The plugin name registered with Tauri; permissions are namespaced with
+/// it (`overwolf:default`, `overwolf:machine-id`, ...).
 ///
 /// ```
 /// use tauri_plugin_overwolf::PLUGIN_NAME;
@@ -126,18 +137,28 @@ pub fn lab_invisible() -> bool {
 /// ```
 pub const PLUGIN_NAME: &str = "overwolf";
 
-/// The prefix that JavaScript callers put in front of a command name when they
-/// call `invoke`.
+/// The prefix JavaScript callers put in front of a command name.
 ///
 /// ```
 /// use tauri_plugin_overwolf::COMMAND_PREFIX;
-/// assert_eq!(format!("{COMMAND_PREFIX}ipc_invoke"), "plugin:overwolf|ipc_invoke");
+/// assert_eq!(format!("{COMMAND_PREFIX}get_info"), "plugin:overwolf|get_info");
 /// ```
 pub const COMMAND_PREFIX: &str = "plugin:overwolf|";
 
-/// The ow-tauri version (this crate's version), as reported in
-/// `HostSnapshot.versions.owTauri` and the log's session line.
+/// This crate's version.
+///
+/// ```
+/// assert!(!tauri_plugin_overwolf::VERSION.is_empty());
+/// ```
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Every command the plugin registers, in wire spelling (DESIGN §3.5).
+///
+/// ```
+/// assert_eq!(tauri_plugin_overwolf::COMMANDS.len(), 25);
+/// ```
+#[cfg(feature = "plugin")]
+pub use commands::list::COMMANDS;
 
 #[cfg(test)]
 mod tests {

@@ -353,7 +353,7 @@ mod tests {
             let linked = dir("linked");
             std::os::unix::fs::symlink(d.join("Demo.app"), linked.join("Evil.app")).unwrap();
             let err = find_app_bundle(&linked).unwrap_err();
-            assert!(err.message().contains("linked"), "{}", err.message());
+            assert!(err.to_string().contains("linked"), "{err}");
         }
     }
 

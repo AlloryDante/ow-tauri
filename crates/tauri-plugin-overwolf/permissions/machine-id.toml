@@ -1,0 +1,6 @@
+"$schema" = "schemas/schema.json"
+
+[[set]]
+identifier = "machine-id"
+description = "Opt-in: `getMachineIds()`, the machine identifiers Overwolf shares across apps (muid, muidV2)."
+permissions = ["allow-get-machine-ids"]

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-generate-user-email-hashes"
+description = "Enables the generate_user_email_hashes command without any pre-configured scope."
+commands.allow = ["generate_user_email_hashes"]
+
+[[permission]]
+identifier = "deny-generate-user-email-hashes"
+description = "Denies the generate_user_email_hashes command without any pre-configured scope."
+commands.deny = ["generate_user_email_hashes"]

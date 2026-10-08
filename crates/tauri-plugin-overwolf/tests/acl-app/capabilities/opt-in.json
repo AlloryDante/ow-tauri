@@ -1,0 +1,13 @@
+{
+  "identifier": "opt-in",
+  "description": "Every opt-in set, for the webview `admin`.",
+  "local": true,
+  "webviews": ["admin"],
+  "permissions": [
+    "overwolf:default",
+    "overwolf:machine-id",
+    "overwolf:email-hashes",
+    "overwolf:analytics",
+    "overwolf:updater"
+  ]
+}

@@ -36,49 +36,19 @@ pub const HIDDEN_WINDOW_SIZE: (f64, f64) = (1.0, 32.0);
 /// The settings window's background (D.6.4).
 pub const DEFAULT_BACKGROUND: &str = "#0D0D0D";
 
-/// `CMPWindowOptions` with `parent` replaced by `parentId` (A.2.2).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CmpWindowOptions {
-    /// `purposes`, `features` or `vendors`.
-    pub tab: Option<String>,
-    /// Owned by the parent and kept above it.
-    pub modal: Option<bool>,
-    /// The parent window's id.
-    pub parent_id: Option<u32>,
-    /// Centre the window.
-    pub center: Option<bool>,
-    /// Window background colour.
-    pub background_color: Option<String>,
-    /// Spinner colour of the preloader.
-    pub pre_loader_spinner_color: Option<String>,
-    /// Width (default 800).
-    pub width: Option<f64>,
-    /// Height (default 800).
-    pub height: Option<f64>,
-    /// Left edge.
-    pub x: Option<f64>,
-    /// Top edge.
-    pub y: Option<f64>,
-    /// Consent page URL override; any `https:` URL.
-    #[serde(rename = "cmpURL")]
-    pub cmp_url: Option<String>,
-    /// Page language.
-    pub language: Option<String>,
-}
-
-/// `ExternalPaymentUserIdOptions` (A.2.2).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExternalPaymentUserIdOptions {
-    /// Payment provider; `tebex` when empty.
-    #[serde(default)]
-    pub provider_name: String,
-    /// The user id at the provider.
-    pub user_id: String,
-    /// Optional payment id.
-    #[serde(default)]
-    pub payment_id: Option<String>,
+/// The `Domain` value that makes Tauri store a domain cookie for `domain`.
+///
+/// The platform stores mark a domain cookie with a leading dot
+/// (`NSHTTPCookieDomain`, WebView2's `CreateCookie`). Tauri hands them
+/// `Cookie::domain()`, which removes one leading dot (RFC 6265 5.2.3), so
+/// the value carries two: one survives.
+///
+/// ```
+/// assert_eq!(tauri_plugin_overwolf::consent::domain_cookie_attr(".overwolf.com"), "..overwolf.com");
+/// ```
+#[must_use]
+pub fn domain_cookie_attr(domain: &str) -> String {
+    format!("..{}", domain.trim_start_matches('.'))
 }
 
 /// `encodeURIComponent`.
@@ -372,7 +342,7 @@ pub fn cookie_values(
 pub fn consent_cookie(name: &str, value: &str) -> tauri::webview::cookie::Cookie<'static> {
     use tauri::webview::cookie::{Cookie, SameSite, time};
     Cookie::build((name.to_owned(), value.to_owned()))
-        .domain(crate::host::cookies::domain_cookie_attr("overwolf.com"))
+        .domain(domain_cookie_attr("overwolf.com"))
         .path("/")
         .secure(true)
         .http_only(false)

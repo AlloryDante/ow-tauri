@@ -14,5 +14,11 @@
   },
   "bundle": {
     "icon": ["icons/icon.png", "icons/icon.ico"]
+  },
+  "plugins": {
+    "overwolf": {
+      "author": "Example Studio",
+      "name": "ACL Fixture"
+    }
   }
 }

@@ -8,7 +8,8 @@
 //! |---|---|
 //! | `ow-electron.json` (shared keys only) | [`ow_electron`] |
 //! | `ow-tauri.json` | [`ow_tauri`] |
-//! | `logs/ow-tauri.log` | [`log`] |
+//!
+//! Nothing here is written before `RunEvent::Ready` (DESIGN §4.2).
 //!
 //! ```
 //! use tauri_plugin_overwolf::state::StateDir;
@@ -17,7 +18,6 @@
 //! assert!(dir.ow_tauri_json().ends_with("ow-electron/abc/ow-tauri.json"));
 //! ```
 
-pub mod log;
 pub mod ow_electron;
 pub mod ow_tauri;
 
@@ -55,18 +55,6 @@ impl StateDir {
     #[must_use]
     pub fn ow_tauri_json(&self) -> PathBuf {
         self.root.join("ow-tauri.json")
-    }
-
-    /// `logs/`, also `packages.logsFolderPath` (F.4).
-    #[must_use]
-    pub fn logs_dir(&self) -> PathBuf {
-        self.root.join("logs")
-    }
-
-    /// `logs/ow-tauri.log`.
-    #[must_use]
-    pub fn log_file(&self) -> PathBuf {
-        self.logs_dir().join("ow-tauri.log")
     }
 }
 
@@ -153,8 +141,8 @@ mod tests {
             Path::new("/x/ow-electron/uid1/ow-electron.json")
         );
         assert_eq!(
-            d.log_file(),
-            Path::new("/x/ow-electron/uid1/logs/ow-tauri.log")
+            d.ow_tauri_json(),
+            Path::new("/x/ow-electron/uid1/ow-tauri.json")
         );
     }
 }

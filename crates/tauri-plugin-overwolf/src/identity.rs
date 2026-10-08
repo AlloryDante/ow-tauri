@@ -19,8 +19,6 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 
-use crate::manifest::EmbeddedManifest;
-
 /// Computes the ow-electron app uid from the author and the app name (G.2 rule 3).
 ///
 /// `sha1("{'author':'<author>','name':'<name>.electron'}")`; each digest byte
@@ -42,77 +40,6 @@ pub fn computed_uid(author: &str, name: &str) -> String {
         out.push(char::from(b'a' + (b >> 4)));
     }
     out
-}
-
-/// Where the effective uid came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum UidSource {
-    /// `plugins.overwolf.uid` or a `Builder` override.
-    Config,
-    /// `overwolf.uid` in the manifest (console-signed builds).
-    Manifest,
-    /// The formula of [`computed_uid`].
-    Computed,
-}
-
-/// The app's uid and cuid (G.2).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AppIdentity {
-    /// The effective uid.
-    pub uid: String,
-    /// Always the computed value, even when an override applies.
-    pub cuid: String,
-    /// Which rule produced `uid`.
-    pub source: UidSource,
-}
-
-/// Resolves the uid by the G.2 precedence: configured override, then the
-/// manifest's `overwolf.uid`, then the computed value. An override or a
-/// manifest uid that is not [`is_valid_uid`] is skipped: the uid names the
-/// state directory, so it must never contain a path separator or `..`.
-///
-/// ```
-/// use tauri_plugin_overwolf::identity::{resolve_uid, UidSource};
-/// use tauri_plugin_overwolf::manifest::EmbeddedManifest;
-/// let m = EmbeddedManifest::minimal("Example App", "Example Studio", "1.0.0");
-/// let id = resolve_uid(Some("aaaabbbbccccddddeeeeffffgggghhhhiiiijjjj"), &m);
-/// assert_eq!(id.source, UidSource::Config);
-/// assert_ne!(id.cuid, id.uid);
-/// ```
-#[must_use]
-pub fn resolve_uid(config_uid: Option<&str>, manifest: &EmbeddedManifest) -> AppIdentity {
-    // G.2: a missing or empty author hashes as `unknown`.
-    let author = if manifest.author.is_empty() {
-        "unknown"
-    } else {
-        manifest.author.as_str()
-    };
-    let cuid = computed_uid(author, &manifest.product_name);
-    let config_uid = config_uid.map(str::trim).filter(|s| is_valid_uid(s));
-    let manifest_uid = manifest
-        .overwolf
-        .uid
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| is_valid_uid(s));
-    match (config_uid, manifest_uid) {
-        (Some(uid), _) => AppIdentity {
-            uid: uid.to_owned(),
-            cuid,
-            source: UidSource::Config,
-        },
-        (None, Some(uid)) => AppIdentity {
-            uid: uid.to_owned(),
-            cuid,
-            source: UidSource::Manifest,
-        },
-        (None, None) => AppIdentity {
-            uid: cuid.clone(),
-            cuid,
-            source: UidSource::Computed,
-        },
-    }
 }
 
 /// Whether `uid` is acceptable as a configured uid: 1 to 64 ASCII letters or
@@ -328,116 +255,13 @@ pub fn email_hashes(email: &str, encoding: HashEncoding) -> EmailHashes {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::EmbeddedManifest;
-
-    /// CONTRACT G.2 vectors 1 to 13, through the package.json parser.
+    /// The formula itself on CONTRACT G.2 vector 1 (the full table runs
+    /// through `app_identity`).
     #[test]
-    #[expect(clippy::too_many_lines, reason = "one table of contract vectors")]
-    fn uid_vectors() {
-        let uid_of = |fields: &str| {
-            let text = format!(r#"{{"version":"1.0.0",{fields}}}"#);
-            let parsed = crate::manifest::parse_package_json(&text).unwrap();
-            resolve_uid(None, &parsed.manifest).uid
-        };
-        let vectors: [(&str, &str); 22] = [
-            (
-                r#""name":"parity-harness","author":{"name":"Example Studio"}"#,
-                "binaioonkjpolnojeenpbmjmbfkbmffcekndbmdk",
-            ),
-            (
-                r#""name":"parity-harness","author":"Example Studio""#,
-                "binaioonkjpolnojeenpbmjmbfkbmffcekndbmdk",
-            ),
-            (
-                r#""name":"parity-harness","author":"Example Studio","build":{"productName":"Parity Build Name"}"#,
-                "binaioonkjpolnojeenpbmjmbfkbmffcekndbmdk",
-            ),
-            (
-                r#""name":"parity-harness","productName":"Parity Harness","author":{"name":"Example Studio"}"#,
-                "bijigndkghcikkfmhgkmicdkjpdehpjafgpmdhcc",
-            ),
-            (
-                r#""name":"parity-harness","author":"Overwolf Ltd.""#,
-                "djaoacjhpjaenfddlfmkeoiklmccgcgcgeknhmgj",
-            ),
-            (
-                r#""name":"parity-harness","productName":"Parity Harness","author":"Overwolf Ltd.""#,
-                "aejkligdodglhcjinbhdcnlohocenfkpdihjacdg",
-            ),
-            (
-                r#""name":"parity-harness","author":"Example Studio <dev@example.com> (https://example.com)""#,
-                "agmekflfehlhfcnofnhghbgohnigngnkddpkdbnc",
-            ),
-            (
-                r#""name":"parity-harness","productName":"Parity Harness","author":"Example Studio <dev@example.com> (https://example.com)""#,
-                "cmbaaahkhdbkbbfcmenfbmmngmommpjjacllbgan",
-            ),
-            (
-                r#""name":"parity-harness","author":"Example Studio <dev@example.com>""#,
-                "mcfopdapolegaeddgbbfedginnmcnmjldgdcbcjo",
-            ),
-            (
-                r#""name":"parity-harness""#,
-                "nbhlaphlggihmjefpjdelbobckfhklbfkiicjaja",
-            ),
-            (
-                r#""name":"parity-harness","author":{}"#,
-                "nbhlaphlggihmjefpjdelbobckfhklbfkiicjaja",
-            ),
-            (
-                r#""name":"parity-harness","author":"""#,
-                "nbhlaphlggihmjefpjdelbobckfhklbfkiicjaja",
-            ),
-            (
-                r#""name":"parity-harness","author":null"#,
-                "nbhlaphlggihmjefpjdelbobckfhklbfkiicjaja",
-            ),
-            (
-                r#""name":"parity-harness","author":{"email":"dev@example.com"}"#,
-                "nbhlaphlggihmjefpjdelbobckfhklbfkiicjaja",
-            ),
-            (
-                r#""name":"parity-harness","productName":"Parity Harness""#,
-                "fifpcfmoobnjlimjhefehejankadpajlfgbmpheo",
-            ),
-            (
-                r#""name":"parity-harness","productName":"Parity Harness","author":{}"#,
-                "fifpcfmoobnjlimjhefehejankadpajlfgbmpheo",
-            ),
-            (
-                r#""name":"parity-harness","productName":"Parity Harness","author":"""#,
-                "fifpcfmoobnjlimjhefehejankadpajlfgbmpheo",
-            ),
-            (
-                r#""name":"parity-harness","productName":"Pârity Ünicode","author":{"name":"Exämple"}"#,
-                "mmfoflmmchoacblhjlimpanaijdnhgoalaloihjd",
-            ),
-            (
-                r#""name":"parity-harness","productName":"O'Brien Tools","author":{"name":"D'Arcy"}"#,
-                "khalfglcmeemfnjoldckbfmeeidgkoabeebkpbbl",
-            ),
-            (
-                r#""name":"parity-harness","productName":" Parity Harness ","author":{"name":" Example Studio "}"#,
-                "cppaiialckdbmhdojecejpjafcblbingfdiffkdi",
-            ),
-            (
-                r#""name":"parity-harness","author":"Example Studio","overwolf":{"uid":"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjj"}"#,
-                "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjj",
-            ),
-            (
-                r#""name":"other","productName":"Other","author":"Someone","overwolf":{"uid":"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjj"}"#,
-                "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjj",
-            ),
-        ];
-        for (fields, uid) in vectors {
-            assert_eq!(uid_of(fields), uid, "{fields}");
-        }
-        // The cuid stays the computed value when the manifest uid wins.
-        let text = r#"{"version":"1.0.0","name":"parity-harness","author":"Overwolf Ltd.","overwolf":{"uid":"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjj"}}"#;
-        let parsed = crate::manifest::parse_package_json(text).unwrap();
+    fn formula() {
         assert_eq!(
-            resolve_uid(None, &parsed.manifest).cuid,
-            "djaoacjhpjaenfddlfmkeoiklmccgcgcgeknhmgj"
+            computed_uid("Example Studio", "parity-harness"),
+            "binaioonkjpolnojeenpbmjmbfkbmffcekndbmdk"
         );
     }
 
@@ -469,38 +293,6 @@ mod tests {
             assert_eq!(machine_muid(&id.to_lowercase()), muid, "case-insensitive");
             assert_eq!(phase_percent(muid), phase, "{muid}");
         }
-    }
-
-    #[test]
-    fn uid_precedence() {
-        let mut m = EmbeddedManifest::minimal("Example App", "Example Studio", "1.0.0");
-        let computed = computed_uid("Example Studio", "Example App");
-        let id = resolve_uid(None, &m);
-        assert_eq!(
-            (id.uid.as_str(), id.source),
-            (computed.as_str(), UidSource::Computed)
-        );
-        m.overwolf.uid = Some("manifestuid".into());
-        let id = resolve_uid(None, &m);
-        assert_eq!(
-            (id.uid.as_str(), id.source),
-            ("manifestuid", UidSource::Manifest)
-        );
-        let id = resolve_uid(Some("configuid"), &m);
-        assert_eq!(
-            (id.uid.as_str(), id.source),
-            ("configuid", UidSource::Config)
-        );
-        assert_eq!(id.cuid, computed, "cuid is always computed");
-        let id = resolve_uid(Some("  "), &m);
-        assert_eq!(id.source, UidSource::Manifest, "blank override is ignored");
-        m.overwolf.uid = Some("../../escape".into());
-        let id = resolve_uid(Some("a/b"), &m);
-        assert_eq!(
-            (id.uid.as_str(), id.source),
-            (computed.as_str(), UidSource::Computed),
-            "uids that are not a plain path segment are skipped"
-        );
     }
 
     #[test]

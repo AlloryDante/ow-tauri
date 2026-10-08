@@ -7,6 +7,7 @@
 //! `\\.\DISPLAY1`) [OBS: Windows lab]. That is Chromium's own adapter list
 //! (`EnumAdapters`, `CheckInterfaceSupport(IDXGIDevice)`) and display label
 //! (`DisplayConfigGetDeviceInfo`).
+#![allow(dead_code, reason = "the ads host (W2) reports the GPU drivers (D.2)")]
 
 /// The `driverVersion` text of a user-mode driver version as
 /// `CheckInterfaceSupport` returns it: its four 16-bit words, high to low,

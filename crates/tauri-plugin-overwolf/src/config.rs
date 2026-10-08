@@ -1,132 +1,117 @@
-//! Plugin configuration (CONTRACT A.1).
+//! The plugin configuration, `plugins.overwolf` of `tauri.conf.json`
+//! (DESIGN §3.2).
 //!
-//! Read from `tauri.conf.json > plugins > overwolf`, then overridden by
-//! [`Builder`](crate::Builder) calls, then by environment variables, then by
-//! command line switches (last wins). Every field is optional; the defaults
-//! are the contract's.
+//! The same document is read by the plugin at run time (`app.config()`), by
+//! the app's build step (`build::run`, feature `build`) and by the CLI, so a
+//! value means the same thing everywhere. Every field is optional; the
+//! defaults are ow-electron's behaviour. Apps read the parsed configuration
+//! with `app.overwolf().config()`; it never changes at run time.
 //!
 //! ```
-//! use tauri_plugin_overwolf::config::Config;
-//! let cfg: Config = serde_json::from_str(r#"{ "ads": { "testAd": true }, "ipc": { "invokeTimeoutMs": 5000 } }"#).unwrap();
-//! assert!(cfg.ads.test_ad);
-//! assert_eq!(cfg.ipc.invoke_timeout_ms, 5000);
-//! assert_eq!(cfg.ipc.max_in_flight_invokes, 256);
-//! cfg.validate().unwrap();
+//! use tauri_plugin_overwolf::config::{Config, Validation};
+//! let raw = serde_json::json!({ "author": "Example Studio", "ads": { "testAd": true } });
+//! let config = Config::from_value(&raw).unwrap();
+//! assert!(config.ads.test_ad);
+//! assert_eq!(config.analytics.host_label, "tauri");
+//! config.validate(Validation::default()).unwrap();
 //! ```
 
 use std::path::PathBuf;
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::identity::{HashEncoding, is_valid_uid};
-use crate::packages::PackagesBackend;
-
-/// Prefix every consent page URL must have (CONTRACT D.6).
-pub const CMP_URL_SCOPE: &str = "https://content.overwolf.com/monsdk/electron/";
 
 /// `plugins.overwolf`.
+///
+/// Deserializing goes through [`Config::from_value`], so Tauri's own parse
+/// of the plugin configuration reports the same messages (removed keys with
+/// their migration hint, the dot path of a wrong value) as the build step.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[serde(
+    remote = "Self",
+    rename_all = "camelCase",
+    deny_unknown_fields,
+    default
+)]
+#[non_exhaustive]
 pub struct Config {
-    /// The hidden main webview.
-    pub main: MainConfig,
-    /// One browser-argument set for every webview (A.1.1).
-    pub webview: WebviewConfig,
-    /// Console-assigned uid; overrides the computed uid (G.2).
+    /// The uid formula's author (CONTRACT G.2). Missing or empty: `"unknown"`,
+    /// which only debug builds accept unless `uid` is set.
+    pub author: Option<String>,
+    /// `<PN>`, the ow-electron app name (the uid formula's name, analytics
+    /// `app_name`, the guests' `name`). Missing: the Tauri `productName`.
+    pub name: Option<String>,
+    /// The app uid (1 to 64 ASCII letters or digits after trimming); wins
+    /// over the computed one. Set it to the uid the Overwolf console
+    /// assigned.
     pub uid: Option<String>,
-    /// `none` or the reserved `native` (H.2).
-    pub packages_backend: PackagesBackend,
-    /// Ads host options.
+    /// Ads (`<owadview>`).
     pub ads: AdsConfig,
-    /// Analytics options.
+    /// Anonymous analytics.
     pub analytics: AnalyticsConfig,
-    /// Consent options.
+    /// Consent (the CMP).
     pub consent: ConsentConfig,
-    /// Email hash options.
+    /// Email hashes.
     pub email_hashes: EmailHashesConfig,
-    /// Log file options (F.4).
-    pub logging: LoggingConfig,
-    /// IPC router limits.
-    pub ipc: IpcConfig,
-    /// Update client options.
+    /// The update client (cargo feature `updater`, Windows).
     pub updater: UpdaterConfig,
-    /// `shell.openPath` options.
-    pub shell: ShellConfig,
-    /// Scoped file access options.
-    pub fs: FsConfig,
-    /// State file options.
+    /// Signing with Overwolf (read by the build step and the CLI only).
+    pub signing: SigningConfig,
+    /// State files (tests only).
     pub state: StateConfig,
 }
 
-/// `plugins.overwolf.main`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
-pub struct MainConfig {
-    /// App asset loaded into the hidden main webview.
-    pub url: String,
-    /// Open devtools for `ow-main` in debug builds.
-    pub devtools: bool,
-    /// `ow-main` crashes per 60 s before the app exits (A.6).
-    pub crash_restart_limit: u32,
-}
-
-impl Default for MainConfig {
-    fn default() -> Self {
-        MainConfig {
-            url: "main.html".into(),
-            devtools: false,
-            crash_restart_limit: 3,
-        }
-    }
-}
-
-/// `plugins.overwolf.webview` (A.1.1).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
-pub struct WebviewConfig {
-    /// `--disable-gpu` (Windows).
-    pub disable_gpu: bool,
-    /// `--remote-debugging-port=<n>` (Windows, debug builds).
-    pub remote_debugging_port: Option<u16>,
-    /// Appended verbatim (Windows).
-    pub additional_browser_args: Vec<String>,
-}
-
 /// `plugins.overwolf.ads`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[non_exhaustive]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "independent configuration switches, read from JSON"
+    reason = "independent configuration switches of the configuration schema"
 )]
 pub struct AdsConfig {
-    /// Test inventory (same as `--test-ad`).
+    /// Test ads (default `false`). Also on with `--test-ad`,
+    /// `OW_TAURI_TEST_AD=1` or `Builder::test_ad(true)`.
     pub test_ad: bool,
-    /// Request shaping (D.8); always on, the switch exists for debugging.
+    /// `build.overwolf.disableAdOptimization` of ow-electron (default
+    /// `false`).
+    pub disable_optimization: bool,
+    /// Disables ads first-party data before the launch burst (default
+    /// `false`).
+    pub disable_fpd: bool,
+    /// Shapes the ad requests as ow-electron does (default `true`; a debug
+    /// switch only).
     pub request_shaping: bool,
-    /// Value given to the guest `owVersion` and the consent `oweVersion`
-    /// instead of `<owVersion>` (section 0).
+    /// Overrides the Overwolf runtime version the guests report.
     pub ow_version_override: Option<String>,
-    /// ow-tauri option: the macOS private header SPI prototype (D.8.3).
+    /// macOS private header API prototype (default `false`).
     pub mac_private_header_api: bool,
-    /// Ad guests are transparent from creation (default `true`), so a slot
-    /// without an ad shows the app's own container background and an
-    /// interstitial's dim shows the app behind it, as the in-page guest of
-    /// ow-electron does (B.3.4). Windows and Linux use the webview's
-    /// transparent background; macOS also clears the `WKWebView` background
-    /// (`drawsBackground`, a private key-value key Tauri's own transparent
-    /// webviews use, and the public `underPageBackgroundColor`) without
-    /// Tauri's `macos-private-api` feature. `false` keeps opaque guests.
+    /// Transparent guest backgrounds (default `true`).
     pub transparent_guests: bool,
-    /// User-gesture window for guest top-level navigation.
-    pub gesture_window_ms: u64,
-    /// Guest reloads after crashes, per element; `None` = no cap, as
-    /// ow-electron (D.7).
+    /// Most crash recoveries of one guest; `None` (default) is uncapped, as
+    /// ow-electron.
     pub max_recoveries: Option<u32>,
-    /// Reload interval after a failed main-frame load (D.7).
+    /// Retry delay after a guest's load failure, in ms (default 5000).
     pub load_error_retry_ms: u64,
-    /// Per-guest limits (D.4).
+    /// macOS: recreate a guest when its page asks for a reload (default
+    /// `true`); ignored elsewhere.
+    pub recreate_on_reload: bool,
+    /// A reload sooner than this after the last recreate reloads in place, in
+    /// ms (default 30000).
+    pub recreate_min_interval_ms: u64,
+    /// Recreates per guest and hour; beyond it reloads are in place
+    /// (default 30).
+    pub recreate_max_per_hour: u32,
+    /// Extra app origins allowed to host ads (for example a
+    /// `tauri-plugin-localhost` origin); never an Overwolf origin.
+    pub allowed_embedder_origins: Vec<String>,
+    /// Windows: browser arguments of the ads environment, appended after the
+    /// ones ow-electron uses.
+    pub browser_args: Vec<String>,
+    /// Limits per guest.
     pub guest_limits: GuestLimits,
 }
 
@@ -134,35 +119,41 @@ impl Default for AdsConfig {
     fn default() -> Self {
         AdsConfig {
             test_ad: false,
+            disable_optimization: false,
+            disable_fpd: false,
             request_shaping: true,
             ow_version_override: None,
             mac_private_header_api: false,
             transparent_guests: true,
-            gesture_window_ms: 1500,
             max_recoveries: None,
-            load_error_retry_ms: 5000,
+            load_error_retry_ms: 5_000,
+            recreate_on_reload: true,
+            recreate_min_interval_ms: 30_000,
+            recreate_max_per_hour: 30,
+            allowed_embedder_origins: Vec::new(),
+            browser_args: Vec::new(),
             guest_limits: GuestLimits::default(),
         }
     }
 }
 
-/// `plugins.overwolf.ads.guestLimits` (D.4).
+/// `plugins.overwolf.ads.guestLimits`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[non_exhaustive]
 pub struct GuestLimits {
-    /// Sustained guest messages per second.
+    /// Guest events per second (default 50).
     pub events_per_second: u32,
-    /// Burst size of the message bucket.
+    /// Event burst (default 100).
     pub event_burst: u32,
-    /// Encoded `data` bytes per second.
+    /// Event bytes per second (default 262144).
     pub bytes_per_second: u64,
-    /// System-browser opens per minute, per guest (D.7); default 20.
-    ///
-    /// Every open also needs its own user gesture in the guest (one
-    /// gesture, one open), which is the real safeguard; this cap only bounds
-    /// a burst. It stays above the 5 opens Overwolf's own ad QA step makes
-    /// ("click the ad 5 times", five browser windows).
+    /// External opens per minute and guest (default 20).
     pub external_opens_per_minute: u32,
+    /// External opens per minute across the app (default 20).
+    pub external_opens_per_minute_app: u32,
+    /// How long a user activation allows one open, in ms (default 5000).
+    pub activation_window_ms: u64,
 }
 
 impl Default for GuestLimits {
@@ -172,6 +163,8 @@ impl Default for GuestLimits {
             event_burst: 100,
             bytes_per_second: 262_144,
             external_opens_per_minute: 20,
+            external_opens_per_minute_app: 20,
+            activation_window_ms: 5_000,
         }
     }
 }
@@ -179,14 +172,21 @@ impl Default for GuestLimits {
 /// `plugins.overwolf.analytics`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[non_exhaustive]
 pub struct AnalyticsConfig {
-    /// The host label (section 0, "Host label"), default `tauri`.
+    /// The host label of the analytics events and the user agent token
+    /// (default `"tauri"`).
     pub host_label: String,
-    /// The host version; `None` = the Tauri crate version.
+    /// The host version; `None` (default) is the Tauri version.
     pub host_version: Option<String>,
-    /// How the muid is derived (E.4).
+    /// Where the muid comes from (default the machine id, as ow-electron).
     pub muid_strategy: MuidStrategy,
-    /// ow-tauri option: expose `analytics_set_user_enabled`.
+    /// Same as calling `disableAnonymousAnalytics()` before the launch
+    /// (default `false`).
+    pub disable_anonymous: bool,
+    /// Window label globs (`*`, `?`) that are never counted.
+    pub exclude_windows: Vec<String>,
+    /// Exposes `setAnalyticsUserEnabled` (default `false`).
     pub user_switch: bool,
 }
 
@@ -195,33 +195,43 @@ impl Default for AnalyticsConfig {
         AnalyticsConfig {
             host_label: "tauri".into(),
             host_version: None,
-            muid_strategy: MuidStrategy::MachineId,
+            muid_strategy: MuidStrategy::default(),
+            disable_anonymous: false,
+            exclude_windows: Vec::new(),
             user_switch: false,
         }
     }
 }
 
-/// `analytics.muidStrategy` (E.4).
+/// Where the muid comes from (CONTRACT E.4).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum MuidStrategy {
-    /// Derived from the OS machine identifier, as ow-electron (default).
+    /// The machine id, shared with every Overwolf app (ow-electron).
     #[default]
     MachineId,
-    /// ow-tauri option, non-parity: a random upper-case UUID v4 stored in
-    /// `ow-tauri.json`.
+    /// A random id per install, kept in `ow-tauri.json`.
     PerInstall,
 }
 
 /// `plugins.overwolf.consent`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[non_exhaustive]
 pub struct ConsentConfig {
-    /// Settings window page override; any `https:` URL (D.6.4).
+    /// Overrides the Overwolf consent page (https only).
     pub cmp_url: Option<String>,
-    /// The hidden consent windows are closed after this if still open.
+    /// Origins a JavaScript `cmpURL` must match (default
+    /// `["https://content.overwolf.com"]`).
+    pub allowed_cmp_origins: Vec<String>,
+    /// How long the consent page may take to report ready, in ms (default
+    /// 30000).
     pub ready_timeout_ms: u64,
-    /// Whether the host writes the consent cookies itself (D.6.3).
+    /// How long the EU-only request may take, in ms (default 60000); on
+    /// expiry consent counts as required.
+    pub eu_only_timeout_ms: u64,
+    /// Whether the consent cookies are checked when the page saves nothing.
     pub host_cookie_fallback: CookieFallback,
 }
 
@@ -229,169 +239,597 @@ impl Default for ConsentConfig {
     fn default() -> Self {
         ConsentConfig {
             cmp_url: None,
+            allowed_cmp_origins: vec!["https://content.overwolf.com".into()],
             ready_timeout_ms: 30_000,
-            host_cookie_fallback: CookieFallback::Auto,
+            eu_only_timeout_ms: 60_000,
+            host_cookie_fallback: CookieFallback::default(),
         }
     }
 }
 
-/// `consent.hostCookieFallback` (D.6.3).
+/// `plugins.overwolf.consent.hostCookieFallback`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum CookieFallback {
-    /// Write the cookies when the page did not (default).
+    /// Check the consent cookies (default).
     #[default]
     Auto,
-    /// Never write cookies from the host.
+    /// Never check them.
     Never,
-}
-
-/// `plugins.overwolf.logging` (F.4).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
-pub struct LoggingConfig {
-    /// Append to `logs/ow-tauri.log`; off by default, as ow-electron writes
-    /// no log.
-    pub enabled: bool,
 }
 
 /// `plugins.overwolf.emailHashes`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[non_exhaustive]
 pub struct EmailHashesConfig {
-    /// Output encoding (OQ-10).
+    /// Hash text encoding (default hex, as ow-electron).
     pub encoding: HashEncoding,
 }
 
-/// `plugins.overwolf.ipc` (C.4).
+/// `plugins.overwolf.updater` (cargo feature `updater`, Windows).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
-pub struct IpcConfig {
-    /// 0 = no timeout (Electron behaviour).
-    pub invoke_timeout_ms: u64,
-    /// Requests buffered before `ow-main` is ready.
-    pub startup_queue_max: usize,
-    /// A buffered request fails with `not-ready` after this.
-    pub startup_timeout_ms: u64,
-    /// Encoded size cap per message.
-    pub max_message_bytes: usize,
-    /// Per sender webview; more reject with `ipc-overloaded`.
-    pub max_in_flight_invokes: usize,
-    /// Per receiving webview; more reject the sender with `ipc-overloaded`.
-    pub max_queued_messages: usize,
-}
-
-impl Default for IpcConfig {
-    fn default() -> Self {
-        IpcConfig {
-            invoke_timeout_ms: 0,
-            startup_queue_max: 1024,
-            startup_timeout_ms: 30_000,
-            max_message_bytes: 8_388_608,
-            max_in_flight_invokes: 256,
-            max_queued_messages: 4096,
-        }
-    }
-}
-
-/// `plugins.overwolf.updater` (I).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[non_exhaustive]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent configuration switches of the configuration schema"
+)]
 pub struct UpdaterConfig {
-    /// Whether the update client runs.
-    pub enabled: bool,
-    /// Installer arguments override.
+    /// The feed; `None` (default) is Overwolf's feed for the app's uid.
+    pub endpoint: Option<String>,
+    /// The channel; `None` is `latest`.
+    pub channel: Option<String>,
+    /// Accept pre-release versions (default `false`).
+    pub allow_prerelease: bool,
+    /// Accept a lower version (default `false`).
+    pub allow_downgrade: bool,
+    /// Let JavaScript `channel` / `allowDowngrade` cause a downgrade (default
+    /// `false`).
+    pub allow_js_downgrade: bool,
+    /// Install a downloaded update when the app exits (default `true`).
+    pub install_on_exit: bool,
+    /// Installer arguments; `/UPDATE` is always kept.
     pub installer_args: Option<Vec<String>>,
-    /// Windows Authenticode publishers of the installer (a CN, or a DN
-    /// whose every attribute must match), always enforced when set, as
-    /// electron-updater enforces `publisherName`. `None`: the running exe's
-    /// signer, unless the app exe is signed with Overwolf's certificate
-    /// (`enableOWCertSigning`), which skips the check with a warning.
+    /// Authenticode subjects the installer must be signed by.
     pub publisher_names: Option<Vec<String>>,
-    /// Minisign public key; required on Linux.
+    /// A minisign public key the installer must verify against.
     pub pubkey: Option<String>,
+    /// Skips the publisher check (debug builds only).
+    pub dangerous_skip_publisher_check: bool,
+    /// Connect timeout, in ms (default 30000).
+    pub connect_timeout_ms: u64,
+    /// Idle read timeout (between bytes), in ms (default 60000).
+    pub read_timeout_ms: u64,
 }
 
 impl Default for UpdaterConfig {
     fn default() -> Self {
         UpdaterConfig {
-            enabled: true,
+            endpoint: None,
+            channel: None,
+            allow_prerelease: false,
+            allow_downgrade: false,
+            allow_js_downgrade: false,
+            install_on_exit: true,
             installer_args: None,
             publisher_names: None,
             pubkey: None,
+            dangerous_skip_publisher_check: false,
+            connect_timeout_ms: 30_000,
+            read_timeout_ms: 60_000,
         }
     }
 }
 
-/// `plugins.overwolf.shell`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// `plugins.overwolf.signing` (build step and CLI only).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
-pub struct ShellConfig {
-    /// Allow `shell.openPath` to open executables and launchers (A.2.3.2).
-    pub open_path_allow_executables: bool,
+#[non_exhaustive]
+pub struct SigningConfig {
+    /// Signing is on (default `false`).
+    pub enabled: bool,
+    /// A Windows release build without signed output fails (default
+    /// `true`; only when `enabled`).
+    pub require_signing: bool,
+    /// ow-electron's `enableOWCertSigning` (default `false`).
+    pub ow_cert_signing: bool,
+    /// The `fileHashes` entry; the CLI's `--main` overrides it.
+    pub entry: Option<String>,
 }
 
-/// `plugins.overwolf.fs`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
-pub struct FsConfig {
-    /// Extra read-write directory templates for `fs_*` (A.2.3).
-    pub scope: Vec<String>,
+impl Default for SigningConfig {
+    fn default() -> Self {
+        SigningConfig {
+            enabled: false,
+            require_signing: true,
+            ow_cert_signing: false,
+            entry: None,
+        }
+    }
 }
 
 /// `plugins.overwolf.state`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+#[non_exhaustive]
 pub struct StateConfig {
-    /// Overrides the OS configuration directory (`<appData>`), for tests.
+    /// Replaces the OS app data directory (tests; refused in release
+    /// builds).
     pub app_data_dir: Option<PathBuf>,
 }
 
-/// A configuration value that fails validation.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("plugins.overwolf.{path}: {message}")]
+/// An invalid `plugins.overwolf` value.
+///
+/// ```
+/// use tauri_plugin_overwolf::config::ConfigError;
+/// let err = ConfigError::new("uid", "must be 1 to 64 ASCII letters or digits");
+/// assert_eq!(err.to_string(), "plugins.overwolf.uid: must be 1 to 64 ASCII letters or digits");
+/// assert_eq!(ConfigError::new("", "x").to_string(), "plugins.overwolf: x");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ConfigError {
-    /// Dot path below `plugins.overwolf`.
+    /// Dot path below `plugins.overwolf` (empty for the object itself).
     pub path: String,
     /// What is wrong.
     pub message: String,
 }
 
-fn invalid(path: &str, message: impl Into<String>) -> ConfigError {
-    ConfigError {
-        path: path.into(),
-        message: message.into(),
+impl ConfigError {
+    /// An error at `path` (dot path below `plugins.overwolf`).
+    #[must_use]
+    pub fn new(path: impl Into<String>, message: impl Into<String>) -> Self {
+        ConfigError {
+            path: path.into(),
+            message: message.into(),
+        }
     }
 }
 
-/// The variables allowed at the start of an `fs.scope` template.
-pub const FS_SCOPE_VARIABLES: [&str; 6] = [
-    "$USERDATA",
-    "$PICTURES",
-    "$VIDEOS",
-    "$DOCUMENTS",
-    "$DOWNLOADS",
-    "$TEMP",
-];
-
-/// Whether `url` is an allowed consent page URL (D.6).
-///
-/// ```
-/// use tauri_plugin_overwolf::config::is_allowed_cmp_url;
-/// assert!(is_allowed_cmp_url("https://content.overwolf.com/monsdk/electron/latest/cmp/22.3.27/cmp.html"));
-/// assert!(!is_allowed_cmp_url("https://content.overwolf.com.evil.example/monsdk/electron/x"));
-/// assert!(!is_allowed_cmp_url("http://content.overwolf.com/monsdk/electron/x"));
-/// ```
-#[must_use]
-pub fn is_allowed_cmp_url(url: &str) -> bool {
-    url.starts_with(CMP_URL_SCOPE)
-        && !url.contains('\\')
-        && !url[CMP_URL_SCOPE.len()..]
-            .split(['/', '?', '#'])
-            .any(|s| s == "..")
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.path.is_empty() {
+            write!(f, "plugins.overwolf: {}", self.message)
+        } else {
+            write!(f, "plugins.overwolf.{}: {}", self.path, self.message)
+        }
+    }
 }
 
-/// Whether `url` parses as an absolute `https:` URL.
+impl std::error::Error for ConfigError {}
+
+/// Which rules [`Config::validate`] applies.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Validation {
+    /// A release build: the release-only rules apply.
+    pub release: bool,
+    /// The cargo feature `updater` is on.
+    pub updater_feature: bool,
+    /// The build step (`build::run`) runs the check: the rules that need the
+    /// whole build (the pinned uid) apply too.
+    pub build_step: bool,
+}
+
+impl Validation {
+    /// The rules of the current build at run time: release-only rules in
+    /// release builds, the updater rules when the `updater` feature is on.
+    #[must_use]
+    pub fn runtime() -> Self {
+        Validation {
+            release: !cfg!(debug_assertions),
+            updater_feature: cfg!(feature = "updater"),
+            build_step: false,
+        }
+    }
+
+    /// The rules of an app's build step for a build with these properties.
+    #[must_use]
+    pub fn build_step(release: bool, updater_feature: bool) -> Self {
+        Validation {
+            release,
+            updater_feature,
+            build_step: true,
+        }
+    }
+}
+
+/// Keys of earlier versions, rejected with a migration hint: dot path, the
+/// reason, the `docs/MIGRATION.md` anchor.
+const REMOVED: [(&str, &str, &str); 9] = [
+    (
+        "main",
+        "there is no hidden main webview; app code runs in the app's own webviews",
+        "no-main-webview",
+    ),
+    (
+        "ipc",
+        "the app talks to the plugin through Tauri commands",
+        "no-ipc-bridge",
+    ),
+    (
+        "shell",
+        "use tauri-plugin-opener or tauri-plugin-shell",
+        "official-plugins",
+    ),
+    ("fs", "use tauri-plugin-fs", "official-plugins"),
+    ("webview", "use ads.browserArgs", "browser-args"),
+    (
+        "packagesBackend",
+        "packages are not available on Tauri yet",
+        "packages",
+    ),
+    (
+        "logging",
+        "the plugin logs through the log crate",
+        "logging",
+    ),
+    (
+        "ads.gestureWindowMs",
+        "click-outs use the platform's user activation",
+        "gesture-window",
+    ),
+    (
+        "ads.guestHeartbeatTimeoutMs",
+        "guest crashes are detected with the web content terminate hook",
+        "crash-recovery",
+    ),
+];
+
+/// The value at dot path `path` of `raw`.
+fn at<'a>(raw: &'a Value, path: &str) -> Option<&'a Value> {
+    path.split('.').try_fold(raw, |v, key| v.get(key))
+}
+
+/// Parses one config section at its dotted path, for its error.
+type SectionCheck = fn(&str, &Value) -> Result<(), ConfigError>;
+
+/// A serde message with JSON-style quotes and without its position suffix.
+fn serde_message(err: &serde_json::Error) -> String {
+    err.to_string()
+        .split(" at line ")
+        .next()
+        .unwrap_or_default()
+        .replace('`', "\"")
+}
+
+/// Deserializes `value` as `T`; on failure names the first key below `path`
+/// whose value alone fails, so the error carries the leaf's dot path.
+fn parse_at<T: DeserializeOwned>(path: &str, value: &Value) -> Result<T, ConfigError> {
+    serde_json::from_value::<T>(value.clone()).map_err(|whole| {
+        let join = |key: &str| {
+            if path.is_empty() {
+                key.to_owned()
+            } else {
+                format!("{path}.{key}")
+            }
+        };
+        if let Value::Object(object) = value {
+            for (key, v) in object {
+                let mut one = Map::new();
+                one.insert(key.clone(), v.clone());
+                if let Err(err) = serde_json::from_value::<T>(Value::Object(one)) {
+                    let message = serde_message(&err);
+                    // An unknown key is reported at the object that has it.
+                    let leaf = if message.starts_with("unknown field") {
+                        path.to_owned()
+                    } else {
+                        join(key)
+                    };
+                    return ConfigError::new(leaf, message);
+                }
+            }
+        }
+        ConfigError::new(path, serde_message(&whole))
+    })
+}
+
+/// The derived (`remote = "Self"`) parse of [`Config`], without the
+/// checks of [`Config::from_value`].
+struct Root(Config);
+
+impl<'de> Deserialize<'de> for Root {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Config::deserialize(d).map(Root)
+    }
+}
+
+impl<'de> Deserialize<'de> for Config {
+    /// Parses through [`Config::from_value`].
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = Value::deserialize(d)?;
+        Config::from_value(&raw).map_err(serde::de::Error::custom)
+    }
+}
+
+impl Serialize for Config {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        Config::serialize(self, s)
+    }
+}
+
+impl Config {
+    /// Parses a raw `plugins.overwolf` value (`null` is the defaults).
+    ///
+    /// Keys of earlier versions are rejected with a migration hint, unknown
+    /// keys with the list of known ones, and wrong types with the key's dot
+    /// path.
+    ///
+    /// # Errors
+    ///
+    /// The first [`ConfigError`] found.
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::config::Config;
+    /// let err = Config::from_value(&serde_json::json!({ "main": { "url": "x" } })).unwrap_err();
+    /// assert!(err.to_string().starts_with("plugins.overwolf.main: removed in ow-tauri 1.0"));
+    /// let err = Config::from_value(&serde_json::json!({ "ads": { "testAd": "yes" } })).unwrap_err();
+    /// assert_eq!(err.path, "ads.testAd");
+    /// ```
+    pub fn from_value(raw: &Value) -> Result<Config, ConfigError> {
+        if raw.is_null() {
+            return Ok(Config::default());
+        }
+        for (path, reason, anchor) in REMOVED {
+            if at(raw, path).is_some() {
+                return Err(ConfigError::new(
+                    path,
+                    format!("removed in ow-tauri 1.0 ({reason}); see docs/MIGRATION.md#{anchor}"),
+                ));
+            }
+        }
+        if at(raw, "ads.recreateOnReload").is_some_and(Value::is_string) {
+            return Err(ConfigError::new(
+                "ads.recreateOnReload",
+                "removed in ow-tauri 1.0 (\"auto\" and \"never\" are now true and false); see docs/MIGRATION.md#recreate-on-reload",
+            ));
+        }
+        // Nested objects first, so an error names the deepest path.
+        if let Some(v) = at(raw, "ads.guestLimits") {
+            parse_at::<GuestLimits>("ads.guestLimits", v)?;
+        }
+        let sections: [(&str, SectionCheck); 7] = [
+            ("ads", |p, v| parse_at::<AdsConfig>(p, v).map(drop)),
+            ("analytics", |p, v| {
+                parse_at::<AnalyticsConfig>(p, v).map(drop)
+            }),
+            ("consent", |p, v| parse_at::<ConsentConfig>(p, v).map(drop)),
+            ("emailHashes", |p, v| {
+                parse_at::<EmailHashesConfig>(p, v).map(drop)
+            }),
+            ("updater", |p, v| parse_at::<UpdaterConfig>(p, v).map(drop)),
+            ("signing", |p, v| parse_at::<SigningConfig>(p, v).map(drop)),
+            ("state", |p, v| parse_at::<StateConfig>(p, v).map(drop)),
+        ];
+        for (path, check) in sections {
+            if let Some(v) = at(raw, path) {
+                check(path, v)?;
+            }
+        }
+        parse_at::<Root>("", raw).map(|Root(config)| config)
+    }
+
+    /// Checks every value against the rules of DESIGN §3.2. `validation`
+    /// selects the release-only and build-step rules.
+    ///
+    /// # Errors
+    ///
+    /// The first [`ConfigError`] found, naming the value's dot path.
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::config::{Config, Validation};
+    /// let config = Config::from_value(&serde_json::json!({ "uid": "not valid!" })).unwrap();
+    /// let err = config.validate(Validation::default()).unwrap_err();
+    /// assert_eq!(err.path, "uid");
+    /// ```
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one rule per row of the validation table, in its order"
+    )]
+    pub fn validate(&self, validation: Validation) -> Result<(), ConfigError> {
+        let Validation {
+            release,
+            updater_feature,
+            build_step,
+        } = validation;
+        if let Some(uid) = &self.uid
+            && !is_valid_uid(uid.trim())
+        {
+            return Err(ConfigError::new(
+                "uid",
+                "must be 1 to 64 ASCII letters or digits",
+            ));
+        }
+        let set = |v: &Option<String>| v.as_deref().is_some_and(|s| !s.is_empty());
+        if release && build_step && !set(&self.uid) && !(set(&self.author) && set(&self.name)) {
+            return Err(ConfigError::new(
+                "",
+                "set \"uid\", or both \"author\" and \"name\", before a release build (the uid must not depend on defaults)",
+            ));
+        }
+        if !is_valid_host_label(&self.analytics.host_label) {
+            return Err(ConfigError::new(
+                "analytics.hostLabel",
+                "must be 1 to 32 lower-case letters, digits or _ starting with a letter",
+            ));
+        }
+        for (i, glob) in self.analytics.exclude_windows.iter().enumerate() {
+            if glob.is_empty() || is_reserved_label(glob) {
+                return Err(ConfigError::new(
+                    format!("analytics.excludeWindows[{i}]"),
+                    "must be a non-empty label glob",
+                ));
+            }
+        }
+        if let Some(url) = &self.consent.cmp_url
+            && !is_https_url(url)
+        {
+            return Err(ConfigError::new("consent.cmpUrl", "must be an https URL"));
+        }
+        for (i, origin) in self.consent.allowed_cmp_origins.iter().enumerate() {
+            if !is_origin(origin, &["https"]) {
+                return Err(ConfigError::new(
+                    format!("consent.allowedCmpOrigins[{i}]"),
+                    "must be an https origin (scheme://host[:port], no path)",
+                ));
+            }
+        }
+        for (i, origin) in self.ads.allowed_embedder_origins.iter().enumerate() {
+            if !is_origin(origin, &["http", "https"]) || is_overwolf_origin(origin) {
+                return Err(ConfigError::new(
+                    format!("ads.allowedEmbedderOrigins[{i}]"),
+                    "must be an http(s) origin that is not an Overwolf origin",
+                ));
+            }
+        }
+        for (path, value) in [
+            ("consent.readyTimeoutMs", self.consent.ready_timeout_ms),
+            ("consent.euOnlyTimeoutMs", self.consent.eu_only_timeout_ms),
+        ] {
+            if !(1..=600_000).contains(&value) {
+                return Err(ConfigError::new(path, "must be 1 to 600000"));
+            }
+        }
+        let limits = &self.ads.guest_limits;
+        for (path, value) in [
+            (
+                "ads.guestLimits.eventsPerSecond",
+                u64::from(limits.events_per_second),
+            ),
+            ("ads.guestLimits.eventBurst", u64::from(limits.event_burst)),
+            ("ads.guestLimits.bytesPerSecond", limits.bytes_per_second),
+            (
+                "ads.guestLimits.externalOpensPerMinute",
+                u64::from(limits.external_opens_per_minute),
+            ),
+            (
+                "ads.guestLimits.externalOpensPerMinuteApp",
+                u64::from(limits.external_opens_per_minute_app),
+            ),
+            (
+                "ads.guestLimits.activationWindowMs",
+                limits.activation_window_ms,
+            ),
+            (
+                "ads.recreateMaxPerHour",
+                u64::from(self.ads.recreate_max_per_hour),
+            ),
+        ] {
+            if value == 0 {
+                return Err(ConfigError::new(path, "must be greater than 0"));
+            }
+        }
+        for (i, arg) in self.ads.browser_args.iter().enumerate() {
+            let name = arg.split('=').next().unwrap_or_default();
+            let remote_debugging = name.starts_with("--remote-debugging")
+                || name.starts_with("--remote-allow-origins");
+            if !arg.starts_with("--")
+                || arg.len() < 3
+                || name == "--user-data-dir"
+                || (release && remote_debugging)
+            {
+                return Err(ConfigError::new(
+                    format!("ads.browserArgs[{i}]"),
+                    "must be a --switch other than --user-data-dir (and no remote debugging in release builds)",
+                ));
+            }
+        }
+        if let Some(endpoint) = &self.updater.endpoint {
+            let loopback_ok = !release && is_loopback_http(endpoint);
+            if !is_https_url(endpoint) && !loopback_ok {
+                return Err(ConfigError::new("updater.endpoint", "must be an https URL"));
+            }
+        }
+        if self
+            .updater
+            .pubkey
+            .as_deref()
+            .is_some_and(|k| k.trim().is_empty())
+        {
+            return Err(ConfigError::new(
+                "updater.pubkey",
+                "must not be empty when set",
+            ));
+        }
+        if release && updater_feature {
+            let publishers = self
+                .updater
+                .publisher_names
+                .as_ref()
+                .is_some_and(|names| names.iter().any(|n| !n.trim().is_empty()));
+            if !publishers && self.updater.pubkey.is_none() {
+                return Err(ConfigError::new(
+                    "updater",
+                    "set publisherNames (your installer's certificate subject) or pubkey before a release build",
+                ));
+            }
+        }
+        if release && self.updater.dangerous_skip_publisher_check {
+            return Err(ConfigError::new(
+                "updater.dangerousSkipPublisherCheck",
+                "not allowed in release builds",
+            ));
+        }
+        if release && self.state.app_data_dir.is_some() {
+            return Err(ConfigError::new(
+                "state.appDataDir",
+                "only allowed in debug builds",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Normalises values that have a fixed rule instead of an error and
+    /// returns one warning per change: `updater.installerArgs` with a silent
+    /// `/S` always carries `/UPDATE` (an update must not run the uninstall
+    /// hooks).
+    ///
+    /// ```
+    /// use tauri_plugin_overwolf::config::Config;
+    /// let mut config = Config::from_value(&serde_json::json!({ "updater": { "installerArgs": ["/S"] } })).unwrap();
+    /// let warnings = config.normalize();
+    /// assert_eq!(config.updater.installer_args.as_deref(), Some(&["/S".to_owned(), "/UPDATE".to_owned()][..]));
+    /// assert_eq!(warnings.len(), 1);
+    /// ```
+    pub fn normalize(&mut self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if let Some(args) = &mut self.updater.installer_args
+            && args.iter().any(|a| a.eq_ignore_ascii_case("/S"))
+            && !args.iter().any(|a| a.eq_ignore_ascii_case("/UPDATE"))
+        {
+            args.push("/UPDATE".into());
+            warnings.push(
+                "plugins.overwolf.updater.installerArgs: added /UPDATE (an update must not run the uninstall hooks)"
+                    .into(),
+            );
+        }
+        warnings
+    }
+}
+
+/// The label prefix of ad guest webviews (`owad-<n>`).
+pub const ADVIEW_LABEL_PREFIX: &str = "owad-";
+/// The label prefix of consent windows (`ow-cmp…`).
+pub const CMP_LABEL_PREFIX: &str = "ow-cmp";
+
+/// Whether `label` starts with a prefix reserved for the plugin's own
+/// webviews and windows: [`ADVIEW_LABEL_PREFIX`] (ad guests) or
+/// [`CMP_LABEL_PREFIX`] (consent windows).
+///
+/// ```
+/// use tauri_plugin_overwolf::config::is_reserved_label;
+/// assert!(is_reserved_label("owad-1"));
+/// assert!(is_reserved_label("ow-cmp-default"));
+/// assert!(!is_reserved_label("main"));
+/// ```
+#[must_use]
+pub fn is_reserved_label(label: &str) -> bool {
+    label.starts_with(ADVIEW_LABEL_PREFIX) || label.starts_with(CMP_LABEL_PREFIX)
+}
+
+/// Whether `url` parses as an absolute `https:` URL with a host.
 ///
 /// ```
 /// use tauri_plugin_overwolf::config::is_https_url;
@@ -404,16 +842,53 @@ pub fn is_https_url(url: &str) -> bool {
     url::Url::parse(url).is_ok_and(|u| u.scheme() == "https" && u.host().is_some())
 }
 
+/// Whether `url` is an `http:` URL on a loopback host (debug-only updater
+/// endpoints).
+fn is_loopback_http(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| {
+        u.scheme() == "http"
+            && match u.host() {
+                Some(url::Host::Domain(d)) => d == "localhost",
+                Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+                Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+                None => false,
+            }
+    })
+}
+
+/// Whether `text` is exactly an origin (`scheme://host[:port]`, no path,
+/// query, fragment or credentials) with one of `schemes`.
+fn is_origin(text: &str, schemes: &[&str]) -> bool {
+    url::Url::parse(text).is_ok_and(|u| {
+        schemes.contains(&u.scheme())
+            && u.host().is_some()
+            && u.username().is_empty()
+            && u.password().is_none()
+            && u.query().is_none()
+            && u.fragment().is_none()
+            && u.path() == "/"
+            && !text.trim_end_matches('/').ends_with(':')
+            && text.matches('/').count() == 2
+    })
+}
+
+/// Whether origin `text` is `overwolf.com` or one of its subdomains.
+fn is_overwolf_origin(text: &str) -> bool {
+    url::Url::parse(text).is_ok_and(|u| {
+        u.host_str().is_some_and(|h| {
+            let h = h.trim_end_matches('.').to_ascii_lowercase();
+            h == "overwolf.com" || h.ends_with(".overwolf.com")
+        })
+    })
+}
+
 /// Whether `label` is a valid `analytics.hostLabel`: 1 to 32 lower-case ASCII
-/// letters, digits or `_`, starting with a letter. It becomes part of
-/// Counter names and the user agent token.
+/// letters, digits or `_`, starting with a letter.
 ///
 /// ```
 /// use tauri_plugin_overwolf::config::is_valid_host_label;
 /// assert!(is_valid_host_label("tauri"));
-/// assert!(is_valid_host_label("electron"));
 /// assert!(!is_valid_host_label("Tauri"));
-/// assert!(!is_valid_host_label("a b"));
 /// ```
 #[must_use]
 pub fn is_valid_host_label(label: &str) -> bool {
@@ -424,743 +899,408 @@ pub fn is_valid_host_label(label: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
-/// Configuration keys removed by the parity revision (A.1), as dot paths
-/// below `plugins.overwolf`. The plugin rejects them; the build helper
-/// names them in a build warning.
-pub const REMOVED_KEYS: [&str; 6] = [
-    "analytics.hostFields",
-    "ads.experimentalElementApi",
-    "ads.exposeEmailHashesToGuest",
-    "ads.legacyHostMessages",
-    "consent.gateAdsOnConsent",
-    "consent.cmpRequired",
-];
-
-/// Warnings for removed keys and removed `packagesBackend` values in a raw
-/// `plugins.overwolf` object (A.1).
-///
-/// ```
-/// use tauri_plugin_overwolf::config::removed_key_warnings;
-/// let raw = serde_json::json!({ "packagesBackend": "auto", "consent": { "cmpRequired": "always" } });
-/// let w = removed_key_warnings(&raw);
-/// assert_eq!(w.len(), 2);
-/// assert!(w[0].contains("consent.cmpRequired"));
-/// ```
-#[must_use]
-pub fn removed_key_warnings(raw: &Value) -> Vec<String> {
-    let mut out = Vec::new();
-    for path in REMOVED_KEYS {
-        let mut cur = Some(raw);
-        for part in path.split('.') {
-            cur = cur.and_then(|v| v.get(part));
-        }
-        if cur.is_some() {
-            out.push(format!(
-                "plugins.overwolf.{path} was removed by the parity revision; remove it (the plugin rejects it)"
-            ));
-        }
-    }
-    if let Some(v) = raw.get("packagesBackend").and_then(Value::as_str)
-        && (v == "auto" || v == "simulated")
-    {
-        out.push(format!(
-            "plugins.overwolf.packagesBackend \"{v}\" was removed; use \"none\" (the plugin rejects it)"
-        ));
-    }
-    out
-}
-
-impl Config {
-    /// Checks every field against the contract's rules.
-    ///
-    /// # Errors
-    ///
-    /// The first [`ConfigError`] found, naming the field.
-    ///
-    /// ```
-    /// use tauri_plugin_overwolf::config::Config;
-    /// assert!(Config::default().validate().is_ok());
-    /// let mut c = Config::default();
-    /// c.main.url = "https://example.com/main.html".into();
-    /// assert!(c.validate().is_err());
-    /// ```
-    #[expect(clippy::too_many_lines, reason = "one check per configuration field")]
-    pub fn validate(&self) -> Result<(), ConfigError> {
-        let main_url = self.main.url.trim();
-        if main_url.is_empty() {
-            return Err(invalid("main.url", "must not be empty"));
-        }
-        if main_url.contains("://") || main_url.starts_with("//") || main_url.contains('\\') {
-            return Err(invalid(
-                "main.url",
-                "must be a path to an app asset, not a URL",
-            ));
-        }
-        if main_url.split('/').any(|s| s == "..") {
-            return Err(invalid("main.url", "must not contain .. segments"));
-        }
-        if self.main.crash_restart_limit == 0 {
-            return Err(invalid("main.crashRestartLimit", "must be at least 1"));
-        }
-        if self.webview.remote_debugging_port == Some(0) {
-            return Err(invalid(
-                "webview.remoteDebuggingPort",
-                "must be a port between 1 and 65535",
-            ));
-        }
-        for (i, arg) in self.webview.additional_browser_args.iter().enumerate() {
-            if !arg.starts_with("--") || arg.chars().any(char::is_whitespace) {
-                return Err(invalid(
-                    &format!("webview.additionalBrowserArgs[{i}]"),
-                    "each entry must be one --switch without whitespace",
-                ));
-            }
-        }
-        if let Some(uid) = &self.uid
-            && !is_valid_uid(uid)
-        {
-            return Err(invalid("uid", "must be 1 to 64 ASCII letters or digits"));
-        }
-        if self.ads.gesture_window_ms > 60_000 {
-            return Err(invalid("ads.gestureWindowMs", "must be at most 60000"));
-        }
-        let limits = &self.ads.guest_limits;
-        for (name, value) in [
-            (
-                "ads.guestLimits.eventsPerSecond",
-                u64::from(limits.events_per_second),
-            ),
-            ("ads.guestLimits.eventBurst", u64::from(limits.event_burst)),
-            ("ads.guestLimits.bytesPerSecond", limits.bytes_per_second),
-        ] {
-            if value == 0 {
-                return Err(invalid(name, "must be greater than 0"));
-            }
-        }
-        if let Some(url) = &self.consent.cmp_url
-            && !is_https_url(url)
-        {
-            return Err(invalid("consent.cmpUrl", "must be an https URL"));
-        }
-        if !is_valid_host_label(&self.analytics.host_label) {
-            return Err(invalid(
-                "analytics.hostLabel",
-                "must be 1 to 32 lower-case ASCII letters, digits or _",
-            ));
-        }
-        for (name, value) in [
-            (
-                "analytics.hostVersion",
-                self.analytics.host_version.as_ref(),
-            ),
-            (
-                "ads.owVersionOverride",
-                self.ads.ow_version_override.as_ref(),
-            ),
-        ] {
-            if let Some(v) = value
-                && (v.is_empty() || v.len() > 64 || !v.chars().all(|c| c.is_ascii_graphic()))
-            {
-                return Err(invalid(name, "must be 1 to 64 printable ASCII characters"));
-            }
-        }
-        if self.consent.ready_timeout_ms == 0 {
-            return Err(invalid("consent.readyTimeoutMs", "must be greater than 0"));
-        }
-        let ipc = &self.ipc;
-        for (name, value) in [
-            ("ipc.startupQueueMax", ipc.startup_queue_max),
-            ("ipc.maxMessageBytes", ipc.max_message_bytes),
-            ("ipc.maxInFlightInvokes", ipc.max_in_flight_invokes),
-            ("ipc.maxQueuedMessages", ipc.max_queued_messages),
-        ] {
-            if value == 0 {
-                return Err(invalid(name, "must be greater than 0"));
-            }
-        }
-        if ipc.startup_timeout_ms == 0 {
-            return Err(invalid("ipc.startupTimeoutMs", "must be greater than 0"));
-        }
-        if ipc.max_message_bytes > 256 * 1024 * 1024 {
-            return Err(invalid("ipc.maxMessageBytes", "must be at most 268435456"));
-        }
-        if let Some(key) = &self.updater.pubkey
-            && key.trim().is_empty()
-        {
-            return Err(invalid("updater.pubkey", "must not be empty when set"));
-        }
-        for (i, entry) in self.fs.scope.iter().enumerate() {
-            validate_scope_template(entry).map_err(|m| invalid(&format!("fs.scope[{i}]"), m))?;
-        }
-        Ok(())
-    }
-}
-
-fn validate_scope_template(entry: &str) -> Result<(), &'static str> {
-    if entry.trim().is_empty() {
-        return Err("must not be empty");
-    }
-    let rest = if let Some(var) = FS_SCOPE_VARIABLES
-        .iter()
-        .find(|v| entry == **v || entry.starts_with(&format!("{v}/")))
-    {
-        &entry[var.len()..]
-    } else if std::path::Path::new(entry).is_absolute() {
-        entry
-    } else if entry.starts_with('$') && !entry.starts_with("$APPNAME") {
-        return Err(
-            "unknown variable; use $USERDATA, $PICTURES, $VIDEOS, $DOCUMENTS, $DOWNLOADS or $TEMP",
-        );
-    } else {
-        return Err("must be absolute or start with a variable such as $USERDATA");
-    };
-    if rest.split(['/', '\\']).any(|s| s == "..") {
-        return Err("must not contain .. segments");
-    }
-    Ok(())
-}
-
-/// Switches read from the process arguments at setup (A.1).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Switches {
-    /// `--test-ad`.
-    pub test_ad: bool,
-    /// `--owepm-package-channel=<pkg>:<channel>[,...]`.
-    pub package_channel: Option<String>,
-    /// `--force-phased-package[=<pkg>,...]`: `Some(None)` for the bare switch.
-    pub force_phased_package: Option<Option<String>>,
-    /// `--owepm-packages-url=<url>`.
-    pub packages_url: Option<String>,
-    /// `--ow-tauri-packages-backend=<value>`.
-    pub packages_backend: Option<String>,
-    /// `--ow-tauri-relaunch-after=<pid>` (I.4); the process exits early.
-    pub relaunch_after: Option<String>,
-}
-
-impl Switches {
-    /// Parses the switches from process arguments (the first item, the
-    /// executable, is skipped). Unknown arguments are ignored.
-    ///
-    /// ```
-    /// use tauri_plugin_overwolf::config::Switches;
-    /// let s = Switches::parse(["app", "--test-ad", "--force-phased-package", "--owepm-packages-url=https://x"]);
-    /// assert!(s.test_ad);
-    /// assert_eq!(s.force_phased_package, Some(None));
-    /// assert_eq!(s.packages_url.as_deref(), Some("https://x"));
-    /// ```
-    pub fn parse<I, S>(args: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        let mut out = Switches::default();
-        for arg in args.into_iter().skip(1) {
-            let arg = arg.as_ref();
-            let (name, value) = match arg.split_once('=') {
-                Some((n, v)) => (n, Some(v.to_owned())),
-                None => (arg, None),
-            };
-            match name {
-                "--test-ad" => out.test_ad = true,
-                "--owepm-package-channel" => out.package_channel = value,
-                "--force-phased-package" => out.force_phased_package = Some(value),
-                "--owepm-packages-url" => out.packages_url = value,
-                "--ow-tauri-packages-backend" => out.packages_backend = value,
-                "--ow-tauri-relaunch-after" => out.relaunch_after = value,
-                _ => {}
-            }
-        }
-        out
-    }
-
-    /// Whether `argv` contains `name` as a switch (`--name` or `--name=...`),
-    /// as `app.commandLine.hasSwitch()` does.
-    ///
-    /// ```
-    /// use tauri_plugin_overwolf::config::Switches;
-    /// assert!(Switches::has_switch(&["a".into(), "--x=1".into()], "x"));
-    /// ```
-    #[must_use]
-    pub fn has_switch(argv: &[String], name: &str) -> bool {
-        let flag = format!("--{name}");
-        argv.iter()
-            .skip(1)
-            .any(|a| a == &flag || a.starts_with(&format!("{flag}=")))
-    }
-}
-
-/// Values taken from the environment (A.1), applied after the builder.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct EnvOverrides {
-    /// `OW_TAURI_TEST_AD=1`.
-    pub test_ad: bool,
-    /// `OW_TAURI_PACKAGES_BACKEND`.
-    pub packages_backend: Option<String>,
-    /// `OW_TAURI_PACKAGE_RUNTIME`: path of a sidecar or shared library (H).
-    pub package_runtime: Option<PathBuf>,
-    /// `OW_TAURI_REMOTE_DEBUGGING_PORT` (debug builds only).
-    pub remote_debugging_port: Option<u16>,
-    /// `OW_CLI_EMAIL`, passed to the native runtime only.
-    pub dev_email: Option<String>,
-    /// `OW_CLI_API_KEY`, passed to the native runtime only.
-    pub dev_api_key: Option<String>,
-    /// `OW_DEV_KEY`, passed to the native runtime only.
-    pub dev_key: Option<String>,
-}
-
-impl EnvOverrides {
-    /// Reads the variables through `get` (`std::env::var` in production).
-    /// `debug` gates `OW_TAURI_REMOTE_DEBUGGING_PORT`. Returns the overrides
-    /// and warnings for values that could not be used.
-    ///
-    /// ```
-    /// use tauri_plugin_overwolf::config::EnvOverrides;
-    /// let (env, warnings) = EnvOverrides::read(|k| (k == "OW_TAURI_TEST_AD").then(|| "1".to_owned()), true);
-    /// assert!(env.test_ad);
-    /// assert!(warnings.is_empty());
-    /// ```
-    pub fn read(get: impl Fn(&str) -> Option<String>, debug: bool) -> (Self, Vec<String>) {
-        let mut warnings = Vec::new();
-        let non_empty = |k: &str| get(k).filter(|v| !v.trim().is_empty());
-        let port = match non_empty("OW_TAURI_REMOTE_DEBUGGING_PORT") {
-            Some(_) if !debug => {
-                warnings
-                    .push("OW_TAURI_REMOTE_DEBUGGING_PORT is ignored in release builds".to_owned());
-                None
-            }
-            Some(v) => match v.trim().parse::<u16>() {
-                Ok(p) if p > 0 => Some(p),
-                _ => {
-                    warnings.push(format!(
-                        "OW_TAURI_REMOTE_DEBUGGING_PORT=\"{v}\" is not a port; ignored"
-                    ));
-                    None
-                }
-            },
-            None => None,
-        };
-        let env = EnvOverrides {
-            test_ad: get("OW_TAURI_TEST_AD").is_some_and(|v| v.trim() == "1"),
-            packages_backend: non_empty("OW_TAURI_PACKAGES_BACKEND"),
-            package_runtime: non_empty("OW_TAURI_PACKAGE_RUNTIME").map(PathBuf::from),
-            remote_debugging_port: port,
-            dev_email: non_empty("OW_CLI_EMAIL"),
-            dev_api_key: non_empty("OW_CLI_API_KEY"),
-            dev_key: non_empty("OW_DEV_KEY"),
-        };
-        (env, warnings)
-    }
-}
-
-/// Applies environment variables and command line switches to `config` (in
-/// that order, last wins) and returns warnings for unusable values.
-///
-/// ```
-/// use tauri_plugin_overwolf::config::{apply_overrides, Config, EnvOverrides, Switches};
-/// use tauri_plugin_overwolf::PackagesBackend;
-/// let mut cfg = Config::default();
-/// let env = EnvOverrides { packages_backend: Some("none".into()), ..Default::default() };
-/// let sw = Switches::parse(["app", "--ow-tauri-packages-backend=native"]);
-/// let warnings = apply_overrides(&mut cfg, &env, &sw);
-/// assert!(warnings.is_empty());
-/// assert_eq!(cfg.packages_backend, PackagesBackend::Native);
-/// ```
-pub fn apply_overrides(
-    config: &mut Config,
-    env: &EnvOverrides,
-    switches: &Switches,
-) -> Vec<String> {
-    let mut warnings = Vec::new();
-    if env.test_ad {
-        config.ads.test_ad = true;
-    }
-    if let Some(port) = env.remote_debugging_port {
-        config.webview.remote_debugging_port = Some(port);
-    }
-    for (source, value) in [
-        ("OW_TAURI_PACKAGES_BACKEND", env.packages_backend.as_deref()),
-        (
-            "--ow-tauri-packages-backend",
-            switches.packages_backend.as_deref(),
-        ),
-    ] {
-        if let Some(value) = value {
-            match value.trim().parse::<PackagesBackend>() {
-                Ok(b) => config.packages_backend = b,
-                Err(_) => warnings.push(format!(
-                    "{source}=\"{value}\" is not none or native; ignored"
-                )),
-            }
-        }
-    }
-    if switches.test_ad {
-        config.ads.test_ad = true;
-    }
-    warnings
-}
-
-/// The browser arguments for every webview on Windows (A.1.1), as one string.
-///
-/// `pending` are the switches app code recorded during the previous session
-/// (`--disable-gpu`, `--remote-debugging-port=<n>`), applied now.
-///
-/// ```
-/// use tauri_plugin_overwolf::config::{browser_args, WebviewConfig};
-/// let args = browser_args(&WebviewConfig { disable_gpu: true, ..Default::default() }, &[], false);
-/// assert!(args.starts_with("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"));
-/// assert!(args.ends_with("--disable-gpu"));
-/// ```
-#[must_use]
-pub fn browser_args(webview: &WebviewConfig, pending: &[String], debug: bool) -> String {
-    let mut args: Vec<String> = vec![
-        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection".into(),
-        "--disable-background-timer-throttling".into(),
-        "--disable-renderer-backgrounding".into(),
-        "--disable-backgrounding-occluded-windows".into(),
-    ];
-    let pending_gpu = pending.iter().any(|a| a == "--disable-gpu");
-    if webview.disable_gpu || pending_gpu {
-        args.push("--disable-gpu".into());
-    }
-    let pending_port = pending
-        .iter()
-        .find_map(|a| a.strip_prefix("--remote-debugging-port="))
-        .and_then(|p| p.parse::<u16>().ok())
-        .filter(|p| *p > 0);
-    if debug && let Some(port) = webview.remote_debugging_port.or(pending_port) {
-        args.push(format!("--remote-debugging-port={port}"));
-    }
-    args.extend(webview.additional_browser_args.iter().cloned());
-    args.join(" ")
-}
-
-/// Keeps the runtime-recorded switches that take effect from the next
-/// launch (A.1.1, B.2.1) and drops everything else.
-///
-/// ```
-/// use tauri_plugin_overwolf::config::filter_pending_browser_args;
-/// let kept = filter_pending_browser_args(&["--disable-gpu".into(), "--foo".into(), "--remote-debugging-port=9222".into()]);
-/// assert_eq!(kept, ["--disable-gpu", "--remote-debugging-port=9222"]);
-/// ```
-#[must_use]
-pub fn filter_pending_browser_args(args: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for arg in args {
-        let keep = arg == "--disable-gpu"
-            || arg
-                .strip_prefix("--remote-debugging-port=")
-                .and_then(|p| p.parse::<u16>().ok())
-                .is_some_and(|p| p > 0);
-        if keep && !out.contains(arg) {
-            out.push(arg.clone());
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
-    #[test]
-    fn defaults_match_the_contract() {
-        let cfg = Config::default();
-        assert_eq!(cfg.main.url, "main.html");
-        assert_eq!(cfg.main.crash_restart_limit, 3);
-        assert_eq!(cfg.packages_backend, PackagesBackend::None);
-        assert_eq!(cfg.ads.gesture_window_ms, 1500);
-        assert!(cfg.ads.request_shaping);
-        assert_eq!(cfg.ads.max_recoveries, None);
-        assert_eq!(cfg.ads.guest_limits.bytes_per_second, 262_144);
-        assert_eq!(cfg.analytics.host_label, "tauri");
-        assert_eq!(cfg.analytics.host_version, None);
-        assert_eq!(cfg.analytics.muid_strategy, MuidStrategy::MachineId);
-        assert_eq!(cfg.consent.host_cookie_fallback, CookieFallback::Auto);
-        assert!(!cfg.logging.enabled);
-        assert_eq!(cfg.ipc.max_message_bytes, 8 * 1024 * 1024);
-        assert_eq!(cfg.ipc.max_queued_messages, 4096);
-        assert!(cfg.updater.enabled);
-        assert_eq!(cfg.email_hashes.encoding, HashEncoding::Hex);
-        cfg.validate().unwrap();
-        // An empty object and the full serialised default both deserialise to the default.
-        assert_eq!(serde_json::from_str::<Config>("{}").unwrap(), cfg);
-        let json = serde_json::to_value(&cfg).unwrap();
-        assert_eq!(serde_json::from_value::<Config>(json).unwrap(), cfg);
+    fn parse(raw: &Value) -> Config {
+        Config::from_value(raw).expect("valid config")
     }
 
-    #[test]
-    fn full_contract_example_parses() {
-        let text = r#"{
-          "main": { "url": "main.html", "devtools": false, "crashRestartLimit": 3 },
-          "webview": { "disableGpu": false, "remoteDebuggingPort": null, "additionalBrowserArgs": [] },
-          "uid": null,
-          "packagesBackend": "none",
-          "ads": { "testAd": false, "requestShaping": true, "owVersionOverride": null, "macPrivateHeaderApi": false,
-                   "transparentGuests": true,
-                   "gestureWindowMs": 1500, "maxRecoveries": null, "loadErrorRetryMs": 5000,
-                   "guestLimits": { "eventsPerSecond": 50, "eventBurst": 100, "bytesPerSecond": 262144, "externalOpensPerMinute": 20 } },
-          "analytics": { "hostLabel": "tauri", "hostVersion": null, "muidStrategy": "machine-id", "userSwitch": false },
-          "consent": { "cmpUrl": null, "readyTimeoutMs": 30000, "hostCookieFallback": "auto" },
-          "logging": { "enabled": false },
-          "emailHashes": { "encoding": "hex" },
-          "ipc": { "invokeTimeoutMs": 0, "startupQueueMax": 1024, "startupTimeoutMs": 30000, "maxMessageBytes": 8388608,
-                   "maxInFlightInvokes": 256, "maxQueuedMessages": 4096 },
-          "updater": { "enabled": true, "installerArgs": null, "publisherNames": null, "pubkey": null },
-          "shell": { "openPathAllowExecutables": false },
-          "fs": { "scope": [] },
-          "state": { "appDataDir": null }
-        }"#;
-        let cfg: Config = serde_json::from_str(text).unwrap();
-        assert_eq!(cfg, Config::default());
-    }
-
-    #[test]
-    fn guests_are_transparent_by_default() {
-        assert!(Config::default().ads.transparent_guests);
-        let cfg: Config =
-            serde_json::from_str(r#"{ "ads": { "transparentGuests": false } }"#).unwrap();
-        assert!(!cfg.ads.transparent_guests);
-    }
-
-    #[test]
-    fn unknown_fields_are_rejected() {
-        assert!(serde_json::from_str::<Config>(r#"{"ads":{"testAdd":true}}"#).is_err());
-        assert!(serde_json::from_str::<Config>(r#"{"bogus":1}"#).is_err());
-    }
-
-    #[test]
-    fn removed_keys_are_rejected_and_named() {
-        for json in [
-            r#"{"analytics":{"hostFields":true}}"#,
-            r#"{"ads":{"experimentalElementApi":true}}"#,
-            r#"{"ads":{"exposeEmailHashesToGuest":true}}"#,
-            r#"{"ads":{"legacyHostMessages":true}}"#,
-            r#"{"consent":{"gateAdsOnConsent":true}}"#,
-            r#"{"consent":{"cmpRequired":"always"}}"#,
-            r#"{"packagesBackend":"auto"}"#,
-            r#"{"packagesBackend":"simulated"}"#,
-        ] {
-            assert!(serde_json::from_str::<Config>(json).is_err(), "{json}");
-            let raw: Value = serde_json::from_str(json).unwrap();
-            assert_eq!(removed_key_warnings(&raw).len(), 1, "{json}");
+    fn error(raw: &Value, validation: Validation) -> String {
+        match Config::from_value(raw) {
+            Err(err) => err.to_string(),
+            Ok(config) => config
+                .validate(validation)
+                .expect_err("invalid config")
+                .to_string(),
         }
-        assert!(removed_key_warnings(&serde_json::json!({"ads":{"testAd":true}})).is_empty());
+    }
+
+    const DEBUG: Validation = Validation {
+        release: false,
+        updater_feature: false,
+        build_step: false,
+    };
+    const RELEASE: Validation = Validation {
+        release: true,
+        updater_feature: false,
+        build_step: false,
+    };
+    const RELEASE_BUILD_STEP: Validation = Validation {
+        release: true,
+        updater_feature: false,
+        build_step: true,
+    };
+    const RELEASE_UPDATER: Validation = Validation {
+        release: true,
+        updater_feature: true,
+        build_step: false,
+    };
+
+    #[test]
+    fn defaults() {
+        let c = parse(&Value::Null);
+        assert_eq!(c, Config::default());
+        assert!(c.ads.request_shaping && c.ads.transparent_guests && c.ads.recreate_on_reload);
+        assert_eq!(c.ads.load_error_retry_ms, 5_000);
+        assert_eq!(c.ads.recreate_min_interval_ms, 30_000);
+        assert_eq!(c.ads.recreate_max_per_hour, 30);
+        assert_eq!(c.ads.guest_limits.events_per_second, 50);
+        assert_eq!(c.ads.guest_limits.event_burst, 100);
+        assert_eq!(c.ads.guest_limits.bytes_per_second, 262_144);
+        assert_eq!(c.ads.guest_limits.external_opens_per_minute, 20);
+        assert_eq!(c.ads.guest_limits.external_opens_per_minute_app, 20);
+        assert_eq!(c.ads.guest_limits.activation_window_ms, 5_000);
+        assert_eq!(c.analytics.host_label, "tauri");
+        assert_eq!(c.analytics.muid_strategy, MuidStrategy::MachineId);
+        assert_eq!(
+            c.consent.allowed_cmp_origins,
+            ["https://content.overwolf.com"]
+        );
+        assert_eq!(c.consent.ready_timeout_ms, 30_000);
+        assert_eq!(c.consent.eu_only_timeout_ms, 60_000);
+        assert!(c.updater.install_on_exit);
+        assert_eq!(c.updater.connect_timeout_ms, 30_000);
+        assert_eq!(c.updater.read_timeout_ms, 60_000);
+        assert!(!c.signing.enabled && c.signing.require_signing);
+        c.validate(DEBUG).unwrap();
+        c.validate(RELEASE).unwrap();
     }
 
     #[test]
-    fn validation_rejects_bad_values() {
-        let check = |json: &str, path: &str| {
-            let cfg: Config = serde_json::from_str(json).unwrap();
-            let e = cfg.validate().unwrap_err();
-            assert_eq!(e.path, path, "{json}");
-            assert!(e.to_string().starts_with("plugins.overwolf."));
-        };
-        check(r#"{"main":{"url":""}}"#, "main.url");
-        check(
-            r#"{"main":{"url":"https://evil.example/main.html"}}"#,
-            "main.url",
-        );
-        check(r#"{"main":{"url":"../outside.html"}}"#, "main.url");
-        check(
-            r#"{"main":{"crashRestartLimit":0}}"#,
-            "main.crashRestartLimit",
-        );
-        check(
-            r#"{"webview":{"remoteDebuggingPort":0}}"#,
-            "webview.remoteDebuggingPort",
-        );
-        check(
-            r#"{"webview":{"additionalBrowserArgs":["--a b"]}}"#,
-            "webview.additionalBrowserArgs[0]",
-        );
-        check(
-            r#"{"webview":{"additionalBrowserArgs":["--ok","nope"]}}"#,
-            "webview.additionalBrowserArgs[1]",
-        );
-        check(r#"{"uid":"bad uid"}"#, "uid");
-        check(
-            r#"{"ads":{"gestureWindowMs":60001}}"#,
-            "ads.gestureWindowMs",
-        );
-        check(
-            r#"{"ads":{"guestLimits":{"eventBurst":0}}}"#,
-            "ads.guestLimits.eventBurst",
-        );
-        check(
-            r#"{"consent":{"cmpUrl":"http://example.com/cmp.html"}}"#,
-            "consent.cmpUrl",
-        );
-        check(
-            r#"{"analytics":{"hostLabel":"Tauri"}}"#,
-            "analytics.hostLabel",
-        );
-        check(r#"{"analytics":{"hostLabel":""}}"#, "analytics.hostLabel");
-        check(
-            r#"{"analytics":{"hostVersion":"1 2"}}"#,
-            "analytics.hostVersion",
-        );
-        check(
-            r#"{"ads":{"owVersionOverride":""}}"#,
-            "ads.owVersionOverride",
-        );
-        check(
-            r#"{"consent":{"readyTimeoutMs":0}}"#,
-            "consent.readyTimeoutMs",
-        );
-        check(
-            r#"{"ipc":{"maxInFlightInvokes":0}}"#,
-            "ipc.maxInFlightInvokes",
-        );
-        check(r#"{"ipc":{"startupTimeoutMs":0}}"#, "ipc.startupTimeoutMs");
-        check(
-            r#"{"ipc":{"maxMessageBytes":300000000}}"#,
-            "ipc.maxMessageBytes",
-        );
-        check(r#"{"updater":{"pubkey":" "}}"#, "updater.pubkey");
-        check(r#"{"fs":{"scope":["relative/dir"]}}"#, "fs.scope[0]");
-        check(r#"{"fs":{"scope":["$HOME/x"]}}"#, "fs.scope[0]");
-        check(r#"{"fs":{"scope":["$PICTURES/../x"]}}"#, "fs.scope[0]");
+    fn every_key_round_trips() {
+        let raw = json!({
+            "author": "A", "name": "N", "uid": "abc",
+            "ads": {
+                "testAd": true, "disableOptimization": true, "disableFpd": true,
+                "requestShaping": false, "owVersionOverride": "1.2", "macPrivateHeaderApi": true,
+                "transparentGuests": false, "maxRecoveries": 3, "loadErrorRetryMs": 1,
+                "recreateOnReload": false, "recreateMinIntervalMs": 2, "recreateMaxPerHour": 3,
+                "allowedEmbedderOrigins": ["http://localhost:1430"], "browserArgs": ["--x"],
+                "guestLimits": {
+                    "eventsPerSecond": 1, "eventBurst": 2, "bytesPerSecond": 3,
+                    "externalOpensPerMinute": 4, "externalOpensPerMinuteApp": 5,
+                    "activationWindowMs": 6
+                }
+            },
+            "analytics": {
+                "hostLabel": "electron", "hostVersion": "42", "muidStrategy": "per-install",
+                "disableAnonymous": true, "excludeWindows": ["tray*"], "userSwitch": true
+            },
+            "consent": {
+                "cmpUrl": "https://example.com/cmp.html", "allowedCmpOrigins": ["https://example.com"],
+                "readyTimeoutMs": 1, "euOnlyTimeoutMs": 2, "hostCookieFallback": "never"
+            },
+            "emailHashes": { "encoding": "base64" },
+            "updater": {
+                "endpoint": "https://example.com/feed", "channel": "beta", "allowPrerelease": true,
+                "allowDowngrade": true, "allowJsDowngrade": true, "installOnExit": false,
+                "installerArgs": ["/S", "/UPDATE"], "publisherNames": ["CN=Example"], "pubkey": "k",
+                "dangerousSkipPublisherCheck": true, "connectTimeoutMs": 1, "readTimeoutMs": 2
+            },
+            "signing": { "enabled": true, "requireSigning": false, "owCertSigning": true, "entry": "index.html" },
+            "state": { "appDataDir": "/tmp/x" }
+        });
+        let c = parse(&raw);
+        assert_eq!(serde_json::to_value(&c).unwrap(), raw);
+        c.validate(DEBUG).unwrap();
     }
 
     #[test]
-    fn scope_templates() {
-        // An absolute path needs a drive or UNC prefix on Windows.
-        let absolute = if cfg!(windows) {
-            r"C:\abs\path"
-        } else {
-            "/abs/path"
-        };
-        for ok in [
-            "$PICTURES/Overwolf/$APPNAME",
-            "$USERDATA",
-            "$TEMP/x",
-            absolute,
+    fn removed_keys_carry_a_migration_hint() {
+        for (raw, path) in [
+            (json!({ "main": {} }), "main"),
+            (json!({ "ipc": {} }), "ipc"),
+            (json!({ "shell": {} }), "shell"),
+            (json!({ "fs": { "scope": [] } }), "fs"),
+            (json!({ "webview": { "disableGpu": true } }), "webview"),
+            (json!({ "packagesBackend": "none" }), "packagesBackend"),
+            (json!({ "logging": { "enabled": true } }), "logging"),
+            (
+                json!({ "ads": { "gestureWindowMs": 1 } }),
+                "ads.gestureWindowMs",
+            ),
+            (
+                json!({ "ads": { "guestHeartbeatTimeoutMs": 1 } }),
+                "ads.guestHeartbeatTimeoutMs",
+            ),
+            (
+                json!({ "ads": { "recreateOnReload": "auto" } }),
+                "ads.recreateOnReload",
+            ),
         ] {
-            validate_scope_template(ok).unwrap();
+            let err = Config::from_value(&raw).unwrap_err();
+            assert_eq!(err.path, path);
+            let text = err.to_string();
+            assert!(
+                text.starts_with(&format!(
+                    "plugins.overwolf.{path}: removed in ow-tauri 1.0 ("
+                )),
+                "{text}"
+            );
+            assert!(text.contains("; see docs/MIGRATION.md#"), "{text}");
         }
-        assert!(validate_scope_template("$PICTURESX").is_err());
-        assert_eq!(
-            validate_scope_template("/abs/path").is_ok(),
-            cfg!(not(windows))
+    }
+
+    /// Regression (W1 gate): Tauri parses `plugins.overwolf` with
+    /// `serde_json::from_value`, which used to bypass `from_value` and lose
+    /// the migration hints.
+    #[test]
+    fn tauris_own_parse_keeps_the_hints() {
+        let err = serde_json::from_value::<Config>(json!({ "main": {} })).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.starts_with("plugins.overwolf.main: removed in ow-tauri 1.0 ("),
+            "{text}"
         );
+        assert!(text.contains("docs/MIGRATION.md#no-main-webview"), "{text}");
+        let none = serde_json::from_value::<Option<Config>>(Value::Null).unwrap();
+        assert!(none.is_none());
+        let some = serde_json::from_value::<Option<Config>>(json!({ "author": "A" })).unwrap();
+        assert_eq!(some.unwrap().author.as_deref(), Some("A"));
     }
 
     #[test]
-    fn cmp_url_scope() {
-        assert!(is_allowed_cmp_url(
-            "https://content.overwolf.com/monsdk/electron/latest/cmp/x.html?a=b"
-        ));
-        assert!(!is_allowed_cmp_url(
-            "https://content.overwolf.com/monsdk/electron/../../x"
-        ));
-        assert!(!is_allowed_cmp_url("https://content.overwolf.com/other/"));
+    fn unknown_keys_name_their_object() {
+        let err = Config::from_value(&json!({ "nope": 1 })).unwrap_err();
+        assert_eq!(err.path, "");
+        assert!(
+            err.message
+                .starts_with("unknown field \"nope\", expected one of"),
+            "{}",
+            err.message
+        );
+        let err = Config::from_value(&json!({ "ads": { "guestLimits": { "x": 1 } } })).unwrap_err();
+        assert_eq!(err.path, "ads.guestLimits");
+        let err = Config::from_value(&json!({ "consent": { "cmpURL": "x" } })).unwrap_err();
+        assert_eq!(err.path, "consent");
+        assert!(err.to_string().contains("unknown field \"cmpURL\""));
     }
 
     #[test]
-    fn switches() {
-        let s = Switches::parse([
-            "exe",
-            "--owepm-package-channel=gep:beta,overlay:qa",
-            "--force-phased-package=gep",
-            "--ow-tauri-packages-backend=none",
-            "--ow-tauri-relaunch-after=123",
-            "--unrelated",
-        ]);
-        assert!(!s.test_ad);
-        assert_eq!(s.package_channel.as_deref(), Some("gep:beta,overlay:qa"));
-        assert_eq!(s.force_phased_package, Some(Some("gep".into())));
-        assert_eq!(s.packages_backend.as_deref(), Some("none"));
-        assert_eq!(s.relaunch_after.as_deref(), Some("123"));
-        // The executable itself is never a switch.
-        assert!(!Switches::parse(["--test-ad"]).test_ad);
-        let argv: Vec<String> = vec!["exe".into(), "--test-ad".into()];
-        assert!(Switches::has_switch(&argv, "test-ad"));
-        assert!(!Switches::has_switch(&argv, "test"));
+    fn wrong_types_name_the_leaf() {
+        let err = Config::from_value(&json!({ "analytics": { "userSwitch": "yes" } })).unwrap_err();
+        assert_eq!(err.path, "analytics.userSwitch");
+        let err = Config::from_value(&json!({ "uid": 7 })).unwrap_err();
+        assert_eq!(err.path, "uid");
+        let err = Config::from_value(&json!({ "ads": { "guestLimits": { "eventBurst": -1 } } }))
+            .unwrap_err();
+        assert_eq!(err.path, "ads.guestLimits.eventBurst");
     }
 
+    /// Every row of the DESIGN §3.2 validation table.
     #[test]
-    fn env_overrides() {
-        let vars = [
-            ("OW_TAURI_TEST_AD", "0"),
-            ("OW_TAURI_PACKAGES_BACKEND", "native"),
-            ("OW_TAURI_PACKAGE_RUNTIME", "/opt/runtime"),
-            ("OW_TAURI_REMOTE_DEBUGGING_PORT", "9222"),
-            ("OW_CLI_EMAIL", "dev@example.com"),
+    #[expect(clippy::too_many_lines, reason = "one row per table entry")]
+    fn validation_table() {
+        let rows: Vec<(Value, Validation, &str)> = vec![
+            (
+                json!({ "uid": "  " }),
+                DEBUG,
+                "plugins.overwolf.uid: must be 1 to 64 ASCII letters or digits",
+            ),
+            (
+                json!({ "uid": "a".repeat(65) }),
+                DEBUG,
+                "plugins.overwolf.uid: must be 1 to 64 ASCII letters or digits",
+            ),
+            (
+                json!({ "author": "A" }),
+                RELEASE_BUILD_STEP,
+                "plugins.overwolf: set \"uid\", or both \"author\" and \"name\", before a release build (the uid must not depend on defaults)",
+            ),
+            (
+                json!({ "analytics": { "hostLabel": "Tauri" } }),
+                DEBUG,
+                "plugins.overwolf.analytics.hostLabel: must be 1 to 32 lower-case letters, digits or _ starting with a letter",
+            ),
+            (
+                json!({ "analytics": { "excludeWindows": ["ok", ""] } }),
+                DEBUG,
+                "plugins.overwolf.analytics.excludeWindows[1]: must be a non-empty label glob",
+            ),
+            (
+                json!({ "analytics": { "excludeWindows": ["owad-*"] } }),
+                DEBUG,
+                "plugins.overwolf.analytics.excludeWindows[0]: must be a non-empty label glob",
+            ),
+            (
+                json!({ "consent": { "cmpUrl": "http://example.com/" } }),
+                DEBUG,
+                "plugins.overwolf.consent.cmpUrl: must be an https URL",
+            ),
+            (
+                json!({ "consent": { "allowedCmpOrigins": ["https://example.com/path"] } }),
+                DEBUG,
+                "plugins.overwolf.consent.allowedCmpOrigins[0]: must be an https origin (scheme://host[:port], no path)",
+            ),
+            (
+                json!({ "consent": { "allowedCmpOrigins": ["http://example.com"] } }),
+                DEBUG,
+                "plugins.overwolf.consent.allowedCmpOrigins[0]: must be an https origin (scheme://host[:port], no path)",
+            ),
+            (
+                json!({ "ads": { "allowedEmbedderOrigins": ["https://www.overwolf.com"] } }),
+                DEBUG,
+                "plugins.overwolf.ads.allowedEmbedderOrigins[0]: must be an http(s) origin that is not an Overwolf origin",
+            ),
+            (
+                json!({ "ads": { "allowedEmbedderOrigins": ["file:///x"] } }),
+                DEBUG,
+                "plugins.overwolf.ads.allowedEmbedderOrigins[0]: must be an http(s) origin that is not an Overwolf origin",
+            ),
+            (
+                json!({ "consent": { "readyTimeoutMs": 0 } }),
+                DEBUG,
+                "plugins.overwolf.consent.readyTimeoutMs: must be 1 to 600000",
+            ),
+            (
+                json!({ "consent": { "euOnlyTimeoutMs": 600_001 } }),
+                DEBUG,
+                "plugins.overwolf.consent.euOnlyTimeoutMs: must be 1 to 600000",
+            ),
+            (
+                json!({ "ads": { "guestLimits": { "eventBurst": 0 } } }),
+                DEBUG,
+                "plugins.overwolf.ads.guestLimits.eventBurst: must be greater than 0",
+            ),
+            (
+                json!({ "ads": { "recreateMaxPerHour": 0 } }),
+                DEBUG,
+                "plugins.overwolf.ads.recreateMaxPerHour: must be greater than 0",
+            ),
+            (
+                json!({ "ads": { "browserArgs": ["disable-gpu"] } }),
+                DEBUG,
+                "plugins.overwolf.ads.browserArgs[0]: must be a --switch other than --user-data-dir (and no remote debugging in release builds)",
+            ),
+            (
+                json!({ "ads": { "browserArgs": ["--user-data-dir=/x"] } }),
+                DEBUG,
+                "plugins.overwolf.ads.browserArgs[0]: must be a --switch other than --user-data-dir (and no remote debugging in release builds)",
+            ),
+            (
+                json!({ "ads": { "browserArgs": ["--remote-debugging-port=9222"] } }),
+                RELEASE,
+                "plugins.overwolf.ads.browserArgs[0]: must be a --switch other than --user-data-dir (and no remote debugging in release builds)",
+            ),
+            (
+                json!({ "ads": { "browserArgs": ["--ok", "--remote-allow-origins=*"] } }),
+                RELEASE,
+                "plugins.overwolf.ads.browserArgs[1]: must be a --switch other than --user-data-dir (and no remote debugging in release builds)",
+            ),
+            (
+                json!({ "updater": { "endpoint": "http://example.com/feed" } }),
+                DEBUG,
+                "plugins.overwolf.updater.endpoint: must be an https URL",
+            ),
+            (
+                json!({ "updater": { "endpoint": "http://127.0.0.1:8080/feed", "pubkey": "k" } }),
+                RELEASE,
+                "plugins.overwolf.updater.endpoint: must be an https URL",
+            ),
+            (
+                json!({ "updater": { "pubkey": " " } }),
+                DEBUG,
+                "plugins.overwolf.updater.pubkey: must not be empty when set",
+            ),
+            (
+                json!({}),
+                RELEASE_UPDATER,
+                "plugins.overwolf.updater: set publisherNames (your installer's certificate subject) or pubkey before a release build",
+            ),
+            (
+                json!({ "updater": { "publisherNames": [" "] } }),
+                RELEASE_UPDATER,
+                "plugins.overwolf.updater: set publisherNames (your installer's certificate subject) or pubkey before a release build",
+            ),
+            (
+                json!({ "updater": { "dangerousSkipPublisherCheck": true, "pubkey": "k" } }),
+                RELEASE_UPDATER,
+                "plugins.overwolf.updater.dangerousSkipPublisherCheck: not allowed in release builds",
+            ),
+            (
+                json!({ "state": { "appDataDir": "/tmp/x" } }),
+                RELEASE,
+                "plugins.overwolf.state.appDataDir: only allowed in debug builds",
+            ),
         ];
-        let get = |k: &str| {
-            vars.iter()
-                .find(|(n, _)| *n == k)
-                .map(|(_, v)| (*v).to_owned())
-        };
-        let (env, warnings) = EnvOverrides::read(get, true);
-        assert!(!env.test_ad, "only 1 enables test ads");
-        assert_eq!(env.remote_debugging_port, Some(9222));
-        assert_eq!(env.package_runtime, Some(PathBuf::from("/opt/runtime")));
-        assert_eq!(env.dev_email.as_deref(), Some("dev@example.com"));
-        assert!(warnings.is_empty());
-        let (env, warnings) = EnvOverrides::read(get, false);
-        assert_eq!(env.remote_debugging_port, None);
-        assert_eq!(warnings.len(), 1);
-        let (_, warnings) = EnvOverrides::read(
-            |k| (k == "OW_TAURI_REMOTE_DEBUGGING_PORT").then(|| "x".into()),
-            true,
-        );
-        assert_eq!(warnings.len(), 1);
+        for (raw, validation, expected) in rows {
+            assert_eq!(error(&raw, validation), expected, "{raw}");
+        }
+    }
+
+    /// The release-only rules accept the same values in debug builds, and
+    /// the pinned-uid rule only runs in the build step.
+    #[test]
+    fn release_only_rules_pass_in_debug() {
+        for raw in [
+            json!({ "author": "A" }),
+            json!({ "ads": { "browserArgs": ["--remote-debugging-port=9222"] } }),
+            json!({ "updater": { "endpoint": "http://127.0.0.1:8080/feed" } }),
+            json!({ "updater": { "endpoint": "http://localhost:8080/feed" } }),
+            json!({ "updater": { "dangerousSkipPublisherCheck": true } }),
+            json!({ "state": { "appDataDir": "/tmp/x" } }),
+        ] {
+            parse(&raw).validate(DEBUG).unwrap();
+        }
+        // The pinned-uid rule is the build step's; at run time the uid is
+        // already fixed by the build.
+        parse(&json!({ "author": "A" })).validate(RELEASE).unwrap();
+        for raw in [
+            json!({ "uid": "abc" }),
+            json!({ "author": "A", "name": "N" }),
+        ] {
+            parse(&raw).validate(RELEASE_BUILD_STEP).unwrap();
+        }
+        // Either publisher data satisfies the updater rule.
+        for raw in [
+            json!({ "updater": { "publisherNames": ["CN=Example"] } }),
+            json!({ "updater": { "pubkey": "k" } }),
+        ] {
+            parse(&raw).validate(RELEASE_UPDATER).unwrap();
+        }
     }
 
     #[test]
-    fn override_order_and_bad_values() {
-        let mut cfg = Config::default();
-        let env = EnvOverrides {
-            test_ad: false,
-            packages_backend: Some("bogus".into()),
-            ..EnvOverrides::default()
-        };
-        let sw = Switches::parse(["exe", "--test-ad"]);
-        let warnings = apply_overrides(&mut cfg, &env, &sw);
-        assert_eq!(warnings.len(), 1);
-        assert!(cfg.ads.test_ad);
-        assert_eq!(cfg.packages_backend, PackagesBackend::None);
-        let env = EnvOverrides {
-            packages_backend: Some("simulated".into()),
-            ..EnvOverrides::default()
-        };
-        let warnings = apply_overrides(&mut cfg, &env, &Switches::default());
+    fn accepted_values() {
+        for raw in [
+            json!({ "uid": "  abc  " }),
+            json!({ "ads": { "allowedEmbedderOrigins": ["http://localhost:1430", "https://app.example.com:8443"] } }),
+            json!({ "consent": { "allowedCmpOrigins": ["https://content.overwolf.com", "https://cmp.example.com:444"] } }),
+            json!({ "consent": { "readyTimeoutMs": 600_000, "euOnlyTimeoutMs": 1 } }),
+            json!({ "analytics": { "excludeWindows": ["tray", "hud-?", "*-overlay"] } }),
+            json!({ "ads": { "browserArgs": ["--disable-gpu", "--lang=en"] } }),
+        ] {
+            parse(&raw).validate(DEBUG).unwrap();
+        }
+    }
+
+    #[test]
+    fn normalize_adds_update_once() {
+        let mut c = parse(&json!({ "updater": { "installerArgs": ["/S", "/update"] } }));
+        assert!(c.normalize().is_empty());
+        let mut c = parse(&json!({ "updater": { "installerArgs": ["--force-run"] } }));
+        assert!(c.normalize().is_empty());
         assert_eq!(
-            warnings,
-            ["OW_TAURI_PACKAGES_BACKEND=\"simulated\" is not none or native; ignored"]
+            c.updater.installer_args.as_deref(),
+            Some(&["--force-run".to_owned()][..])
         );
     }
 
     #[test]
-    fn browser_arguments() {
-        let base = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows";
-        assert_eq!(browser_args(&WebviewConfig::default(), &[], true), base);
-        let cfg = WebviewConfig {
-            disable_gpu: false,
-            remote_debugging_port: Some(9222),
-            additional_browser_args: vec!["--lang=en".into()],
-        };
-        assert_eq!(
-            browser_args(&cfg, &[], true),
-            format!("{base} --remote-debugging-port=9222 --lang=en")
-        );
-        assert_eq!(
-            browser_args(&cfg, &[], false),
-            format!("{base} --lang=en"),
-            "no port in release"
-        );
-        let pending = vec![
-            "--disable-gpu".to_owned(),
-            "--remote-debugging-port=9333".to_owned(),
-        ];
-        assert_eq!(
-            browser_args(&WebviewConfig::default(), &pending, true),
-            format!("{base} --disable-gpu --remote-debugging-port=9333")
-        );
-        assert_eq!(
-            filter_pending_browser_args(&["--remote-debugging-port=0".into()]),
-            Vec::<String>::new()
-        );
+    fn origins() {
+        assert!(is_origin("https://a.example", &["https"]));
+        assert!(is_origin("https://a.example:8443", &["https"]));
+        assert!(!is_origin("https://a.example/", &["https"]));
+        assert!(!is_origin("https://user@a.example", &["https"]));
+        assert!(!is_origin("https://a.example?x", &["https"]));
+        assert!(is_overwolf_origin("https://overwolf.com"));
+        assert!(is_overwolf_origin("https://content.overwolf.com"));
+        assert!(!is_overwolf_origin("https://notoverwolf.com"));
+        assert!(is_loopback_http("http://[::1]:1/x"));
+        assert!(!is_loopback_http("http://example.com/x"));
     }
 }

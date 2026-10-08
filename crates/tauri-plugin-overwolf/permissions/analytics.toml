@@ -1,0 +1,10 @@
+"$schema" = "schemas/schema.json"
+
+[[set]]
+identifier = "analytics"
+description = "Opt-in: the external payment user id, the app's analytics user switch and the persisted anonymous-analytics preference (they add data or change future launches)."
+permissions = [
+  "allow-set-external-payment-user-id",
+  "allow-set-analytics-user-enabled",
+  "allow-set-anonymous-analytics-preference",
+]

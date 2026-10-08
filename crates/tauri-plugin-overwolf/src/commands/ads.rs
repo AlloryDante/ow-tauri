@@ -1,243 +1,106 @@
-//! Ads, consent, analytics and packages commands (CONTRACT A.2.2, A.2.4,
-//! A.2.5, A.2.6, A.2.7).
+//! `<owadview>` commands (DESIGN §3.5, §4.4) and the ad guests' own
+//! command. Signatures are final; guest hosting arrives in W2, until then
+//! `adview_mount` answers `unsupported` and no element is ever mounted.
 
-use serde_json::{Map, Value};
-use tauri::ipc::Request;
+use serde::Serialize;
+use serde_json::Value;
+use tauri::ipc::Channel;
 use tauri::{Runtime, State, Webview};
 
-use super::{body, forbidden, host, require_main, require_ui};
-use crate::ads::{ADVIEW_SCOPE, AdviewCommandName, AdviewEvent, AdviewMount, AdviewUpdate};
-use crate::config::filter_pending_browser_args;
-use crate::consent::{CmpEventData, CmpEventName, CmpWindowOptions};
+use super::{core, require_app_webview};
+use crate::ads::{
+    AdviewCommandName, AdviewMount, AdviewUpdate, ChannelMessage, valid_element_id, valid_geometry,
+};
+use crate::config::ADVIEW_LABEL_PREFIX;
 use crate::error::{Error, Result};
 use crate::ext::Overwolf;
-use crate::state::log::LogLevel;
-use crate::window::{WebviewClass, classify};
 
-/// `adview_mount` result.
-#[derive(Debug, serde::Serialize)]
+/// What `adview_mount` returns.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Mounted {
-    guest_label: String,
+    /// The guest webview's label (`owad-<n>`).
+    pub(crate) guest_label: String,
 }
 
-#[tauri::command]
-pub(crate) async fn is_cmp_required<R: Runtime>(
-    webview: Webview<R>,
-    state: State<'_, Overwolf<R>>,
-) -> Result<bool> {
-    require_main(&webview)?;
-    Ok(host(&state).is_cmp_required().await)
+/// The element `element_id` of `webview`, or `not-found` (DESIGN §4.5: an
+/// element mounted by another webview is never found).
+fn mounted<R: Runtime>(
+    core: &crate::host::Core<R>,
+    webview: &Webview<R>,
+    element_id: &str,
+) -> Result<crate::host::ads::Mount> {
+    core.ads
+        .mount_of(webview.label(), element_id)
+        .ok_or_else(|| Error::not_found(format!("no mounted element {element_id}")))
 }
 
-#[tauri::command]
-pub(crate) async fn open_cmp_window<R: Runtime>(
-    webview: Webview<R>,
-    state: State<'_, Overwolf<R>>,
-    options: Option<CmpWindowOptions>,
-) -> Result<()> {
-    require_main(&webview)?;
-    host(&state).open_cmp_window(&options.unwrap_or_default())
-}
-
-#[tauri::command]
-pub(crate) async fn open_ad_privacy_settings_window<R: Runtime>(
-    webview: Webview<R>,
-    state: State<'_, Overwolf<R>>,
-    options: Option<CmpWindowOptions>,
-) -> Result<()> {
-    require_main(&webview)?;
-    host(&state).open_cmp_window(&options.unwrap_or_default())
-}
-
-#[tauri::command]
-pub(crate) async fn set_user_email_hashes<R: Runtime>(
-    webview: Webview<R>,
-    state: State<'_, Overwolf<R>>,
-    hashes: Option<Map<String, Value>>,
-) -> Result<()> {
-    require_main(&webview)?;
-    host(&state).send_email_hashes(hashes.as_ref());
-    Ok(())
-}
-
-#[tauri::command]
-pub(crate) async fn set_external_payment_user_id<R: Runtime>(
-    webview: Webview<R>,
-    state: State<'_, Overwolf<R>>,
-    options: Option<Map<String, Value>>,
-) -> Result<()> {
-    require_main(&webview)?;
-    let host = host(&state);
-    let options = options.unwrap_or_default();
-    let user_id_ok = match options.get("userId") {
-        Some(Value::String(s)) => !s.is_empty(),
-        Some(Value::Number(_)) => true,
-        _ => false,
-    };
-    if !user_id_ok {
-        let message = "providerName and userId are mandatory";
-        return Err(
-            Error::invalid_argument(message).with_data(serde_json::json!({ "message": message }))
-        );
-    }
-    if !host.with_core(|c| c.main_ready) {
-        return Err(Error::not_ready("ow-electron is not ready yet!"));
-    }
-    host.analytics_sub_info(options).await;
-    Ok(())
-}
-
-#[tauri::command]
-pub(crate) async fn analytics_set_user_enabled<R: Runtime>(
-    webview: Webview<R>,
-    state: State<'_, Overwolf<R>>,
-    enabled: bool,
-) -> Result<()> {
-    require_main(&webview)?;
-    let host = host(&state);
-    if !host.info.config.analytics.user_switch {
-        return Err(Error::unsupported(
-            "analytics_set_user_enabled needs plugins.overwolf.analytics.userSwitch.",
-        ));
-    }
-    host.set_analytics_user_enabled(enabled);
-    host.ow_tauri
-        .update(|s| s.analytics_user_enabled = Some(enabled))
-        .map_err(|e| Error::from_io("ow-tauri.json", &e))
-}
-
-#[tauri::command]
-pub(crate) async fn app_record_browser_args<R: Runtime>(
-    webview: Webview<R>,
-    state: State<'_, Overwolf<R>>,
-    args: Vec<String>,
-) -> Result<()> {
-    require_main(&webview)?;
-    let host = host(&state);
-    let args = filter_pending_browser_args(&args);
-    if let Err(err) = host.ow_tauri.update(|s| s.pending_browser_args = args) {
-        host.log(
-            LogLevel::Warn,
-            &format!("could not record browser switches: {}", err.kind()),
-        );
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub(crate) async fn packages_snapshot<R: Runtime>(
-    webview: Webview<R>,
-    state: State<'_, Overwolf<R>>,
-) -> Result<Value> {
-    require_main(&webview)?;
-    Ok(host(&state)
-        .with_core(|c| c.state.get("packages").cloned())
-        .unwrap_or(Value::Null))
-}
-
-#[tauri::command]
-pub(crate) async fn packages_relaunch<R: Runtime>(webview: Webview<R>) -> Result<()> {
-    require_main(&webview)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub(crate) async fn packages_set_channel<R: Runtime>(
-    webview: Webview<R>,
-    name: String,
-    channel: Option<String>,
-) -> Result<()> {
-    require_main(&webview)?;
-    let _ = channel;
-    Err(crate::packages::set_channel_error(&name))
-}
-
-#[tauri::command]
-pub(crate) async fn packages_get_available_channels<R: Runtime>(
-    webview: Webview<R>,
-    names: Vec<String>,
-) -> Result<Value> {
-    require_main(&webview)?;
-    crate::packages::get_available_channels(&names)
-}
-
-#[tauri::command]
-pub(crate) async fn packages_get_channel<R: Runtime>(
-    webview: Webview<R>,
-    names: Option<Vec<String>>,
-) -> Result<Value> {
-    require_main(&webview)?;
-    Ok(crate::packages::get_channel(&names.unwrap_or_default()))
-}
-
-/// The longest `adview_mount` waits for the embedder's `document.title`.
-const TITLE_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
-
-/// The embedder document's `document.title` (ow-electron's `windowTitle`
-/// follows it, D.2); `None` when the webview does not answer in time.
-async fn document_title<R: Runtime>(webview: &Webview<R>) -> Option<String> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    let tx = std::sync::Mutex::new(Some(tx));
-    webview
-        .eval_with_callback("document.title", move |json| {
-            if let Some(tx) = tx
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take()
-            {
-                let _ = tx.send(serde_json::from_str::<String>(&json).ok());
-            }
-        })
-        .ok()?;
-    tokio::time::timeout(TITLE_WAIT, rx).await.ok()?.ok()?
-}
-
+/// Mounts an `<owadview>` element: creates its guest.
 #[tauri::command]
 pub(crate) async fn adview_mount<R: Runtime>(
     webview: Webview<R>,
     state: State<'_, Overwolf<R>>,
-    request: Request<'_>,
+    request: AdviewMount,
+    on_event: Channel<ChannelMessage>,
 ) -> Result<Mounted> {
-    let host = host(&state);
-    require_ui(&webview, host)?;
-    let mount: AdviewMount = body(&request, "adview_mount")?;
-    // The guest's `<UA>` and `windowTitle` (E.1, D.2) are fixed at creation.
-    host.wait_user_agent().await;
-    // The title the element read at mount; asking the page instead can
-    // time out on a busy machine and fall back to the native title.
-    let title = match mount.document_title.clone() {
-        Some(t) => Some(t.chars().take(crate::ads::MAX_DOCUMENT_TITLE).collect()),
-        None => document_title(&webview).await,
-    };
-    let guest_label = host.mount_guest(&webview, mount, title)?;
-    Ok(Mounted { guest_label })
+    let core = core(&state);
+    require_app_webview(core, &webview)?;
+    if !valid_element_id(&request.element_id)
+        || !valid_geometry(
+            &request.rect,
+            request.device_pixel_ratio,
+            request.inner_width,
+        )
+    {
+        return Err(Error::invalid_argument("invalid element id or geometry"));
+    }
+    // 400025 never precedes the launch burst (DESIGN §4.2).
+    core.lifecycle.wait_started().await;
+    drop(on_event);
+    if !core.ads.supported() {
+        return Err(Error::unsupported(if cfg!(target_os = "linux") {
+            "ads are not available on Linux"
+        } else {
+            "ads are not available in this build"
+        }));
+    }
+    Err(Error::unsupported(
+        "ad guests are not available in this build yet",
+    ))
 }
 
+/// Updates a mounted element (rectangle, visibility, attributes).
 #[tauri::command]
 pub(crate) async fn adview_update<R: Runtime>(
     webview: Webview<R>,
     state: State<'_, Overwolf<R>>,
-    request: Request<'_>,
+    request: AdviewUpdate,
 ) -> Result<()> {
-    let host = host(&state);
-    require_ui(&webview, host)?;
-    let update: AdviewUpdate = body(&request, "adview_update")?;
-    host.update_guest(&webview, update)
+    let core = core(&state);
+    require_app_webview(core, &webview)?;
+    mounted(core, &webview, &request.element_id)?;
+    Err(Error::unsupported(
+        "ad guests are not available in this build yet",
+    ))
 }
 
+/// Unmounts an element: destroys its guest.
 #[tauri::command]
 pub(crate) async fn adview_unmount<R: Runtime>(
     webview: Webview<R>,
     state: State<'_, Overwolf<R>>,
     element_id: String,
 ) -> Result<()> {
-    let host = host(&state);
-    require_ui(&webview, host)?;
-    host.unmount_guest(webview.label(), &element_id);
-    Ok(())
+    let core = core(&state);
+    require_app_webview(core, &webview)?;
+    mounted(core, &webview, &element_id)?;
+    Err(Error::unsupported(
+        "ad guests are not available in this build yet",
+    ))
 }
 
+/// An element method (`setAudioMuted`, `reload`, `setPageUrl`,
+/// `sendCommand`, CONTRACT B.3.3).
 #[tauri::command]
 pub(crate) async fn adview_command<R: Runtime>(
     webview: Webview<R>,
@@ -246,82 +109,34 @@ pub(crate) async fn adview_command<R: Runtime>(
     command: AdviewCommandName,
     args: Option<Vec<Value>>,
 ) -> Result<()> {
-    let host = host(&state);
-    require_ui(&webview, host)?;
-    host.guest_command(
-        webview.label(),
-        &element_id,
-        command,
-        &args.unwrap_or_default(),
-    )
+    let core = core(&state);
+    require_app_webview(core, &webview)?;
+    mounted(core, &webview, &element_id)?;
+    let _ = (command, args);
+    Err(Error::unsupported(
+        "ad guests are not available in this build yet",
+    ))
 }
 
-/// Synchronous on purpose, as [`cmp_event`]: a guest's messages are handled
-/// in the order it sent them. Async, a `setMute(false)`, the `play` it
-/// belongs to and the `setMute(true)` after it, sent within a millisecond,
-/// reached the host in any order (lab diff, `reward-optin`).
+/// A guest page event (CONTRACT A.2.6). Synchronous, so a guest's events
+/// keep their order. Only `owad-*` webviews may call it (and only through
+/// the runtime capability the plugin adds for them).
 #[tauri::command]
-#[expect(
+#[allow(
     clippy::needless_pass_by_value,
-    reason = "Tauri hands command arguments over by value"
+    reason = "Tauri passes command arguments by value"
 )]
 pub(crate) fn adview_event<R: Runtime>(
     webview: Webview<R>,
     state: State<'_, Overwolf<R>>,
-    request: Request<'_>,
+    slot_id: Option<String>,
+    name: String,
+    data: Option<Value>,
 ) -> Result<()> {
-    let host = host(&state);
-    let label = webview.label().to_owned();
-    let registered = classify(&label) == WebviewClass::AdviewGuest
-        && host.with_core(|c| c.ads.guests.contains_key(&label));
-    let in_scope = webview
-        .url()
-        .is_ok_and(|u| u.scheme() == "https" && u.as_str().starts_with(ADVIEW_SCOPE));
-    if !registered || !in_scope {
-        return Err(forbidden(&label));
+    let label = webview.label();
+    if !label.starts_with(ADVIEW_LABEL_PREFIX) {
+        return Err(Error::forbidden(format!("{label} is not an ad guest")));
     }
-    let event: AdviewEvent = body(&request, "adview_event")?;
-    host.guest_event(&label, event)
-}
-
-/// Synchronous on purpose: Tauri runs it on the main thread in arrival
-/// order, so `saveConsent` is stored and sent to the guests before the
-/// `saveUnifiedConsent` the page calls right after it, as in ow-electron
-/// (D.6.6). An `async` command runs on a worker pool, where two calls a
-/// millisecond apart can swap.
-#[tauri::command]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Tauri hands command arguments over by value"
-)]
-pub(crate) fn cmp_event<R: Runtime>(
-    webview: Webview<R>,
-    state: State<'_, Overwolf<R>>,
-    name: CmpEventName,
-    data: Option<CmpEventData>,
-) -> Result<()> {
-    let label = webview.label().to_owned();
-    if classify(&label) != WebviewClass::Cmp || webview.window().label() != label {
-        return Err(forbidden(&label));
-    }
-    let url = webview.url().ok();
-    host(&state).cmp_event(&label, url.as_ref(), name, data)
-}
-
-#[cfg(test)]
-mod tests {
-    /// Regression (lab diff, `reward-optin` and the consent order): the
-    /// commands whose calls must be handled in arrival order stay
-    /// synchronous, so Tauri runs them on the main thread one after another.
-    #[test]
-    fn ordered_commands_stay_synchronous() {
-        let source = include_str!("ads.rs");
-        for name in ["adview_event", "cmp_event"] {
-            assert!(
-                source.contains(&format!("pub(crate) fn {name}<")),
-                "{name} must be a synchronous command"
-            );
-            assert!(!source.contains(&format!("pub(crate) async fn {name}<")));
-        }
-    }
+    let _ = (core(&state), slot_id, name, data);
+    Err(Error::not_found(format!("no ad guest {label}")))
 }

@@ -55,9 +55,25 @@ pub const OVER_LIMIT_MS: u64 = 10_000;
 /// Dropped-message counts are logged at most once per this interval (D.4).
 pub const DROP_LOG_INTERVAL_MS: u64 = 60_000;
 
-/// `AdviewMount` (A.2.5).
+/// `adview_mount`'s `request` (DESIGN §3.5): the element, its rectangle in
+/// CSS pixels and the embedder page's geometry, which the plugin turns into
+/// native pixels per OS (W0c ruling 3). Unknown keys are refused.
+///
+/// ```
+/// use tauri_plugin_overwolf::ads::AdviewMount;
+/// let m: AdviewMount = serde_json::from_value(serde_json::json!({
+///     "elementId": "e1",
+///     "attributes": { "cid": "c", "slotsize": "300x250", "adstyle": "", "customTracking": null,
+///                     "performance": false, "unit": null, "pageurl": "" },
+///     "rect": { "x": 0, "y": 0, "width": 300, "height": 250 },
+///     "visible": true, "documentTitle": "Home", "devicePixelRatio": 2, "innerWidth": 1280,
+///     "runtimeVersion": "0.1.0"
+/// })).unwrap();
+/// assert_eq!(m.inner_width, 1280.0);
+/// assert!(serde_json::from_value::<AdviewMount>(serde_json::json!({ "elementId": "e1", "x": 1 })).is_err());
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdviewMount {
     /// Runtime-assigned element id, unique per embedder webview.
     pub element_id: String,
@@ -68,10 +84,17 @@ pub struct AdviewMount {
     /// Whether the element is visible.
     pub visible: bool,
     /// The embedder's `document.title` when the element mounted
-    /// (`windowTitle`, D.2), at most [`MAX_DOCUMENT_TITLE`] characters;
-    /// absent from older runtimes.
+    /// (`windowTitle`, D.2), at most [`MAX_DOCUMENT_TITLE`] characters.
     #[serde(default)]
     pub document_title: Option<String>,
+    /// The embedder page's `devicePixelRatio`.
+    pub device_pixel_ratio: f64,
+    /// The embedder page's `innerWidth` in CSS pixels (macOS zoom, W0c
+    /// ruling 3).
+    pub inner_width: f64,
+    /// The `<owadview>` runtime version of `tauri-plugin-overwolf-api`.
+    #[serde(default)]
+    pub runtime_version: Option<String>,
 }
 
 /// The longest `documentTitle` an `adview_mount` carries; a longer one is
@@ -80,7 +103,7 @@ pub const MAX_DOCUMENT_TITLE: usize = 1024;
 
 /// `AdviewAttributes` (A.2.5, B.3.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdviewAttributes {
     /// Container id, trimmed, at most 20 characters.
     pub cid: String,
@@ -102,9 +125,9 @@ pub struct AdviewAttributes {
     pub pageurl: String,
 }
 
-/// `AdviewRect` (A.2.5).
+/// An element rectangle in CSS pixels relative to the embedder viewport.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdviewRect {
     /// Left edge in CSS pixels.
     pub x: f64,
@@ -114,8 +137,6 @@ pub struct AdviewRect {
     pub width: f64,
     /// Height in CSS pixels.
     pub height: f64,
-    /// The embedder's `devicePixelRatio`.
-    pub device_pixel_ratio: f64,
 }
 
 /// Distinguishes an absent field (`None`) from `null` (`Some(Value::Null)`).
@@ -125,7 +146,7 @@ fn present<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Value>, D::Error> {
 
 /// `Partial<AdviewAttributes>` of `adview_update` (A.2.5).
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdviewAttributesPatch {
     /// New `cid`.
     pub cid: Option<String>,
@@ -145,18 +166,70 @@ pub struct AdviewAttributesPatch {
     pub pageurl: Option<String>,
 }
 
-/// `adview_update` (A.2.5).
+/// `adview_update`'s `request` (DESIGN §3.5): only what changed. A new
+/// rectangle comes with the page geometry it was measured with.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdviewUpdate {
     /// The element.
     pub element_id: String,
     /// New rectangle.
+    #[serde(default)]
     pub rect: Option<AdviewRect>,
     /// New visibility.
+    #[serde(default)]
     pub visible: Option<bool>,
     /// Changed attributes.
+    #[serde(default)]
     pub attributes: Option<AdviewAttributesPatch>,
+    /// The page's new `devicePixelRatio`.
+    #[serde(default)]
+    pub device_pixel_ratio: Option<f64>,
+    /// The page's new `innerWidth`.
+    #[serde(default)]
+    pub inner_width: Option<f64>,
+}
+
+/// One message of a mount's event channel (`onEvent`): a guest page event
+/// (`source: "guest"`) or a host lifecycle event (`source: "host"`), the
+/// `AdviewEventMessage` of `tauri-plugin-overwolf-api`.
+///
+/// ```
+/// use tauri_plugin_overwolf::ads::{ChannelMessage, EventSource};
+/// let m = ChannelMessage::new("destroyed", None, EventSource::Host);
+/// assert_eq!(serde_json::to_value(&m).unwrap(), serde_json::json!({ "name": "destroyed", "source": "host" }));
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ChannelMessage {
+    /// The DOM event name dispatched on the element.
+    pub name: String,
+    /// The payload, copied onto the event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
+    /// Who produced it.
+    pub source: EventSource,
+}
+
+impl ChannelMessage {
+    /// A message from its parts.
+    #[must_use]
+    pub fn new(name: impl Into<String>, data: Option<Value>, source: EventSource) -> Self {
+        ChannelMessage {
+            name: name.into(),
+            data,
+            source,
+        }
+    }
+}
+
+/// [`ChannelMessage::source`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EventSource {
+    /// The plugin (lifecycle events such as `destroyed`).
+    Host,
+    /// The ad page.
+    Guest,
 }
 
 /// The element methods of `adview_command` (B.3.3).
@@ -190,12 +263,13 @@ pub struct AdviewEvent {
 /// Validates a mount: element id and rectangle.
 ///
 /// ```
-/// use tauri_plugin_overwolf::ads::{valid_element_id, valid_rect, AdviewRect};
+/// use tauri_plugin_overwolf::ads::{valid_element_id, valid_geometry, AdviewRect};
 /// assert!(valid_element_id("e12"));
 /// assert!(!valid_element_id("e 1"));
-/// let r = AdviewRect { x: 0.0, y: 0.0, width: 400.0, height: 600.0, device_pixel_ratio: 2.0 };
-/// assert!(valid_rect(&r));
-/// assert!(!valid_rect(&AdviewRect { width: f64::NAN, ..r }));
+/// let r = AdviewRect { x: 0.0, y: 0.0, width: 400.0, height: 600.0 };
+/// assert!(valid_geometry(&r, 2.0, 1280.0));
+/// assert!(!valid_geometry(&AdviewRect { width: f64::NAN, ..r }, 2.0, 1280.0));
+/// assert!(!valid_geometry(&r, 0.0, 1280.0));
 /// ```
 #[must_use]
 pub fn valid_element_id(id: &str) -> bool {
@@ -206,16 +280,18 @@ pub fn valid_element_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// Whether every value of `rect` is finite, the size is at most 16384 and
-/// not negative, and the pixel ratio is in `(0, 16]`.
+/// Whether every value is finite, the size is at most 16384 and not
+/// negative, the pixel ratio is in `(0, 16]` and the page width in
+/// `(0, 65536]`.
 #[must_use]
-pub fn valid_rect(rect: &AdviewRect) -> bool {
+pub fn valid_geometry(rect: &AdviewRect, device_pixel_ratio: f64, inner_width: f64) -> bool {
     let finite = [
         rect.x,
         rect.y,
         rect.width,
         rect.height,
-        rect.device_pixel_ratio,
+        device_pixel_ratio,
+        inner_width,
     ]
     .iter()
     .all(|v| v.is_finite());
@@ -224,32 +300,30 @@ pub fn valid_rect(rect: &AdviewRect) -> bool {
         && (0.0..=16_384.0).contains(&rect.height)
         && rect.x.abs() <= 1.0e6
         && rect.y.abs() <= 1.0e6
-        && rect.device_pixel_ratio > 0.0
-        && rect.device_pixel_ratio <= 16.0
+        && device_pixel_ratio > 0.0
+        && device_pixel_ratio <= 16.0
+        && inner_width > 0.0
+        && inner_width <= 65_536.0
 }
 
-/// A guest's position and size in the embedder window's logical pixels
-/// (A.2.5): `css * devicePixelRatio / scaleFactor` plus the embedder
-/// webview's own position.
+/// A guest's position and size in the embedder window's logical pixels:
+/// `css * zoom` plus the embedder webview's own position, where `zoom` is
+/// the page zoom the OS rule found (W0c ruling 3: macOS native width /
+/// `innerWidth`, Windows `devicePixelRatio / scaleFactor`).
 ///
 /// ```
 /// use tauri_plugin_overwolf::ads::{logical_rect, AdviewRect};
-/// let r = AdviewRect { x: 10.0, y: 20.0, width: 400.0, height: 600.0, device_pixel_ratio: 2.0 };
-/// assert_eq!(logical_rect(&r, 2.0, (0.0, 30.0)), (10.0, 50.0, 400.0, 600.0));
-/// // Page zoom 150 % on a 1x display.
-/// let z = AdviewRect { device_pixel_ratio: 1.5, ..r };
-/// assert_eq!(logical_rect(&z, 1.0, (0.0, 0.0)), (15.0, 30.0, 600.0, 900.0));
+/// let r = AdviewRect { x: 10.0, y: 20.0, width: 400.0, height: 600.0 };
+/// assert_eq!(logical_rect(&r, 1.0, (0.0, 30.0)), (10.0, 50.0, 400.0, 600.0));
+/// // Page zoom 150 %.
+/// assert_eq!(logical_rect(&r, 1.5, (0.0, 0.0)), (15.0, 30.0, 600.0, 900.0));
 /// ```
 #[must_use]
-pub fn logical_rect(
-    rect: &AdviewRect,
-    scale_factor: f64,
-    offset: (f64, f64),
-) -> (f64, f64, f64, f64) {
-    let k = if scale_factor > 0.0 {
-        rect.device_pixel_ratio / scale_factor
+pub fn logical_rect(rect: &AdviewRect, zoom: f64, offset: (f64, f64)) -> (f64, f64, f64, f64) {
+    let k = if zoom.is_finite() && zoom > 0.0 {
+        zoom
     } else {
-        rect.device_pixel_ratio
+        1.0
     };
     (
         rect.x * k + offset.0,
@@ -259,29 +333,59 @@ pub fn logical_rect(
     )
 }
 
-/// The guest label `owad-<embedder>-<n>`.
+/// The page zoom of an embedder on Windows: `devicePixelRatio /
+/// scaleFactor` (W0c ruling 3, verified B6).
+///
+/// ```
+/// assert_eq!(tauri_plugin_overwolf::ads::zoom_from_dpr(3.0, 2.0), 1.5);
+/// ```
+#[must_use]
+pub fn zoom_from_dpr(device_pixel_ratio: f64, scale_factor: f64) -> f64 {
+    if scale_factor > 0.0 {
+        device_pixel_ratio / scale_factor
+    } else {
+        device_pixel_ratio
+    }
+}
+
+/// The page zoom of an embedder on macOS: the app webview's native width in
+/// points divided by the page's `innerWidth` (W0c ruling 3).
+///
+/// ```
+/// assert_eq!(tauri_plugin_overwolf::ads::zoom_from_width(1000.0, 800.0), 1.25);
+/// ```
+#[must_use]
+pub fn zoom_from_width(native_width: f64, inner_width: f64) -> f64 {
+    if inner_width > 0.0 {
+        native_width / inner_width
+    } else {
+        1.0
+    }
+}
+
+/// The guest label `owad-<n>` (DESIGN §3.7: the shim's `slotId`). The
+/// caller skips labels that are already taken (SEC-m2).
 ///
 /// ```
 /// use tauri_plugin_overwolf::ads::{guest_label, parse_guest_label};
-/// assert_eq!(guest_label("bw-3", 1), "owad-bw-3-1");
-/// assert_eq!(parse_guest_label("owad-bw-3-1"), Some(("bw-3", 1)));
-/// assert_eq!(parse_guest_label("owad-bw-3"), Some(("bw", 3)));
+/// assert_eq!(guest_label(1), "owad-1");
+/// assert_eq!(parse_guest_label("owad-12"), Some(12));
 /// assert_eq!(parse_guest_label("owad-x"), None);
+/// assert_eq!(parse_guest_label("owad-main-1"), None);
 /// ```
 #[must_use]
-pub fn guest_label(embedder: &str, n: u32) -> String {
-    format!("owad-{embedder}-{n}")
+pub fn guest_label(n: u32) -> String {
+    format!("owad-{n}")
 }
 
-/// Splits a guest label into the embedder label and the counter.
+/// The counter of a guest label.
 #[must_use]
-pub fn parse_guest_label(label: &str) -> Option<(&str, u32)> {
-    let rest = label.strip_prefix("owad-")?;
-    let (embedder, n) = rest.rsplit_once('-')?;
-    if embedder.is_empty() || n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+pub fn parse_guest_label(label: &str) -> Option<u32> {
+    let n = label.strip_prefix("owad-")?;
+    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    Some((embedder, n.parse().ok()?))
+    n.parse().ok()
 }
 
 /// Whether `name` is a valid `adview_event` name: 1 to 64 characters of
@@ -474,7 +578,9 @@ impl GuestLimiter {
     /// ```
     /// use tauri_plugin_overwolf::ads::{Admission, GuestLimiter};
     /// use tauri_plugin_overwolf::config::GuestLimits;
-    /// let limits = GuestLimits { events_per_second: 1, event_burst: 2, ..GuestLimits::default() };
+    /// let mut limits = GuestLimits::default();
+    /// limits.events_per_second = 1;
+    /// limits.event_burst = 2;
     /// let mut l = GuestLimiter::new(&limits, 0);
     /// assert_eq!(l.admit(0, 10), Admission::Admit);
     /// assert_eq!(l.admit(0, 10), Admission::Admit);
@@ -699,7 +805,7 @@ pub struct GuestFacts<'a> {
 ///     window_name: "index", window_title: "App", window_focused: false, test_ad: true,
 ///     disable_optimization: false, muid_v2: "m", phase_percent: 7, consent: "",
 ///     system_info: json!({}),
-///     attributes: &attributes, slot_id: "owad-bw-1-1",
+///     attributes: &attributes, slot_id: "owad-1",
 /// };
 /// let c = guest_config(&facts, true);
 /// let keys: Vec<&str> = c.as_object().unwrap().keys().map(String::as_str).collect();
@@ -928,11 +1034,32 @@ mod tests {
                 "cid": "c", "slotsize": "400x600", "adstyle": "", "customTracking": {"a": 1},
                 "performance": false, "unit": null, "pageurl": "https://example.com/p"
             },
-            "rect": {"x": 0, "y": 0, "width": 400, "height": 600, "devicePixelRatio": 1},
-            "visible": true
+            "rect": {"x": 0, "y": 0, "width": 400, "height": 600},
+            "visible": true, "devicePixelRatio": 1, "innerWidth": 800
         }))
         .unwrap();
         assert_eq!(m.attributes.pageurl, "https://example.com/p");
+        assert!(m.runtime_version.is_none() && m.document_title.is_none());
+        // W1-B CR 1: the pixel ratio is no longer part of the rectangle.
+        let old = serde_json::from_value::<AdviewMount>(json!({
+            "elementId": "e1",
+            "attributes": {"cid": "c", "slotsize": "1x1", "adstyle": ""},
+            "rect": {"x": 0, "y": 0, "width": 1, "height": 1, "devicePixelRatio": 1},
+            "visible": true, "devicePixelRatio": 1, "innerWidth": 800
+        }));
+        assert!(old.is_err());
+        let u: AdviewUpdate = serde_json::from_value(json!({
+            "elementId": "e1", "rect": {"x": 1, "y": 2, "width": 3, "height": 4},
+            "devicePixelRatio": 2, "innerWidth": 640
+        }))
+        .unwrap();
+        assert_eq!(
+            (u.device_pixel_ratio, u.inner_width),
+            (Some(2.0), Some(640.0))
+        );
+        assert!(
+            serde_json::from_value::<AdviewUpdate>(json!({"elementId": "e1", "zoom": 1})).is_err()
+        );
         let u: AdviewUpdate = serde_json::from_value(json!({
             "elementId": "e1", "attributes": {"customTracking": null}
         }))
@@ -947,6 +1074,36 @@ mod tests {
         assert_eq!(u.attributes.unwrap().custom_tracking, None);
         let c: AdviewCommandName = serde_json::from_value(json!("setPageUrl")).unwrap();
         assert_eq!(c, AdviewCommandName::SetPageUrl);
+    }
+
+    /// W1-B CR 2: the channel carries `{ name, data?, source }`.
+    #[test]
+    fn channel_messages_match_the_js_runtime() {
+        let m = ChannelMessage::new(
+            "display_ad_loaded",
+            Some(json!({"a": 1})),
+            EventSource::Guest,
+        );
+        assert_eq!(
+            serde_json::to_value(&m).unwrap(),
+            json!({"name": "display_ad_loaded", "data": {"a": 1}, "source": "guest"})
+        );
+    }
+
+    #[test]
+    fn zoom_rules() {
+        assert!((zoom_from_dpr(2.0, 0.0) - 2.0).abs() < f64::EPSILON);
+        assert!((zoom_from_width(500.0, 0.0) - 1.0).abs() < f64::EPSILON);
+        let r = AdviewRect {
+            x: 1.0,
+            y: 1.0,
+            width: 1.0,
+            height: 1.0,
+        };
+        assert_eq!(logical_rect(&r, f64::NAN, (0.0, 0.0)), (1.0, 1.0, 1.0, 1.0));
+        assert!(!valid_geometry(&r, 2.0, 0.0));
+        assert_eq!(parse_guest_label("owad-"), None);
+        assert_eq!(parse_guest_label(&guest_label(u32::MAX)), Some(u32::MAX));
     }
 
     #[test]
@@ -1068,7 +1225,7 @@ mod tests {
             consent: "cmp%3DCQ%26ac%3D2~1",
             system_info: json!({"gpus": [], "cpu": "x", "displays": []}),
             attributes: &attributes,
-            slot_id: "owad-bw-1-1",
+            slot_id: "owad-1",
         };
         let c = guest_config(&facts, false);
         let keys: Vec<&str> = c.as_object().unwrap().keys().map(String::as_str).collect();

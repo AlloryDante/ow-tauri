@@ -11,10 +11,10 @@
 //!   version, `minimumSystemVersion` and staged rollout rules;
 //! - [`verify`]: size, SHA-512, the detached minisign signature and the
 //!   publisher-name rule for Windows Authenticode subjects;
-//! - [`install`]: the per-OS install command (NSIS, MSI, `.app`, AppImage).
+//! - [`install`]: the per-OS install command (NSIS, MSI, `.app`, `AppImage`).
 //!
-//! The plugin side (commands, `updater` host messages, the download and the
-//! install at exit) lives in `client`.
+//! The Rust API (`UpdaterBuilder`, `Updater`, `Update`,
+//! `DownloadedUpdate`, DESIGN §3.3) is Windows only (R6).
 //!
 //! ```
 //! use tauri_plugin_overwolf::updater::{feed, is_update_available, Availability};
@@ -27,8 +27,8 @@ pub mod feed;
 pub mod install;
 pub mod verify;
 
-#[cfg(feature = "plugin")]
-pub(crate) mod client;
+#[cfg(windows)]
+mod api;
 
 use std::collections::BTreeMap;
 
@@ -40,10 +40,8 @@ use crate::paths::TargetOs;
 
 pub use feed::{UpdateFileInfo, UpdateInfo};
 
-#[cfg(feature = "plugin")]
-pub use client::Updater;
-#[cfg(feature = "plugin")]
-pub(crate) use client::UpdaterCore;
+#[cfg(windows)]
+pub use api::{DownloadedUpdate, Update, Updater, UpdaterBuilder};
 
 /// `UpdaterConfig` (A.2.8, I.1): what `autoUpdater.setFeedURL()` and the
 /// electron-updater properties send to `updater_configure`.
@@ -262,10 +260,9 @@ impl UpdaterConfig {
         match provider.as_deref() {
             None | Some("generic") => {}
             Some(other) => {
-                return Err(Error::invalid_argument(
-                    "Only the generic update provider is supported.",
-                )
-                .with_data(serde_json::json!({ "provider": other })));
+                return Err(Error::invalid_argument(format!(
+                    "Only the generic update provider is supported (got {other:?})."
+                )));
             }
         }
         let url = url.ok_or_else(|| Error::invalid_argument("The update feed URL is missing."))?;
@@ -298,10 +295,9 @@ impl UpdaterConfig {
                 .bytes()
                 .all(|b| b == b'\t' || (0x20..0x7f).contains(&b));
             if !ok_name || !ok_value {
-                return Err(
-                    Error::invalid_argument("An update request header is invalid.")
-                        .with_data(serde_json::json!({ "header": name })),
-                );
+                return Err(Error::invalid_argument(format!(
+                    "The update request header {name:?} is invalid."
+                )));
             }
         }
         Ok(ResolvedConfig {
@@ -433,8 +429,9 @@ pub enum Availability {
 pub fn parse_version(text: &str) -> Result<semver::Version, Error> {
     let t = text.trim();
     semver::Version::parse(t.strip_prefix('v').unwrap_or(t)).map_err(|_| {
-        Error::invalid_argument("The update feed has an invalid version.")
-            .with_data(serde_json::json!({ "version": text }))
+        Error::invalid_argument(format!(
+            "The update feed has an invalid version ({text:?})."
+        ))
     })
 }
 

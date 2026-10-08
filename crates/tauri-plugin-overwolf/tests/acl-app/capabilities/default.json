@@ -1,0 +1,7 @@
+{
+  "identifier": "default",
+  "description": "What GETTING-STARTED grants: overwolf:default to the app's main webview, matched by webview label.",
+  "local": true,
+  "webviews": ["main"],
+  "permissions": ["overwolf:default"]
+}

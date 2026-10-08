@@ -1,11 +1,14 @@
 # ow-tauri Cargo workspace.
 #
-# Members are added as they land: the plugin crate and its mock-runtime ACL
-# test app today, the example app's `src-tauri` crate once the
-# packages-sample port reaches it.
+# Members: the plugin crate, its `unstable` helper crate and the plugin's
+# mock-runtime ACL test app. The examples are separate Tauri projects.
 [workspace]
 resolver = "3"
-members = ["crates/tauri-plugin-overwolf", "crates/tauri-plugin-overwolf/tests/acl-app"]
+members = [
+  "crates/tauri-plugin-overwolf",
+  "crates/tauri-plugin-overwolf-unstable",
+  "crates/tauri-plugin-overwolf/tests/acl-app",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,9 +18,9 @@ edition = "2024"
 # jobs use Rust 1.98 (see rust-toolchain.toml); a scheduled CI job also runs
 # the newest stable Rust.
 rust-version = "1.90"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 authors = ["ow-tauri contributors"]
-description = "Run Overwolf ow-electron apps on Tauri 2 with Overwolf ads, analytics and packages."
+description = "Overwolf ads, consent and analytics for Tauri 2 apps."
 keywords = ["tauri", "overwolf", "plugin", "ads", "electron"]
 categories = ["gui", "api-bindings"]
 
@@ -25,15 +28,16 @@ categories = ["gui", "api-bindings"]
 # docs/adr/ and CONTRIBUTING.md for the upgrade policy. Members opt in with
 # `foo = { workspace = true }`, so nothing here is resolved until used.
 [workspace.dependencies]
-# Supported range: 2.12.1 up to the newest 2.x. The plugin enables `unstable`
-# (child webviews, ADR 0003); unstable APIs may change in a 2.x minor, so the
-# scheduled CI job builds against the newest 2.x release (CONTRIBUTING.md).
+# Supported range: 2.12.1 up to the newest 2.x (caret requirement). The
+# plugin's `ads` feature enables Tauri's `unstable` feature on Windows and
+# macOS only, through `tauri-plugin-overwolf-unstable` (child webviews);
+# unstable APIs may change in a 2.x minor, so the scheduled CI job builds
+# against the newest 2.x release (CONTRIBUTING.md).
 tauri = { version = "2.12.1", default-features = true }
+tauri-utils = { version = "2.10.1", default-features = false }
 tauri-build = "2.7.1"
 tauri-plugin = "2.7.1"
 tauri-plugin-opener = "2.7.0"
-tauri-plugin-global-shortcut = "2.4.0"
-tauri-plugin-dialog = "2.8.1"
 # The app registers single-instance itself (it must be the first plugin);
 # listed here so the example and the plugin's tests share one version.
 tauri-plugin-single-instance = "2.5.2"

@@ -1,6 +1,6 @@
 [package]
 name = "tauri-plugin-overwolf"
-description = "Tauri 2 plugin that hosts Overwolf ads, analytics, consent and packages for apps ported from ow-electron."
+description = "Overwolf ads (<owadview>), consent and analytics for Tauri 2 apps, wire-identical to ow-electron."
 readme = "README.md"
 version.workspace = true
 edition.workspace = true
@@ -9,30 +9,39 @@ license.workspace = true
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
+repository = "https://github.com/AlloryDante/ow-tauri"
 # Tauri plugins declare `links` so tauri-build can find the permission files
 # this crate's build script generates (DEP_TAURI_PLUGIN_OVERWOLF_*).
 links = "tauri-plugin-overwolf"
-# `js/` holds the generated runtime bundle (`npm run build:injected
-# --workspace ow-tauri`); the published crate must carry it.
-include = ["/build.rs", "/src/**", "/permissions/**", "/js/**", "/README.md"]
+# `js/` and `api-iife.js` are generated from `packages/guest-shims` and
+# `packages/api` and committed, so publishing needs no npm step.
+include = [
+  "/build.rs",
+  "/src/**",
+  "/permissions/**",
+  "/js/**",
+  "/api-iife.js",
+  "/README.md",
+  "/LICENSE-MIT",
+  "/LICENSE-APACHE",
+]
 
 [features]
-# `plugin` is the Tauri plugin itself. Without it the crate is only the
-# manifest parser, the identity functions and the `build` helper, which is
-# what an app's build script needs:
-#   [build-dependencies]
-#   tauri-plugin-overwolf = { version = "0.1", default-features = false }
-default = ["plugin"]
+# `plugin` is the Tauri plugin. `ads` adds the ad guests (`<owadview>`); on
+# Windows and macOS it enables Tauri's `unstable` feature (child webviews)
+# through `tauri-plugin-overwolf-unstable`, never on Linux, where ads are
+# unsupported. Without `plugin` the crate is the configuration schema, the
+# identity functions and (feature `build`) the build step an app's build
+# script calls: a build-dependency with `default-features = false,
+# features = ["build"]`.
+default = ["plugin", "ads"]
 plugin = [
   "dep:tauri",
   "dep:tauri-plugin-opener",
-  "dep:tauri-plugin-dialog",
-  "dep:tauri-plugin-global-shortcut",
   "dep:tokio",
   "dep:uuid",
   "dep:sys-locale",
   "dep:log",
-  "dep:reqwest",
   "dep:hyper",
   "dep:hyper-util",
   "dep:hyper-tls",
@@ -47,25 +56,19 @@ plugin = [
   "dep:block2",
   "dep:webview2-com",
   "dep:windows",
-  "dep:webkit2gtk",
-  "dep:gtk",
 ]
-# Lets `window_devtools` open devtools in release builds (Tauri `devtools`).
-devtools = ["plugin", "tauri/devtools"]
-# Hooks for tests on Tauri's mock runtime (the plugin's own suite, and apps
-# that test their IPC wiring): `Builder::skip_os_queries`, and hidden
-# `Overwolf::test_*` methods that drive the window, navigation, page-load and
-# exit-request handlers the mock runtime never fires. Not a stable API.
+ads = ["plugin", "dep:tauri-plugin-overwolf-unstable"]
+# The update client (Windows only; `check()` returns `unsupported` elsewhere).
+updater = ["plugin", "dep:reqwest", "dep:minisign-verify", "dep:yaml-rust2", "dep:semver"]
+# The app's build step (`build::run`): merged config, validation, installer
+# hooks and the signed-build resource.
+build = ["dep:tauri-utils", "dep:json-patch", "dep:embed-resource"]
+# Test hooks for Tauri's mock runtime (hidden `Builder` methods). Refused in
+# release builds (see the release guard in `src/lib.rs`). Not a stable API.
 test-util = ["plugin"]
-# The parity lab (tools/parity-harness/tauri-app): a trace of host requests,
-# guest lifecycle, cookies and state writes, and invisible windows, both
-# switched on at run time by OW_TAURI_LAB_DIR / OW_TAURI_LAB_INVISIBLE. Never
-# enable it in a shipped app.
+# The parity lab's trace and invisible windows, switched on at run time by
+# OW_TAURI_LAB_DIR / OW_TAURI_LAB_INVISIBLE. Refused in release builds.
 lab = ["plugin"]
-# Lets `build::embed_manifest` compile and link the `OWEINTEGRITY/OWE` PE
-# resource of a signed Windows release build (CONTRACT G.4 c). Enable it on
-# the build-dependency.
-embed-resource = ["dep:embed-resource"]
 
 [dependencies]
 serde = { workspace = true }
@@ -75,28 +78,32 @@ sha1_smol = { workspace = true }
 sha2 = { workspace = true }
 md5 = { workspace = true }
 base64 = { workspace = true }
-# WHATWG URL parsing for `shell_open_external` checks (pure, also in tests).
+# WHATWG URL parsing (origins, consent and ad URLs).
 url = { workspace = true }
 # The update client (CONTRACT I): electron-updater feed YAML, versions and
 # the detached minisign signature. Pure Rust, no default features.
-yaml-rust2 = { version = "0.13.0", default-features = false }
-semver = { workspace = true }
-minisign-verify = "0.3.0"
-# Build-script only: compiles the OWEINTEGRITY/OWE resource script.
+yaml-rust2 = { version = "0.13.0", optional = true, default-features = false }
+semver = { workspace = true, optional = true }
+minisign-verify = { version = "0.3.0", optional = true }
+# Build step only: the merged Tauri configuration (base file, target overlay,
+# TAURI_CONFIG) exactly as tauri-build reads it, and the OWEINTEGRITY/OWE
+# resource script of a signed Windows build.
+tauri-utils = { workspace = true, optional = true, default-features = false }
+json-patch = { version = "4.2.0", optional = true, default-features = false }
 embed-resource = { version = "3.0.12", optional = true }
 
 # `webview-data-url`: the consent settings window opens on a `data:`
 # preloader, as in ow-electron (observed); Tauri refuses `data:` URLs without it.
-tauri = { workspace = true, optional = true, features = ["unstable", "webview-data-url"] }
+# No `unstable` here: see `tauri-plugin-overwolf-unstable` below.
+tauri = { workspace = true, optional = true, features = ["webview-data-url"] }
 tauri-plugin-opener = { workspace = true, optional = true }
-tauri-plugin-dialog = { workspace = true, optional = true }
 # The update client (CONTRACT I).
 reqwest = { workspace = true, optional = true, features = ["gzip", "deflate", "brotli", "zstd"] }
 # Host analytics and the consent request (CONTRACT E.1): a plain hyper client,
 # because reqwest always adds `accept: */*`, which ow-electron does not send.
-# Every crate below is already in the tree through reqwest at these versions;
-# TLS is the same native-tls stack with ALPN (HTTP/2), proxies come from the
-# same system matcher reqwest uses.
+# Every crate below is already in the tree through Tauri at these versions;
+# TLS is the native-tls stack with ALPN (HTTP/2), proxies come from the
+# system matcher reqwest also uses.
 hyper = { version = "1.11.1", optional = true, features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1.21", optional = true, features = ["client-legacy", "client-proxy", "client-proxy-system", "http1", "http2", "tokio"] }
 hyper-tls = { version = "0.6.0", optional = true, features = ["alpn"] }
@@ -106,7 +113,6 @@ http-body-util = { version = "0.1.5", optional = true }
 bytes = { version = "1.12.1", optional = true }
 tower-service = { version = "0.3.3", optional = true }
 async-compression = { version = "0.4.48", optional = true, features = ["tokio", "gzip", "zlib", "brotli", "zstd"] }
-tauri-plugin-global-shortcut = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["io-util", "rt-multi-thread"] }
 uuid = { workspace = true, optional = true }
 sys-locale = { workspace = true, optional = true }
@@ -115,11 +121,17 @@ log = { workspace = true, optional = true }
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+# `ads` enables Tauri's `unstable` feature through this crate on Windows and
+# macOS only (child webviews host the ads; Linux ads are unsupported and keep
+# stable Tauri).
+tauri-plugin-overwolf-unstable = { path = "../tauri-plugin-overwolf-unstable", version = "0.1.0", optional = true }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_System_Registry", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 # Guest webview hooks (mute, request shaping, crash and load-failure
 # reports, D.7, D.8.3) and the guest window's stacking and input region
-# (B.3.4), and `showInactive()` (A.3): the versions Tauri 2.12's wry uses.
+# (B.3.4): the versions Tauri 2.12's wry uses.
 webview2-com = { version = "0.39.1", optional = true }
 windows = { version = "0.62.2", optional = true, features = ["Win32_Devices_Display", "Win32_Foundation", "Win32_Graphics_Dxgi", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
@@ -131,18 +143,11 @@ objc2 = { version = "0.6.5", optional = true }
 objc2-foundation = { version = "0.3.2", optional = true, default-features = false, features = ["std", "NSArray", "NSBundle", "NSDate", "NSGeometry", "NSHTTPCookie", "NSString", "NSURL", "NSURLRequest"] }
 block2 = { version = "0.6.2", optional = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-# Guest mute, the shaped first navigation, crash and load-failure reports;
-# wry's version and feature level.
-webkit2gtk = { version = "=2.0.2", optional = true, features = ["v2_38"] }
-# The guest widget's stacking and input shape (B.3.4); wry's version.
-gtk = { version = "0.18.2", optional = true }
-
 [build-dependencies]
 tauri-plugin = { workspace = true, features = ["build"] }
 
 [dev-dependencies]
-tauri = { workspace = true, features = ["unstable", "test"] }
+tauri = { workspace = true, features = ["test"] }
 
 [lints]
 workspace = true

@@ -6,7 +6,9 @@
 //! (D.7, D.8).
 //!
 //! Every function hands its work to the webview's thread with
-//! `Webview::with_webview` and returns at once.
+//! `Webview::with_webview` and returns at once. Linux has no ads, so
+//! nothing here touches WebKitGTK. The ads host (W2) wires these hooks.
+#![allow(dead_code, reason = "the ads and consent hosts (W2) call these")]
 
 use std::sync::Arc;
 
@@ -109,12 +111,7 @@ pub(crate) fn set_muted<R: Runtime>(webview: &Webview<R>, muted: bool) -> tauri:
         {
             windows_impl::set_muted(&pw.controller(), muted);
         }
-        #[cfg(target_os = "linux")]
-        {
-            use webkit2gtk::WebViewExt as _;
-            pw.inner().set_is_muted(muted);
-        }
-        #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         {
             let _ = (pw, muted);
         }
@@ -158,8 +155,6 @@ pub(crate) fn clear_background<R: Runtime>(
 /// - macOS: `-[NSView addSubview:positioned:NSWindowAbove relativeTo:nil]`
 ///   on the view's superview, which reorders an existing subview (and its
 ///   layer) without removing it from the window.
-/// - Linux: `gdk_window_raise` of the guest widget's own `GdkWindow`, when
-///   it has one.
 ///
 /// `done` runs on the webview's thread with whether the guest is now the
 /// top child (`None` when the platform cannot tell). Errors only when the
@@ -173,9 +168,7 @@ pub(crate) fn raise_to_top<R: Runtime>(
         let top = macos::raise_to_top(pw.inner());
         #[cfg(windows)]
         let top = windows_impl::raise_to_top(&pw.controller());
-        #[cfg(target_os = "linux")]
-        let top = linux::raise_to_top(&pw.inner());
-        #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         let top = {
             let _ = pw;
             None
@@ -198,8 +191,6 @@ pub(crate) fn raise_to_top<R: Runtime>(
 ///   The `hitTest:` of the web view's own class (below any
 ///   `NSKVONotifying_` subclass) is replaced once and calls the original
 ///   for views without the flag; the view's class is never changed.
-/// - Linux: an empty input shape on the guest widget's own `GdkWindow`,
-///   when it has one.
 ///
 /// `done` runs on the webview's thread with whether the platform applied
 /// the change. Errors only when the webview is gone.
@@ -213,9 +204,7 @@ pub(crate) fn set_input_passthrough<R: Runtime>(
         let applied = macos::set_input_passthrough(pw.inner(), on);
         #[cfg(windows)]
         let applied = windows_impl::set_input_passthrough(&pw.controller(), on);
-        #[cfg(target_os = "linux")]
-        let applied = linux::set_input_passthrough(&pw.inner(), on);
-        #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         let applied = {
             let _ = (pw, on);
             false
@@ -225,8 +214,7 @@ pub(crate) fn set_input_passthrough<R: Runtime>(
 }
 
 /// The guest's first navigation to `url` with the document headers of
-/// D.8.3: `WKWebView.load(URLRequest)` on macOS,
-/// `webkit_web_view_load_request` on Linux and
+/// D.8.3: `WKWebView.load(URLRequest)` on macOS and
 /// `NavigateWithWebResourceRequest` on Windows, so the page's
 /// `document.referrer` is the `Referer` as in ow-electron (on Windows a plain
 /// navigation whose request handler set the headers left it empty: Windows
@@ -237,29 +225,18 @@ pub(crate) fn load_shaped<R: Runtime>(
     url: &url::Url,
     shaping: Option<&Shaping>,
 ) -> bool {
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     if let Some(s) = shaping {
         let url = url.to_string();
         let referer = s.referer.clone();
         let origin = s.origin.clone();
         return webview
             .with_webview(move |pw| {
-                #[cfg(target_os = "macos")]
                 macos::load_request(
                     pw.inner(),
                     &url,
                     &[("Referer", &referer), ("Origin", &origin)],
                 );
-                #[cfg(target_os = "linux")]
-                {
-                    use webkit2gtk::{URIRequestExt as _, WebViewExt as _};
-                    let request = webkit2gtk::URIRequest::new(&url);
-                    if let Some(headers) = request.http_headers() {
-                        headers.replace("Referer", &referer);
-                        headers.replace("Origin", &origin);
-                    }
-                    pw.inner().load_request(&request);
-                }
             })
             .is_ok();
     }
@@ -305,13 +282,6 @@ pub(crate) trait GuestReports: Send + Sync + 'static {
     /// The webview's render process ended (`reason` is Electron's spelling).
     fn crashed(&self, label: &str, reason: crate::ads::GoneReason, exit_code: i64);
     /// A main-frame load failed.
-    #[cfg_attr(
-        not(any(windows, target_os = "linux")),
-        expect(
-            dead_code,
-            reason = "WKWebView load failures are not reported to plugins"
-        )
-    )]
     fn load_failed(&self, label: &str, error_code: i64, description: &str, url: &str);
 }
 
@@ -322,7 +292,7 @@ pub(crate) enum HookTarget {
     /// as gone (it is recovered, D.7), and a load failure reports the ad
     /// document URL.
     Guest,
-    /// `ow-main` or a `bw-*` / `bwr-*` webview: only a render or browser
+    /// An app webview (any label outside the reserved prefixes): only a render or browser
     /// process that exited counts (Electron reports an unresponsive page
     /// separately), and a load failure reports the document URL.
     App,
@@ -382,29 +352,16 @@ pub(crate) fn wire_record(
 }
 
 /// Installs the per-guest platform hooks: on Windows the request shaping
-/// handler (D.8.3), `ProcessFailed` and `NavigationCompleted`; on Linux
-/// `web-process-terminated` and `load-failed`. macOS reports crashes through
-/// the app's `on_web_content_process_terminate` hook instead (A.5). On macOS
-/// and Windows also the page's JavaScript dialogs (B.2.6).
+/// handler (D.8.3), `ProcessFailed` and `NavigationCompleted`. macOS reports
+/// crashes through the app's `on_web_content_process_terminate` hook
+/// instead. Guest JavaScript dialogs are silenced by the guest shim
+/// (DESIGN §3.7).
 pub(crate) fn install_guest_hooks<R: Runtime>(
     webview: &Webview<R>,
     shaping: Option<Shaping>,
     reports: Arc<dyn GuestReports>,
 ) -> tauri::Result<()> {
     install_hooks(webview, HookTarget::Guest, shaping, reports)
-}
-
-/// The crash and load-failure hooks of `ow-main` and the `bw-*` / `bwr-*`
-/// webviews (A.6 crash signals, A.3 `did-fail-load` and
-/// `render-process-gone`): Windows `ProcessFailed` and
-/// `NavigationCompleted`, Linux `web-process-terminated` and `load-failed`.
-/// macOS has no plugin-level crash hook (A.5). On macOS and Windows also the
-/// page's JavaScript dialogs (B.2.6).
-pub(crate) fn install_app_hooks<R: Runtime>(
-    webview: &Webview<R>,
-    reports: Arc<dyn GuestReports>,
-) -> tauri::Result<()> {
-    install_hooks(webview, HookTarget::App, None, reports)
 }
 
 fn install_hooks<R: Runtime>(
@@ -414,31 +371,12 @@ fn install_hooks<R: Runtime>(
     reports: Arc<dyn GuestReports>,
 ) -> tauri::Result<()> {
     let label = webview.label().to_owned();
-    #[cfg(windows)]
-    let (app_name, post) = {
-        use tauri::Manager as _;
-        let app = webview.app_handle().clone();
-        let post: super::js_dialogs::Post = Arc::new(move |task| {
-            let _ = app.run_on_main_thread(task);
-        });
-        (webview.app_handle().package_info().name.clone(), post)
-    };
     webview.with_webview(move |pw| {
-        #[cfg(target_os = "macos")]
-        {
-            super::js_dialogs::install(pw.inner());
-        }
         #[cfg(windows)]
         {
-            super::js_dialogs::install(&pw.controller(), &app_name, post);
             windows_impl::install(&pw.controller(), target, shaping, label, reports);
         }
-        #[cfg(target_os = "linux")]
-        {
-            let _ = (shaping, target);
-            linux::install(&pw.inner(), label, reports);
-        }
-        #[cfg(not(any(windows, target_os = "linux")))]
+        #[cfg(not(windows))]
         {
             let _ = (pw, target, shaping, label, reports);
         }
@@ -542,89 +480,6 @@ fn on_ns_window<R: Runtime, T: Send + 'static>(
         .unwrap_or(default)
 }
 
-/// Shows `window` without making it key and without activating the app
-/// (`BrowserWindow.showInactive()`, and every lab window): on macOS
-/// `-[NSWindow orderFrontRegardless]` on the main thread, as ow-electron
-/// shows an inactive window. `Window::show` would call
-/// `makeKeyAndOrderFront:`, which activates the app and takes the keyboard
-/// from the app the user is in. On Windows `ShowWindow(SW_SHOWNOACTIVATE)`,
-/// as Electron's `showInactive()` does there, issued from a helper thread:
-/// the command runs on the main thread inside Tauri's invoke handler, which
-/// holds Tauri's plugin lock, and a `ShowWindow` there synchronously sends
-/// the window its show and size messages, whose window event re-enters
-/// Tauri's event loop callback and waits for that same lock forever
-/// (Windows lab: the stack of the hung app). `Window::show` from the main
-/// thread is the same call. From the helper thread the show waits until the
-/// main thread pumps its messages, after the command returned; a sent
-/// message is handled before any posted one, so the window is shown before
-/// the app's next call (its page load) reaches the main thread. The helper
-/// then has Tauri show the already shown window on the main thread, so the
-/// window library also counts it as shown: otherwise its next `hide()` saw
-/// no change and did nothing, and any later style change (always on top,
-/// resizable) hid the window again (Windows lab: `hide()` after
-/// `showInactive()` left the window on screen). That show keeps the window
-/// visible throughout, so it neither flickers nor activates it. Elsewhere
-/// `Window::show`.
-///
-/// On macOS, on the main thread the window is ordered front before this
-/// returns, so a visibility read right after sees it shown; elsewhere the
-/// show is queued to the main thread.
-pub(crate) fn show_inactive<R: Runtime>(window: &tauri::Window<R>) -> tauri::Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        let address = window.ns_window()? as usize;
-        now_or_on_main(
-            objc2::MainThreadMarker::new().is_some(),
-            move || macos::order_front_regardless(address),
-            |show| window.run_on_main_thread(show),
-        )
-    }
-    #[cfg(windows)]
-    {
-        // The mock runtime has no native window: show it the Tauri way.
-        match window.hwnd() {
-            Ok(hwnd) => {
-                let raw = hwnd.0 as isize;
-                let window = window.clone();
-                windows_impl::show_no_activate_detached(raw, move || {
-                    let shown = window.clone();
-                    let _ = window.run_on_main_thread(move || {
-                        windows_impl::count_as_shown(raw, || {
-                            let _ = shown.show();
-                        });
-                    });
-                })
-                .map(drop)
-                .map_err(tauri::Error::from)
-            }
-            Err(_) => window.show(),
-        }
-    }
-    #[cfg(not(any(target_os = "macos", windows)))]
-    {
-        window.show()
-    }
-}
-
-/// Runs `run` at once when on the main thread (`on_main`), else hands it to
-/// `queue` (which runs it on the main thread later).
-#[cfg_attr(
-    not(any(target_os = "macos", test)),
-    expect(dead_code, reason = "macOS only")
-)]
-fn now_or_on_main<F: FnOnce() + Send + 'static>(
-    on_main: bool,
-    run: F,
-    queue: impl FnOnce(F) -> tauri::Result<()>,
-) -> tauri::Result<()> {
-    if on_main {
-        run();
-        Ok(())
-    } else {
-        queue(run)
-    }
-}
-
 /// Runs `create` (which builds a webview) without letting the webview
 /// library activate the app. On macOS, wry calls `-[NSApplication activate]`
 /// for every webview it creates ("make sure the window is always on top"),
@@ -701,7 +556,7 @@ pub(crate) fn observe_minimize(on: impl Fn(usize, MinimizeStage) + Send + Sync +
 /// Tauri's monitor names are already the OS names.
 pub(crate) fn screen_names<R: Runtime>(
     app: &tauri::AppHandle<R>,
-) -> Vec<crate::screen::OsScreenName> {
+) -> Vec<super::display::OsScreenName> {
     #[cfg(target_os = "macos")]
     {
         if objc2::MainThreadMarker::new().is_some() {
@@ -1039,7 +894,7 @@ mod macos {
 
     /// `NSScreen.screens` with `localizedName` (macOS 10.15+) and `frame`
     /// flipped to a top-left origin against the primary (first) screen.
-    pub(super) fn screen_names() -> Vec<crate::screen::OsScreenName> {
+    pub(super) fn screen_names() -> Vec<crate::platform::display::OsScreenName> {
         use objc2_foundation::NSRect;
         // SAFETY: a public AppKit class method, on the main thread (the
         // caller's contract).
@@ -1063,7 +918,7 @@ mod macos {
                 None
             };
             let top = *primary_height.get_or_insert(frame.size.height);
-            out.push(crate::screen::OsScreenName {
+            out.push(crate::platform::display::OsScreenName {
                 x: frame.origin.x,
                 y: top - (frame.origin.y + frame.size.height),
                 width: frame.size.width,
@@ -1487,105 +1342,6 @@ mod macos {
             // The test process is not an invisible lab: the replacement
             // calls the original there.
             assert!(!crate::lab::invisible());
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-mod linux {
-    use std::sync::Arc;
-
-    use webkit2gtk::WebViewExt as _;
-
-    use super::GuestReports;
-    use crate::ads::GoneReason;
-
-    pub(super) fn install(
-        webview: &webkit2gtk::WebView,
-        label: String,
-        reports: Arc<dyn GuestReports>,
-    ) {
-        let crash_label = label.clone();
-        let crash_reports = Arc::clone(&reports);
-        let _ = webview.connect_web_process_terminated(move |_, reason| {
-            let reason = match reason {
-                webkit2gtk::WebProcessTerminationReason::ExceededMemoryLimit => GoneReason::Oom,
-                webkit2gtk::WebProcessTerminationReason::TerminatedByApi => GoneReason::Killed,
-                _ => GoneReason::Crashed,
-            };
-            crash_reports.crashed(&crash_label, reason, 0);
-        });
-        let _ = webview.connect_load_failed(move |_, _event, uri, error| {
-            // A cancelled load (a new navigation replaced it) is not a failure.
-            if !error.matches(webkit2gtk::NetworkError::Cancelled) {
-                let (code, name) = net_error(error);
-                reports.load_failed(&label, code, name, uri);
-            }
-            false
-        });
-    }
-
-    /// `gdk_window_raise` of the widget's own `GdkWindow`. A widget that
-    /// draws into its parent's window has no stacking of its own; it is
-    /// left alone (re-adding it to its container would move it in the
-    /// container's layout). Returns `Some(true)` when raised.
-    pub(super) fn raise_to_top(webview: &webkit2gtk::WebView) -> Option<bool> {
-        use gtk::prelude::WidgetExt as _;
-        if !webview.has_window() {
-            return None;
-        }
-        let window = webview.window()?;
-        window.raise();
-        Some(true)
-    }
-
-    /// An empty input shape on the widget's own `GdkWindow` (`on`), or
-    /// none. A widget without its own window is left alone. Returns whether
-    /// the shape was set.
-    pub(super) fn set_input_passthrough(webview: &webkit2gtk::WebView, on: bool) -> bool {
-        use gtk::prelude::WidgetExt as _;
-        if !webview.has_window() {
-            return false;
-        }
-        if on {
-            webview.input_shape_combine_region(Some(&gtk::cairo::Region::create()));
-        } else {
-            webview.input_shape_combine_region(None);
-        }
-        true
-    }
-
-    /// Chromium's `net::Error` code and name closest to a `WebKitGTK` load
-    /// error (D.7); `ERR_FAILED` when none is close.
-    fn net_error(error: &webkit2gtk::glib::Error) -> (i64, &'static str) {
-        use webkit2gtk::gio::{IOErrorEnum, ResolverError, TlsError};
-        if let Some(kind) = error.kind::<IOErrorEnum>() {
-            return match kind {
-                IOErrorEnum::TimedOut => (-7, "ERR_TIMED_OUT"),
-                IOErrorEnum::HostNotFound => (-105, "ERR_NAME_NOT_RESOLVED"),
-                IOErrorEnum::ConnectionRefused => (-102, "ERR_CONNECTION_REFUSED"),
-                IOErrorEnum::HostUnreachable => (-109, "ERR_ADDRESS_UNREACHABLE"),
-                IOErrorEnum::NetworkUnreachable => (-106, "ERR_INTERNET_DISCONNECTED"),
-                IOErrorEnum::BrokenPipe | IOErrorEnum::NotConnected => {
-                    (-101, "ERR_CONNECTION_RESET")
-                }
-                IOErrorEnum::ProxyFailed => (-130, "ERR_PROXY_CONNECTION_FAILED"),
-                IOErrorEnum::ProxyAuthFailed | IOErrorEnum::ProxyNeedAuth => {
-                    (-127, "ERR_PROXY_AUTH_REQUESTED")
-                }
-                _ => (-2, "ERR_FAILED"),
-            };
-        }
-        if error.is::<ResolverError>() {
-            (-105, "ERR_NAME_NOT_RESOLVED")
-        } else if error.is::<TlsError>() {
-            (-107, "ERR_SSL_PROTOCOL_ERROR")
-        } else if error.matches(webkit2gtk::NetworkError::UnknownProtocol) {
-            (-301, "ERR_UNKNOWN_URL_SCHEME")
-        } else if error.matches(webkit2gtk::NetworkError::FileDoesNotExist) {
-            (-6, "ERR_FILE_NOT_FOUND")
-        } else {
-            (-2, "ERR_FAILED")
         }
     }
 }
@@ -2023,7 +1779,7 @@ mod tests {
                 "headers": { "Referer": "https://www.example/" }
             }
         });
-        let r = wire_record("owad-bw-1-1", WIRE_EVENTS[0], &sent);
+        let r = wire_record("owad-1", WIRE_EVENTS[0], &sent);
         assert_eq!(r["requestId"], "7");
         assert_eq!(r["url"], "https://content.example/lib.js");
         assert_eq!(r["resourceType"], "Script");
@@ -2032,7 +1788,7 @@ mod tests {
             "requestId": "7",
             "headers": { "Origin": "https://www.example", "Cookie": "a=1; b=2" }
         });
-        let r = wire_record("owad-bw-1-1", WIRE_EVENTS[1], &extra);
+        let r = wire_record("owad-1", WIRE_EVENTS[1], &extra);
         assert_eq!(r["method"], "Network.requestWillBeSentExtraInfo");
         assert_eq!(r["url"], serde_json::Value::Null);
         assert_eq!(r["headers"]["Origin"], "https://www.example");
@@ -2213,38 +1969,6 @@ mod tests {
     /// under the title bar and `WKWebView` insets the page below it; guests
     /// placed at the webview's own origin overlapped the title bar and their
     /// page lost the overlap (a 300 x 250 slot reported 300 x 226).
-    /// Regression (lab diff, `reward-optin`): `showInactive()` queued the
-    /// show to the main thread, and the page loaded and mounted its ad
-    /// guests first, so their 400025 preceded the first-visible-window
-    /// heartbeat. On the main thread the show now happens before returning.
-    #[test]
-    fn a_show_on_the_main_thread_happens_before_returning() {
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicBool, Ordering};
-        let shown = Arc::new(AtomicBool::new(false));
-        let s = Arc::clone(&shown);
-        now_or_on_main(
-            true,
-            move || s.store(true, Ordering::SeqCst),
-            |_| panic!("not queued on the main thread"),
-        )
-        .unwrap();
-        assert!(shown.load(Ordering::SeqCst));
-        let queued = std::cell::Cell::new(false);
-        let s = Arc::clone(&shown);
-        shown.store(false, Ordering::SeqCst);
-        now_or_on_main(
-            false,
-            move || s.store(true, Ordering::SeqCst),
-            |_| {
-                queued.set(true);
-                Ok(())
-            },
-        )
-        .unwrap();
-        assert!(queued.get() && !shown.load(Ordering::SeqCst));
-    }
-
     #[test]
     fn guests_are_placed_below_the_content_inset() {
         // An app window's webview fills the window from its top edge.

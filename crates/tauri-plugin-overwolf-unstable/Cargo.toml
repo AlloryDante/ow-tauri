@@ -1,0 +1,28 @@
+[package]
+name = "tauri-plugin-overwolf-unstable"
+description = "Enables Tauri's `unstable` feature for tauri-plugin-overwolf's ads on Windows and macOS only. Not used directly."
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository = "https://github.com/AlloryDante/ow-tauri"
+keywords = ["tauri", "overwolf"]
+categories = ["gui"]
+include = ["/src/**", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE"]
+
+# This crate exists only to carry a feature requirement. tauri-plugin-overwolf
+# depends on it from a `cfg(any(windows, target_os = "macos"))` table under
+# its `ads` feature, so Cargo unifies `unstable` into the app's `tauri` on
+# those targets only: on Linux no app window is rebuilt as a window plus a
+# child webview. (A crate cannot depend on `tauri` twice under two names, so
+# the requirement lives in a separate crate.)
+[dependencies]
+# Not `workspace = true`: the workspace entry turns Tauri's default features
+# on, and this crate must add nothing but `unstable`. Keep the version equal
+# to the workspace's.
+tauri = { version = "2.12.1", default-features = false, features = ["unstable"] }
+
+[lints]
+workspace = true

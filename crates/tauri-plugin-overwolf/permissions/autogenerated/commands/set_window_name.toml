@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-set-window-name"
+description = "Enables the set_window_name command without any pre-configured scope."
+commands.allow = ["set_window_name"]
+
+[[permission]]
+identifier = "deny-set-window-name"
+description = "Denies the set_window_name command without any pre-configured scope."
+commands.deny = ["set_window_name"]

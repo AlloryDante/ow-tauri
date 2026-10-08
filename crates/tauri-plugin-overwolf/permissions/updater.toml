@@ -1,0 +1,11 @@
+"$schema" = "schemas/schema.json"
+
+[[set]]
+identifier = "updater"
+description = "Opt-in: check for, download and install app updates from Overwolf's update feed (Windows, cargo feature `updater`)."
+permissions = [
+  "allow-updater-check",
+  "allow-updater-download",
+  "allow-updater-install",
+  "allow-updater-download-and-install",
+]

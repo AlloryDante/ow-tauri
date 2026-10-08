@@ -1,10 +1,11 @@
-# Mock-runtime test app for the plugin's permission sets and runtime
-# capabilities (ARCHITECTURE 5.2). The ACL is compiled by tauri-build from the
-# plugin's `permissions/` and `capabilities/` here, which the plugin crate's
-# own tests cannot do. Never published, never run as a GUI app.
+# Mock-runtime test app for the plugin's permission sets, runtime
+# capabilities and caller gate (DESIGN §7.2). The ACL is compiled by
+# tauri-build from the plugin's `permissions/` and the `capabilities/` here,
+# which the plugin crate's own tests cannot do. Never published, never run
+# as a GUI app. W1 keeps it minimal; the full suite returns in W3.
 [package]
 name = "ow-tauri-acl-tests"
-description = "Mock-runtime ACL and IPC routing tests for tauri-plugin-overwolf."
+description = "Mock-runtime ACL tests for tauri-plugin-overwolf."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,15 +18,13 @@ test = false
 doctest = false
 
 [dependencies]
-tauri = { workspace = true, features = ["test", "unstable"] }
+tauri = { workspace = true, features = ["test"] }
 tauri-plugin-overwolf = { path = "../..", features = ["test-util"] }
-
-[dev-dependencies]
+# `generate_context!` embeds `plugins.overwolf` as a `serde_json` value.
 serde_json = { workspace = true }
 
 [build-dependencies]
 tauri-build = { workspace = true }
-tauri-plugin-overwolf = { path = "../..", default-features = false }
 
 [lints]
 workspace = true

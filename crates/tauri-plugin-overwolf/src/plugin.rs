@@ -1,38 +1,40 @@
-//! The Tauri plugin: [`Builder`] and the event hooks (CONTRACT A.5, A.6;
-//! ARCHITECTURE 3).
+//! The Tauri plugin: [`Builder`], [`init`] and the hooks (DESIGN §3.3,
+//! §4.2). Every hook forwards to `host::dispatch` and nothing else (frozen
+//! in W1).
 
 use std::sync::Arc;
 
 use tauri::plugin::{PluginApi, TauriPlugin};
-use tauri::webview::{PageLoadEvent, PageLoadPayload};
-use tauri::{AppHandle, Manager, RunEvent, Runtime, Webview, WindowEvent};
-use url::Url;
+use tauri::{AppHandle, Manager, Runtime};
 
-use crate::analytics::Transport;
 use crate::config::Config;
 use crate::ext::Overwolf;
-use crate::host::{Host, SetupOptions};
-use crate::packages::PackagesBackend;
-use crate::state::log::LogLevel;
-use crate::window::{WebviewClass, classify};
+use crate::host::{SetupOptions, core_of, dispatch, lifecycle};
 
-pub use crate::commands::list::COMMANDS;
-
-/// The plugin's own script (`js/native-dialogs.js`, CONTRACT B.2.6): keeps
-/// the page's `alert()`, `confirm()` and `prompt()` in the webviews the
-/// plugin manages. Tauri runs plugin scripts in registration order, so it
-/// runs before `tauri-plugin-dialog`'s, which the plugin registers later.
-const NATIVE_DIALOGS_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/native-dialogs.js"));
-
-/// Configures and builds the plugin.
+/// The plugin with the defaults: `Builder::new().build()`.
 ///
 /// ```no_run
-/// # fn manifest() -> &'static str { "{}" }
-/// let plugin = tauri_plugin_overwolf::Builder::new()
-///     .manifest_json(manifest()) // tauri_plugin_overwolf::embedded_manifest!() in an app
-///     .packages_backend(tauri_plugin_overwolf::PackagesBackend::None)
-///     .build::<tauri::Wry>();
-/// # let _ = plugin;
+/// # fn example(context: tauri::Context) {
+/// tauri::Builder::default()
+///     .plugin(tauri_plugin_overwolf::init())
+///     .run(context)
+///     .expect("error while running the app");
+/// # }
+/// ```
+#[must_use]
+pub fn init<R: Runtime>() -> TauriPlugin<R, Option<Config>> {
+    Builder::new().build()
+}
+
+/// Configures the plugin. Everything else comes from `plugins.overwolf` in
+/// `tauri.conf.json` (DESIGN §3.2); the uid is configuration-only, so the
+/// build step that writes the installer records sees the same one.
+///
+/// ```
+/// let builder = tauri_plugin_overwolf::Builder::new()
+///     .test_ad(cfg!(debug_assertions))
+///     .exclude_windows(["tray-*"]);
+/// # let _ = builder;
 /// ```
 #[derive(Debug, Clone)]
 #[must_use]
@@ -47,58 +49,69 @@ impl Default for Builder {
 }
 
 impl Builder {
-    /// A builder with the defaults of CONTRACT A.1.
-    ///
-    /// ```rust
-    /// let builder = tauri_plugin_overwolf::Builder::new();
-    /// # let _ = builder;
-    /// ```
+    /// A builder with the defaults.
     pub fn new() -> Self {
         Builder {
             options: SetupOptions {
-                companion_plugins: true,
-                runtime_capabilities: true,
-                main_webview: true,
                 os_queries: true,
-                updater_os_steps: true,
+                runtime_capabilities: true,
                 ..SetupOptions::default()
             },
         }
     }
 
-    /// The app manifest, the output of
-    /// [`embedded_manifest!`](crate::embedded_manifest). Required.
+    /// Turns test ads on. Test ads are on when this, `ads.testAd`, the
+    /// argument `--test-ad` or `OW_TAURI_TEST_AD=1` says so.
     ///
-    /// ```rust
-    /// // In an app: `.manifest_json(tauri_plugin_overwolf::embedded_manifest!())`.
-    /// let builder = tauri_plugin_overwolf::Builder::new().manifest_json(r#"{"name":"demo"}"#);
+    /// ```
+    /// let builder = tauri_plugin_overwolf::Builder::new().test_ad(true);
     /// # let _ = builder;
     /// ```
-    pub fn manifest_json(mut self, json: &'static str) -> Self {
-        self.options.manifest_json = Some(json);
+    pub fn test_ad(mut self, enabled: bool) -> Self {
+        self.options.test_ad = enabled;
         self
     }
 
-    /// `packagesBackend` (H.2): `None` (default) or the reserved `Native`;
-    /// overrides the configuration.
+    /// `disableAnonymousAnalytics()` before this launch's first analytics
+    /// requests (D1): only the mandatory set is sent.
     ///
-    /// ```rust
-    /// use tauri_plugin_overwolf::{Builder, PackagesBackend};
-    /// let builder = Builder::new().packages_backend(PackagesBackend::None);
+    /// ```
+    /// let builder = tauri_plugin_overwolf::Builder::new().disable_anonymous_analytics();
     /// # let _ = builder;
     /// ```
-    pub fn packages_backend(mut self, backend: PackagesBackend) -> Self {
-        self.options.packages_backend = Some(backend);
+    pub fn disable_anonymous_analytics(mut self) -> Self {
+        self.options.disable_anonymous_analytics = true;
         self
     }
 
-    /// `analytics.hostLabel` and `analytics.hostVersion` (CONTRACT section
-    /// 0); `None` keeps the Tauri crate version.
+    /// `disableAdsOptimization()` from the start.
     ///
-    /// ```rust
-    /// // Reproduce ow-electron's analytics labels exactly.
-    /// let builder = tauri_plugin_overwolf::Builder::new()
-    ///     .host_label("electron", Some("42.11.4".into()));
+    /// ```
+    /// let builder = tauri_plugin_overwolf::Builder::new().disable_ads_optimization();
+    /// # let _ = builder;
+    /// ```
+    pub fn disable_ads_optimization(mut self) -> Self {
+        self.options.disable_ads_optimization = true;
+        self
+    }
+
+    /// `disableAdsFPD()` from the start.
+    ///
+    /// ```
+    /// let builder = tauri_plugin_overwolf::Builder::new().disable_ads_fpd();
+    /// # let _ = builder;
+    /// ```
+    pub fn disable_ads_fpd(mut self) -> Self {
+        self.options.disable_ads_fpd = true;
+        self
+    }
+
+    /// The host label and version the analytics and the guests report
+    /// (`analytics.hostLabel`, `analytics.hostVersion`); `None` keeps the
+    /// Tauri version.
+    ///
+    /// ```
+    /// let builder = tauri_plugin_overwolf::Builder::new().host_label("tauri", None);
     /// # let _ = builder;
     /// ```
     pub fn host_label(mut self, label: impl Into<String>, version: Option<String>) -> Self {
@@ -106,563 +119,127 @@ impl Builder {
         self
     }
 
-    /// Replaces the HTTP client of every host request (analytics and the
-    /// consent request), for tests that capture requests (E.3).
+    /// Window label globs (`*`, `?`) that never count as visible app
+    /// windows for the analytics (D6), added to `analytics.excludeWindows`.
     ///
-    /// ```no_run
-    /// use std::sync::Arc;
-    /// use tauri_plugin_overwolf::analytics::Transport;
-    /// fn with_capture(t: Arc<dyn Transport>) -> tauri_plugin_overwolf::Builder {
-    ///     tauri_plugin_overwolf::Builder::new().analytics_transport(t)
-    /// }
     /// ```
-    pub fn analytics_transport(mut self, transport: Arc<dyn Transport>) -> Self {
+    /// let builder = tauri_plugin_overwolf::Builder::new().exclude_windows(["tray-*", "splash"]);
+    /// # let _ = builder;
+    /// ```
+    pub fn exclude_windows<I, S>(mut self, globs: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.options
+            .exclude_windows
+            .extend(globs.into_iter().map(Into::into));
+        self
+    }
+
+    /// The app composes its own `on_web_content_process_terminate` hook and
+    /// calls [`handle_web_content_process_terminate`](crate::handle_web_content_process_terminate)
+    /// from it, so the plugin does not warn that the hook is missing.
+    ///
+    /// ```
+    /// let builder = tauri_plugin_overwolf::Builder::new().forwards_web_content_process_terminate();
+    /// # let _ = builder;
+    /// ```
+    #[cfg(target_os = "macos")]
+    pub fn forwards_web_content_process_terminate(mut self) -> Self {
+        self.options.forwards_terminate = true;
+        self
+    }
+
+    /// The embedded `dev-app-update.yml` a debug build reads instead of the
+    /// configured feed (CONTRACT I.1). Ignored in release builds.
+    ///
+    /// ```
+    /// let builder = tauri_plugin_overwolf::Builder::new()
+    ///     .dev_update_config("provider: generic\nurl: http://127.0.0.1:8080/\n");
+    /// # let _ = builder;
+    /// ```
+    #[cfg(all(feature = "updater", windows))]
+    pub fn dev_update_config(mut self, yaml: &'static str) -> Self {
+        self.options.dev_update_config = Some(yaml);
+        self
+    }
+
+    /// **Tests only.** Replaces the HTTP client of every host request, to
+    /// capture requests. Not a stable API.
+    #[cfg(feature = "test-util")]
+    #[doc(hidden)]
+    pub fn analytics_transport(mut self, transport: Arc<dyn crate::analytics::Transport>) -> Self {
         self.options.transport = Some(transport);
         self
     }
 
-    /// Forces test ads on or off (the `--test-ad` switch wins when set).
-    ///
-    /// ```rust
-    /// // Test ads in a lab build, whatever the command line says.
-    /// let builder = tauri_plugin_overwolf::Builder::new().test_ad(true);
-    /// # let _ = builder;
-    /// ```
-    pub fn test_ad(mut self, enabled: bool) -> Self {
-        self.options.test_ad = Some(enabled);
-        self
-    }
-
-    /// Console-assigned uid; overrides the configuration and the computed
-    /// uid (G.2).
-    ///
-    /// ```rust
-    /// let builder = tauri_plugin_overwolf::Builder::new()
-    ///     .uid("djpddhibpjddgdpcfkbooljealnjnamkhlihgbab");
-    /// # let _ = builder;
-    /// ```
-    pub fn uid(mut self, uid: impl Into<String>) -> Self {
-        self.options.uid = Some(uid.into());
-        self
-    }
-
-    /// Whether the plugin registers the opener, dialog and global-shortcut
-    /// plugins it calls when the app has not (default `true`).
-    ///
-    /// ```rust
-    /// // The app registers opener, dialog and global-shortcut itself.
-    /// let builder = tauri_plugin_overwolf::Builder::new().companion_plugins(false);
-    /// # let _ = builder;
-    /// ```
-    pub fn companion_plugins(mut self, enabled: bool) -> Self {
-        self.options.companion_plugins = enabled;
-        self
-    }
-
-    /// Whether the plugin adds its runtime capabilities (default `true`):
-    /// `overwolf:main` and the facade's core permissions for `ow-main`, the
-    /// one command of ad guests and consent windows, and window dragging
-    /// (`core:window:allow-start-dragging`, `allow-toggle-maximize`) for the
-    /// app-region emulation in `bw-*` webviews.
-    /// Apps that grant `overwolf:main` to `ow-main` in their own
-    /// capability files, and test harnesses with an empty ACL, turn it off.
-    ///
-    /// ```rust
-    /// // `capabilities/main.json` grants `overwolf:main` to `ow-main`.
-    /// let builder = tauri_plugin_overwolf::Builder::new().runtime_capabilities(false);
-    /// # let _ = builder;
-    /// ```
-    pub fn runtime_capabilities(mut self, enabled: bool) -> Self {
-        self.options.runtime_capabilities = enabled;
-        self
-    }
-
-    /// Whether the plugin creates the hidden main webview `ow-main`
-    /// (default `true`). Tests turn it off.
-    ///
-    /// ```rust
-    /// // A mock-runtime test creates `ow-main` itself.
-    /// let builder = tauri_plugin_overwolf::Builder::new().main_webview(false);
-    /// # let _ = builder;
-    /// ```
-    pub fn main_webview(mut self, enabled: bool) -> Self {
-        self.options.main_webview = enabled;
-        self
-    }
-
-    /// Overrides the process arguments (tests).
-    ///
-    /// ```rust
-    /// let builder = tauri_plugin_overwolf::Builder::new()
-    ///     .argv(vec!["app".into(), "--test-ad".into()]);
-    /// # let _ = builder;
-    /// ```
-    pub fn argv(mut self, argv: Vec<String>) -> Self {
-        self.options.argv = Some(argv);
-        self
-    }
-
-    /// The embedded `dev-app-update.yml`, read when the app sets
-    /// `autoUpdater.forceDevUpdateConfig` in a debug build (CONTRACT I.1).
-    /// Pass [`embedded_dev_app_update!`](crate::embedded_dev_app_update);
-    /// an empty text means there is none.
-    ///
-    /// ```rust
-    /// let builder = tauri_plugin_overwolf::Builder::new()
-    ///     .dev_app_update_yml("provider: generic\nurl: http://localhost:8080/\n");
-    /// # let _ = builder;
-    /// ```
-    pub fn dev_app_update_yml(mut self, yaml: &'static str) -> Self {
-        self.options.dev_app_update = Some(yaml);
-        self
-    }
-
-    /// Skips every OS display and cursor query, for Tauri's mock runtime,
-    /// which implements none: displays are empty and the cursor is at 0, 0.
-    /// It also skips the machine-id and cookie-store queries of the mock
-    /// runtime's host; it does not touch the updater (see
-    /// [`Builder::skip_updater_os_steps`]).
-    ///
-    /// ```rust
-    /// let builder = tauri_plugin_overwolf::Builder::new().skip_os_queries();
-    /// # let _ = builder;
-    /// ```
+    /// **Tests only.** Points host requests at other endpoints (failure
+    /// injection). Not a stable API.
     #[cfg(feature = "test-util")]
-    pub fn skip_os_queries(mut self) -> Self {
-        self.options.os_queries = false;
+    #[doc(hidden)]
+    pub fn endpoints(mut self, endpoints: crate::analytics::TestEndpoints) -> Self {
+        self.options.endpoints = Some(endpoints);
         self
     }
 
-    /// **Tests only.** Skips the update client's OS steps: the Windows
-    /// Authenticode and macOS code-signature checks, the macOS unpack and
-    /// the installer itself, which a mock runtime cannot run. Installs are
-    /// recorded for `Overwolf::test_updater_install_at_exit` instead. The
-    /// SHA-512 and minisign checks still run. Never enable `test-util` in a
-    /// shipped build: this turns a fail-closed check off.
-    ///
-    /// ```rust
-    /// let builder = tauri_plugin_overwolf::Builder::new().skip_updater_os_steps();
-    /// # let _ = builder;
-    /// ```
-    #[cfg(feature = "test-util")]
-    pub fn skip_updater_os_steps(mut self) -> Self {
-        self.options.updater_os_steps = false;
-        self
-    }
-
-    /// Builds the plugin. The configuration is `plugins.overwolf` in
-    /// `tauri.conf.json` (A.1); it may be absent.
-    ///
-    /// ```no_run
-    /// let app = tauri::Builder::default().plugin(
-    ///     tauri_plugin_overwolf::Builder::new()
-    ///         .manifest_json(manifest()) // `embedded_manifest!()` in an app
-    ///         .build(),
-    /// );
-    /// # let _ = app;
-    /// # fn manifest() -> &'static str { "{}" }
-    /// ```
+    /// Builds the plugin.
+    #[must_use]
     pub fn build<R: Runtime>(self) -> TauriPlugin<R, Option<Config>> {
         let options = self.options;
         tauri::plugin::Builder::<R, Option<Config>>::new(crate::PLUGIN_NAME)
             .invoke_handler(crate::commands::handler())
             .setup(move |app, api| setup(app, &api, options.clone()))
-            .on_event(on_event)
-            .on_navigation(on_navigation)
-            .on_page_load(on_page_load)
-            .js_init_script(NATIVE_DIALOGS_JS)
+            .on_window_ready(|window| {
+                if let Some(core) = core_of(&window) {
+                    dispatch::on_window_ready(&core, &window);
+                }
+            })
+            .on_webview_ready(|webview| {
+                if let Some(core) = core_of(&webview) {
+                    dispatch::on_webview_ready(&core, &webview);
+                }
+            })
+            .on_page_load(|webview, payload| {
+                if let Some(core) = core_of(webview) {
+                    dispatch::on_page_load(&core, webview, payload);
+                }
+            })
+            .on_navigation(|webview, url| {
+                core_of(webview).is_none_or(|core| dispatch::on_navigation(&core, webview, url))
+            })
+            .on_event(|app, event| {
+                if let Some(core) = core_of(app) {
+                    dispatch::on_event(&core, event);
+                }
+            })
             .build()
+    }
+
+    /// The setup options (tests adjust them).
+    #[cfg(test)]
+    pub(crate) fn options_mut(&mut self) -> &mut SetupOptions {
+        &mut self.options
     }
 }
 
-fn host_of<R: Runtime, M: Manager<R>>(manager: &M) -> Option<Arc<Host<R>>> {
-    manager
-        .try_state::<Overwolf<R>>()
-        .map(|s| Arc::clone(&s.inner().0))
-}
-
+/// The plugin's setup: reads the configuration and the state, registers the
+/// guest and consent runtime capabilities and the restart sentinel. Writes
+/// nothing (DESIGN §4.2).
 fn setup<R: Runtime>(
     app: &AppHandle<R>,
     api: &PluginApi<R, Option<Config>>,
     options: SetupOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // The invisible lab app stays in the background from the start, before
-    // any window or webview exists (feature `lab`).
-    if crate::lab::invisible() {
-        crate::platform::webview::hold_lab_app_back();
-    }
-    let config = api.config().clone().unwrap_or_default();
-    let host = crate::host::build_host(app, config, options)?;
-    app.manage(Overwolf(Arc::clone(&host)));
-    if host.options.runtime_capabilities {
-        let capability = crate::capabilities::main_capability()?;
-        app.add_capability(capability)?;
+    let capabilities = options.runtime_capabilities;
+    let core = crate::host::setup::setup(app, api.config().clone(), options)?;
+    app.manage(Overwolf(Arc::clone(&core)));
+    if capabilities {
         app.add_capability(crate::capabilities::adview_guest_capability()?)?;
         app.add_capability(crate::capabilities::cmp_capability()?)?;
-        app.add_capability(crate::capabilities::ui_chrome_capability()?)?;
     }
-    if host.options.companion_plugins {
-        register_companions(app);
-    }
-    if host.options.main_webview {
-        create_main_webview_later(app);
-    }
-    host.spawn_ticker();
-    let weak = Arc::downgrade(&host);
-    crate::platform::webview::observe_minimize(move |ns_window, stage| {
-        if let Some(host) = weak.upgrade() {
-            host.os_window_minimize(ns_window, stage);
-        }
-    });
-    crate::lab::start(app);
+    lifecycle::install_sentinel(&core);
+    #[cfg(target_os = "macos")]
+    crate::platform::terminate::warn_if_unwired(core.options.forwards_terminate);
     Ok(())
-}
-
-/// Creates `ow-main` from the event loop. Tauri holds its plugin-store lock
-/// while plugins set up, and building a webview takes that lock again, so
-/// creating it in `setup` would deadlock the app before it starts. The
-/// request is posted from another thread (`run_on_main_thread` on the main
-/// thread runs at once). An app that cannot create its main webview exits
-/// with code 1, as a failed setup ends the app.
-fn create_main_webview_later<R: Runtime>(app: &AppHandle<R>) {
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let handle = app.clone();
-        let posted = app.run_on_main_thread(move || {
-            let Some(host) = host_of(&handle) else { return };
-            if let Err(err) = host.create_main_webview(None) {
-                host.log(
-                    LogLevel::Error,
-                    &format!("creating the main webview failed: {err}"),
-                );
-                handle.exit(1);
-            }
-        });
-        if let (Err(err), Some(host)) = (posted, host_of(&app)) {
-            host.log(
-                LogLevel::Error,
-                &format!("creating the main webview failed: {err}"),
-            );
-            app.exit(1);
-        }
-    });
-}
-
-/// Registers the opener, dialog and global-shortcut plugins the app has not
-/// registered itself. The plugin store is locked while plugins set up and
-/// while they receive events, so registration is posted to the event loop
-/// from another thread.
-fn register_companions<R: Runtime>(app: &AppHandle<R>) {
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let handle = app.clone();
-        let posted = app.run_on_main_thread(move || {
-            let log = |what: &str, r: tauri::Result<()>| {
-                if let (Err(err), Some(host)) = (r, host_of(&handle)) {
-                    host.log(
-                        LogLevel::Error,
-                        &format!("registering the {what} plugin failed: {err}"),
-                    );
-                }
-            };
-            if handle
-                .try_state::<tauri_plugin_opener::Opener<R>>()
-                .is_none()
-            {
-                log(
-                    "opener",
-                    handle.plugin(
-                        tauri_plugin_opener::Builder::new()
-                            .open_js_links_on_click(false)
-                            .build(),
-                    ),
-                );
-            }
-            if handle
-                .try_state::<tauri_plugin_dialog::Dialog<R>>()
-                .is_none()
-            {
-                log("dialog", handle.plugin(tauri_plugin_dialog::init()));
-            }
-            if handle
-                .try_state::<tauri_plugin_global_shortcut::GlobalShortcut<R>>()
-                .is_none()
-            {
-                log(
-                    "global-shortcut",
-                    handle.plugin(tauri_plugin_global_shortcut::Builder::new().build()),
-                );
-            }
-        });
-        if let (Err(err), Some(host)) = (posted, host_of(&app)) {
-            host.log(
-                LogLevel::Error,
-                &format!("registering companion plugins failed: {err}"),
-            );
-        }
-    });
-}
-
-fn on_event<R: Runtime>(app: &AppHandle<R>, event: &RunEvent) {
-    let Some(host) = host_of(app) else { return };
-    match event {
-        RunEvent::ExitRequested { code, api, .. } => {
-            // `app.exit(code)` from the plugin's own exit path carries a code
-            // and proceeds. A request without a code comes from the last
-            // window closing or from the OS (A.6): it is always prevented and
-            // the host runs the quit sequence (or exits when it cannot).
-            if code.is_none() {
-                api.prevent_exit();
-                host.exit_requested();
-            }
-        }
-        RunEvent::Exit => host.on_exit(),
-        RunEvent::WindowEvent { label, event, .. } => window_event(&host, label, event),
-        #[cfg(target_os = "macos")]
-        RunEvent::Reopen {
-            has_visible_windows,
-            ..
-        } => {
-            let mut message = crate::ipc::messages::HostMessage::lifecycle("activate", None, None);
-            if let crate::ipc::messages::HostMessage::Lifecycle { extra, .. } = &mut message {
-                extra.insert(
-                    "hasVisibleWindows".into(),
-                    serde_json::Value::Bool(*has_visible_windows),
-                );
-            }
-            host.send_main(message);
-        }
-        _ => {}
-    }
-}
-
-pub(crate) fn window_event<R: Runtime>(host: &Arc<Host<R>>, label: &str, event: &WindowEvent) {
-    match classify(label) {
-        WebviewClass::Main => match event {
-            WindowEvent::CloseRequested { api, .. } => {
-                // `ow-main` lives as long as the app; closing it would end the
-                // app without the quit sequence.
-                api.prevent_close();
-            }
-            WindowEvent::Destroyed => host.main_destroyed(),
-            _ => {}
-        },
-        WebviewClass::Ui(id) => {
-            if let WindowEvent::Focused(focused) = event {
-                host.ads_window_focus(id, *focused);
-            }
-            host.window_event(id, event);
-        }
-        WebviewClass::Cmp => {
-            if matches!(event, WindowEvent::Destroyed) {
-                host.consent_window_gone(label);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn on_navigation<R: Runtime>(webview: &Webview<R>, url: &Url) -> bool {
-    let allowed = host_of(webview).is_none_or(|host| navigation(&host, webview.label(), url));
-    crate::lab::navigation(webview.label(), url, allowed);
-    allowed
-}
-
-/// The navigation policy of the webview `label` (A.2.3.1, A.6).
-pub(crate) fn navigation<R: Runtime>(host: &Arc<Host<R>>, label: &str, url: &Url) -> bool {
-    match classify(label) {
-        WebviewClass::Main => host.main_navigation(url),
-        WebviewClass::Ui(id) => host.ui_navigation(id, url),
-        WebviewClass::AdviewGuest => host.guest_navigation(label, url),
-        WebviewClass::Cmp => host.cmp_navigation(label, url),
-        _ => true,
-    }
-}
-
-fn on_page_load<R: Runtime>(webview: &Webview<R>, payload: &PageLoadPayload<'_>) {
-    crate::lab::page_load(webview, payload.event(), payload.url());
-    if let Some(host) = host_of(webview) {
-        page_load(&host, webview.label(), payload.event(), payload.url());
-    }
-}
-
-/// A page load of the webview `label` (top-level documents only).
-pub(crate) fn page_load<R: Runtime>(
-    host: &Arc<Host<R>>,
-    label: &str,
-    event: PageLoadEvent,
-    url: &Url,
-) {
-    match classify(label) {
-        WebviewClass::Main => host.main_page_load(event, url),
-        WebviewClass::Ui(id) => host.window_page_load(id, true, label, event, url),
-        WebviewClass::Remote(id) => host.window_page_load(id, false, label, event, url),
-        WebviewClass::AdviewGuest => host.guest_page_load(label, event, url),
-        WebviewClass::Cmp => host.consent_page_load(label, event, url),
-        WebviewClass::Other => {}
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::{Duration, Instant};
-
-    use tauri::test::{MockRuntime, mock_builder, mock_context, noop_assets};
-    use tauri::{App, Manager, WebviewUrl, WebviewWindowBuilder};
-
-    use super::{Builder, host_of};
-    use crate::ipc::messages::{HostMessage, WindowEventName};
-    use crate::ipc::router::MAIN_LABEL;
-    use crate::manifest::EmbeddedManifest;
-
-    fn app(name: &str, probe: tauri::plugin::TauriPlugin<MockRuntime>) -> App<MockRuntime> {
-        let dir =
-            std::env::temp_dir().join(format!("ow-tauri-plugin-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let manifest = serde_json::to_string(&EmbeddedManifest::minimal(
-            "Plugin Test",
-            "Example Studio",
-            "1.0.0",
-        ))
-        .unwrap();
-        let mut context = mock_context(noop_assets());
-        context.config_mut().plugins.0.insert(
-            "overwolf".into(),
-            serde_json::json!({ "state": { "appDataDir": dir } }),
-        );
-        let mut builder = Builder::new()
-            .manifest_json(Box::leak(manifest.into_boxed_str()))
-            .companion_plugins(false)
-            .runtime_capabilities(false)
-            .main_webview(false)
-            .argv(vec!["plugin-test".into()]);
-        builder.options.os_queries = false;
-        mock_builder()
-            .plugin(builder.build())
-            .plugin(probe)
-            .build(context)
-            .unwrap()
-    }
-
-    fn wait(what: &str, done: impl Fn() -> bool) {
-        let start = Instant::now();
-        while !done() {
-            assert!(
-                start.elapsed() < Duration::from_secs(10),
-                "timed out: {what}"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
-
-    /// The new `ow-main` of a soft restart is created while Tauri holds its
-    /// plugin-store lock (the `Destroyed` window event reaches the plugin's
-    /// `on_event` under that lock). Creating it inline would take the lock
-    /// again and deadlock. The probe plugin's `on_webview_ready` hook runs
-    /// under the same lock and reports the destruction from there.
-    #[test]
-    fn the_plugin_script_guards_native_dialogs_against_the_dialog_plugin() {
-        // The built guard (B.2.6), not the placeholder of a missing build.
-        assert!(super::NATIVE_DIALOGS_JS.contains("plugin:dialog|"));
-        assert!(super::NATIVE_DIALOGS_JS.contains("__TAURI_INTERNALS__"));
-    }
-
-    #[test]
-    fn soft_restart_recreates_main_from_a_hook_without_deadlock() {
-        let fired = Arc::new(AtomicBool::new(false));
-        let seen = Arc::clone(&fired);
-        let probe = tauri::plugin::Builder::<MockRuntime>::new("probe")
-            .on_webview_ready(move |webview| {
-                if webview.label() == "probe" {
-                    let host = host_of(webview.app_handle()).unwrap();
-                    host.main_destroyed();
-                    seen.store(true, Ordering::SeqCst);
-                }
-            })
-            .build();
-        let app = app("soft-restart", probe);
-        let host = host_of(app.handle()).unwrap();
-        let url = tauri::Url::parse("tauri://localhost/index.html").unwrap();
-        host.with_core(|c| {
-            c.soft_restart = Some(url.clone());
-            c.restart_stale_windows.insert(5);
-        });
-        // An exit request during the restart waits for the new main.
-        host.exit_requested();
-        assert!(host.with_core(|c| c.quit_after_restart && !c.quit.is_running()));
-        // Late events of a window the restart closed are dropped.
-        host.with_core(|c| {
-            c.queue_main(HostMessage::window(5, WindowEventName::Closed, None));
-            assert_eq!(c.router.queued(MAIN_LABEL), 0);
-        });
-
-        let handle = app.handle().clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let built = WebviewWindowBuilder::new(&handle, "probe", WebviewUrl::App("x".into()))
-                .build()
-                .is_ok();
-            let _ = tx.send(built);
-        });
-        let built = rx
-            .recv_timeout(Duration::from_secs(10))
-            .expect("the hook returned (no deadlock)");
-        assert!(built);
-        assert!(fired.load(Ordering::SeqCst));
-        wait("the new ow-main", || {
-            app.get_webview_window(MAIN_LABEL).is_some()
-        });
-        assert!(
-            host.with_core(|c| c.soft_restart.is_some()),
-            "the restart lasts until the new main has loaded"
-        );
-        // A second `Destroyed` report does not create another one.
-        host.main_destroyed();
-
-        host.main_page_load(tauri::webview::PageLoadEvent::Finished, &url);
-        assert!(host.with_core(|c| c.soft_restart.is_none() && !c.quit_after_restart));
-        assert!(
-            host.with_core(|c| c.quit.is_running()),
-            "the deferred quit started"
-        );
-    }
-
-    /// `setUserEmailHashes()` stores `eHashes` in `ow-electron.json`, as
-    /// ow-electron does (observed). The writer alone is tested in `state`;
-    /// this covers the host wiring.
-    #[test]
-    fn email_hashes_are_stored_in_ow_electron_json() {
-        let probe = tauri::plugin::Builder::<MockRuntime>::new("probe").build();
-        let app = app("ehashes", probe);
-        let host = host_of(app.handle()).unwrap();
-        let mut hashes = serde_json::Map::new();
-        for (k, v) in [("sha1", "s1"), ("md5", "m5"), ("sha256", "s256")] {
-            hashes.insert(k.into(), v.into());
-        }
-        host.send_email_hashes(Some(&hashes));
-        let text = std::fs::read_to_string(host.ow_electron.path()).unwrap();
-        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(
-            json["eHashes"],
-            serde_json::json!({ "sha1": "s1", "md5": "m5", "sha256": "s256" })
-        );
-    }
-
-    #[test]
-    fn crash_reports_are_counted_once() {
-        let probe = tauri::plugin::Builder::<MockRuntime>::new("probe").build();
-        let app = app("crash-once", probe);
-        let host = host_of(app.handle()).unwrap();
-        // The app's process-termination hook and the window's `Destroyed`
-        // both report the same crash.
-        host.with_core(|c| c.exiting = true);
-        host.main_crashed();
-        let history = host.ow_tauri.get().extra.get("mainCrashes").cloned();
-        assert!(
-            history.is_none(),
-            "an exit already under way records nothing"
-        );
-    }
 }

@@ -199,6 +199,28 @@ impl OwElectronFile {
         })
     }
 
+    /// Removes `eHashes` (`clearUserEmailHashes`, SEC-M9); nothing is
+    /// written when the file has none.
+    ///
+    /// # Errors
+    ///
+    /// As [`OwElectronFile::update`].
+    pub fn clear_e_hashes(&self) -> Result<(), WriteError> {
+        let (status, map) = {
+            let _guard = self
+                .lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.load()
+        };
+        if status != FileStatus::Invalid && !map.contains_key("eHashes") {
+            return Ok(());
+        }
+        self.update(|map| {
+            map.remove("eHashes");
+        })
+    }
+
     /// Writes the fields of `cmp` that are set, keeping other keys of the
     /// existing `cmp` object.
     ///
@@ -234,6 +256,20 @@ impl OwElectronFile {
 mod tests {
     use super::*;
     use crate::state::test_dir;
+
+    #[test]
+    fn clearing_hashes_keeps_other_keys_and_writes_only_when_needed() {
+        let dir = test_dir("owe-clear");
+        let file = OwElectronFile::new(dir.join("ow-electron.json"));
+        file.clear_e_hashes().unwrap();
+        assert!(!file.path().exists(), "nothing to clear writes nothing");
+        file.set_first_launch().unwrap();
+        file.write_e_hashes("a", "b", "c").unwrap();
+        file.clear_e_hashes().unwrap();
+        let text = std::fs::read_to_string(file.path()).unwrap();
+        assert_eq!(text, r#"{"firstLaunch":true}"#);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn preserves_unknown_keys_and_order() {

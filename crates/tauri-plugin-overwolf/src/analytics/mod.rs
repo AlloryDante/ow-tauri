@@ -34,6 +34,49 @@ use serde_json::{Map, Value};
 #[cfg(feature = "plugin")]
 pub use transport::{BoxFuture, Transport};
 
+/// **Tests only.** Endpoint overrides for failure injection (DESIGN §7.4):
+/// a host request whose URL starts with one of the production endpoints is
+/// sent to the override instead (path and query kept after the endpoint).
+/// Set through the hidden `Builder::endpoints` (feature `test-util`). Not a
+/// stable API.
+///
+/// ```
+/// use tauri_plugin_overwolf::analytics::{TestEndpoints, COUNTER_URL};
+/// let e = TestEndpoints { counter: Some("http://127.0.0.1:9/c".into()), ..TestEndpoints::default() };
+/// assert_eq!(e.rewrite(&format!("{COUNTER_URL}?a=1")), "http://127.0.0.1:9/c?a=1");
+/// assert_eq!(e.rewrite("https://example.com/"), "https://example.com/");
+/// ```
+#[doc(hidden)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TestEndpoints {
+    /// Replaces [`COUNTER_URL`].
+    pub counter: Option<String>,
+    /// Replaces [`INSERT_STATS_URL`].
+    pub insert_stats: Option<String>,
+    /// Replaces [`CMP_EU_ONLY_URL`].
+    pub cmp_eu_only: Option<String>,
+    /// Replaces the configured update feed (the update client, W3).
+    pub update_feed: Option<String>,
+}
+
+impl TestEndpoints {
+    /// `url` with a production endpoint prefix replaced by its override.
+    #[must_use]
+    pub fn rewrite(&self, url: &str) -> String {
+        let pairs = [
+            (COUNTER_URL, &self.counter),
+            (INSERT_STATS_URL, &self.insert_stats),
+            (CMP_EU_ONLY_URL, &self.cmp_eu_only),
+        ];
+        for (endpoint, replacement) in pairs {
+            if let (Some(rest), Some(to)) = (url.strip_prefix(endpoint), replacement) {
+                return format!("{to}{rest}");
+            }
+        }
+        url.to_owned()
+    }
+}
+
 /// The longest an exit waits for queued analytics requests (A.6, E.1).
 pub const DRAIN_LIMIT: Duration = Duration::from_millis(1500);
 /// Timeout of every host request except `cmp-eu-only` (E.1).
@@ -569,12 +612,6 @@ pub fn sub_info_fields(options: &Map<String, Value>) -> Vec<(String, Value)> {
         out.push(("providerName".into(), Value::String("tebex".into())));
     }
     out
-}
-
-/// Waits for queued analytics requests, at most `limit` (A.6).
-#[cfg(feature = "plugin")]
-pub(crate) async fn drain(dispatcher: &transport::Dispatcher, limit: Duration) {
-    dispatcher.drain(limit).await;
 }
 
 #[cfg(test)]

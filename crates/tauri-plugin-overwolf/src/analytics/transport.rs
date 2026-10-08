@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use super::{HostRequest, HostResponse, Method};
+use super::{HostRequest, HostResponse, Method, TestEndpoints};
 
 /// A boxed, sendable future.
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
@@ -409,6 +409,7 @@ struct Job {
 pub(crate) struct Dispatcher {
     transport: Arc<dyn Transport>,
     hooks: Arc<OnceLock<Arc<dyn RequestHooks>>>,
+    endpoints: Arc<OnceLock<TestEndpoints>>,
     queue: Arc<OnceLock<tokio::sync::mpsc::UnboundedSender<Job>>>,
     in_flight: Arc<AtomicUsize>,
     idle: Arc<tokio::sync::Notify>,
@@ -443,6 +444,7 @@ impl Dispatcher {
         Dispatcher {
             transport,
             hooks: Arc::new(OnceLock::new()),
+            endpoints: Arc::new(OnceLock::new()),
             queue: Arc::new(OnceLock::new()),
             in_flight: Arc::new(AtomicUsize::new(0)),
             idle: Arc::new(tokio::sync::Notify::new()),
@@ -452,6 +454,13 @@ impl Dispatcher {
     /// Installs the host's request hooks (once; later calls are ignored).
     pub(crate) fn set_hooks(&self, hooks: Arc<dyn RequestHooks>) {
         let _ = self.hooks.set(hooks);
+    }
+
+    /// Sends every later request whose URL starts with a production
+    /// endpoint to its override (failure injection, feature `test-util`;
+    /// once, later calls are ignored).
+    pub(crate) fn set_endpoints(&self, endpoints: TestEndpoints) {
+        let _ = self.endpoints.set(endpoints);
     }
 
     fn worker(&self) -> &tokio::sync::mpsc::UnboundedSender<Job> {
@@ -485,7 +494,10 @@ impl Dispatcher {
     /// call order and count for [`Self::drain`]; an untracked one (the
     /// consent request) starts at once. The returned future resolves with
     /// the response; dropping it does not cancel the request.
-    pub(crate) fn send(&self, request: HostRequest, tracked: bool) -> Pending {
+    pub(crate) fn send(&self, mut request: HostRequest, tracked: bool) -> Pending {
+        if let Some(endpoints) = self.endpoints.get() {
+            request.url = endpoints.rewrite(&request.url);
+        }
         let (reply, rx) = tokio::sync::oneshot::channel();
         if tracked {
             self.in_flight.fetch_add(1, Ordering::SeqCst);
@@ -535,6 +547,24 @@ impl Dispatcher {
             }
         };
         let _ = tokio::time::timeout(limit, wait).await;
+    }
+
+    /// [`Self::drain`] from a thread outside any async runtime (the exit
+    /// path): the wait runs on the request lane and this thread only blocks
+    /// on a channel, so it never needs the main thread or Tauri's runtime
+    /// (SEC-m10). Returns whether nothing was left in flight.
+    pub(crate) fn drain_blocking(&self, limit: Duration) -> bool {
+        if self.in_flight() == 0 {
+            return true;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let this = self.clone();
+        drop(on_lane(async move {
+            this.drain(limit).await;
+            let _ = tx.send(this.in_flight() == 0);
+        }));
+        rx.recv_timeout(limit + Duration::from_millis(100))
+            .unwrap_or(false)
     }
 }
 
@@ -938,5 +968,42 @@ mod tests {
             // Nothing in flight: returns at once.
             d.drain(Duration::from_millis(1)).await;
         });
+    }
+
+    struct Hang;
+    impl Transport for Hang {
+        fn send(&self, _r: HostRequest) -> BoxFuture<Result<HostResponse, String>> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    #[test]
+    fn the_blocking_drain_is_bounded_and_needs_no_runtime() {
+        let d = Dispatcher::new(Arc::new(Hang));
+        assert!(d.drain_blocking(Duration::from_millis(1)), "nothing queued");
+        let _pending = d.send(request("http://127.0.0.1:9/x"), true);
+        let started = std::time::Instant::now();
+        assert!(!d.drain_blocking(Duration::from_millis(200)));
+        let took = started.elapsed();
+        assert!(
+            took >= Duration::from_millis(200) && took < Duration::from_millis(1500),
+            "{took:?}"
+        );
+    }
+
+    #[test]
+    fn test_endpoints_rewrite_production_urls() {
+        let d = Dispatcher::new(Arc::new(Hang));
+        d.set_endpoints(TestEndpoints {
+            insert_stats: Some("http://127.0.0.1:9/s".into()),
+            ..TestEndpoints::default()
+        });
+        assert_eq!(
+            d.endpoints
+                .get()
+                .unwrap()
+                .rewrite(&format!("{}?x", super::super::INSERT_STATS_URL)),
+            "http://127.0.0.1:9/s?x"
+        );
     }
 }

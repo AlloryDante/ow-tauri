@@ -1,0 +1,7 @@
+{
+  "identifier": "misgranted",
+  "description": "A mis-scoped capability that names plugin webview labels: the plugin's own caller gate must still refuse them.",
+  "local": true,
+  "webviews": ["owad-misgranted", "ow-cmp-misgranted"],
+  "permissions": ["overwolf:default"]
+}

@@ -1,0 +1,10 @@
+"$schema" = "schemas/schema.json"
+
+[[set]]
+identifier = "email-hashes"
+description = "Opt-in (personal data): generate, set and clear the user's email hashes, which are sent to Overwolf and stored as `eHashes`."
+permissions = [
+  "allow-generate-user-email-hashes",
+  "allow-set-user-email-hashes",
+  "allow-clear-user-email-hashes",
+]

@@ -1,0 +1,15 @@
+"$schema" = "schemas/schema.json"
+
+# Ad guests (`owad-*` child webviews) and the consent windows (`ow-cmp*`). The
+# plugin adds both at run time as remote capabilities bound to those webview
+# labels and to Overwolf's exact page prefixes (see `src/capabilities.rs`).
+# Never grant these sets in an app capability.
+[[set]]
+identifier = "adview-guest"
+description = "Never grant: added by the plugin at run time for ad guests (`owad-*`) on https://www.overwolf.com/monsdk/electron/. Grants `adview_event`."
+permissions = ["allow-adview-event"]
+
+[[set]]
+identifier = "cmp-window"
+description = "Never grant: added by the plugin at run time for consent windows (`ow-cmp*`) on https://content.overwolf.com/monsdk/electron/. Grants `cmp_event`."
+permissions = ["allow-cmp-event"]

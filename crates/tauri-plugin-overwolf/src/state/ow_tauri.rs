@@ -1,9 +1,12 @@
 //! `ow-tauri.json`, owned by ow-tauri (CONTRACT F.3).
 //!
+//! Loading never writes: a file that is not valid JSON is moved aside by
+//! [`OwTauriFile::repair`] at `RunEvent::Ready` (DESIGN §4.2, §4.12).
+//!
 //! ```
 //! use tauri_plugin_overwolf::state::ow_tauri::OwTauriState;
-//! let state: OwTauriState = serde_json::from_str(r#"{ "schema": 1, "pendingBrowserArgs": ["--disable-gpu"] }"#).unwrap();
-//! assert_eq!(state.pending_browser_args, ["--disable-gpu"]);
+//! let state: OwTauriState = serde_json::from_str(r#"{ "schema": 1, "anonymousAnalytics": false }"#).unwrap();
+//! assert_eq!(state.anonymous_analytics, Some(false));
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -30,9 +33,10 @@ pub struct OwTauriState {
     /// Consent page ad-optimisation toggle (D.6.6).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ad_optimization: Option<bool>,
-    /// Browser switches recorded by app code, applied from the next launch (A.1.1).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub pending_browser_args: Vec<String>,
+    /// The persisted anonymous-analytics preference, applied at the next
+    /// `RunEvent::Ready` (`set_anonymous_analytics_preference`, (R10)).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anonymous_analytics: Option<bool>,
     /// App-level analytics switch (`analytics.userSwitch` only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analytics_user_enabled: Option<bool>,
@@ -61,7 +65,7 @@ impl Default for OwTauriState {
             schema: SCHEMA,
             staging_id: None,
             ad_optimization: None,
-            pending_browser_args: Vec::new(),
+            anonymous_analytics: None,
             analytics_user_enabled: None,
             muid: None,
             ow_electron_fallback: None,
@@ -78,9 +82,6 @@ pub struct OwTauriFile {
     state: Mutex<OwTauriState>,
     /// Whether the file on disk could not be parsed at load.
     pub corrupt_at_load: bool,
-    /// Where an unparseable file was moved at load
-    /// (`ow-tauri.json.corrupt-<ms since 1970>`), when the move succeeded.
-    pub corrupt_backup: Option<PathBuf>,
 }
 
 /// Parses `ow-tauri.json` field by field: a known field with an unexpected
@@ -91,10 +92,10 @@ pub struct OwTauriFile {
 ///
 /// ```
 /// use tauri_plugin_overwolf::state::ow_tauri::parse_lenient;
-/// let s = parse_lenient(br#"{"muid":"M","pendingBrowserArgs":7}"#).unwrap();
+/// let s = parse_lenient(br#"{"muid":"M","anonymousAnalytics":7}"#).unwrap();
 /// assert_eq!(s.muid.as_deref(), Some("M"));
-/// assert!(s.pending_browser_args.is_empty());
-/// assert_eq!(s.extra["pendingBrowserArgs"], 7);
+/// assert!(s.anonymous_analytics.is_none());
+/// assert_eq!(s.extra["anonymousAnalytics"], 7);
 /// assert!(parse_lenient(b"garbage").is_none());
 /// ```
 #[must_use]
@@ -150,32 +151,43 @@ fn move_aside(path: &Path) -> Option<PathBuf> {
 }
 
 impl OwTauriFile {
-    /// Loads `path`. A missing file starts from defaults. A file whose
-    /// known fields have unexpected types keeps them in `extra`
-    /// ([`parse_lenient`]). A file that is not a JSON object is moved to
-    /// `ow-tauri.json.corrupt-<ms>` and the state starts from defaults
-    /// ([`OwTauriFile::corrupt_at_load`] is then `true`).
+    /// Loads `path` without writing anything. A missing file starts from
+    /// defaults. A file whose known fields have unexpected types keeps them
+    /// in `extra` ([`parse_lenient`]). A file that is not a JSON object
+    /// starts from defaults ([`OwTauriFile::corrupt_at_load`] is then
+    /// `true`) and stays on disk until [`OwTauriFile::repair`].
     #[must_use]
     pub fn load(path: PathBuf) -> Self {
-        let mut backup = None;
         let (state, corrupt) = match std::fs::read(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (OwTauriState::default(), false),
             Err(_) => (OwTauriState::default(), true),
-            Ok(bytes) => {
-                if let Some(s) = parse_lenient(&bytes) {
-                    (s, false)
-                } else {
-                    backup = move_aside(&path);
-                    (OwTauriState::default(), true)
-                }
-            }
+            Ok(bytes) => match parse_lenient(&bytes) {
+                Some(s) => (s, false),
+                None => (OwTauriState::default(), true),
+            },
         };
         OwTauriFile {
             path,
             state: Mutex::new(state),
             corrupt_at_load: corrupt,
-            corrupt_backup: backup,
         }
+    }
+
+    /// Moves a file that was not valid JSON at load to
+    /// `ow-tauri.json.corrupt-<ms since 1970>`, so nothing is lost and the
+    /// next write starts clean. Called once at `RunEvent::Ready`, never
+    /// before (DESIGN §4.2). Returns the new path when a file was moved.
+    pub fn repair(&self) -> Option<PathBuf> {
+        if !self.corrupt_at_load || !self.path.exists() {
+            return None;
+        }
+        // Only a file that still fails to parse is moved: another instance
+        // may have rewritten it since this one loaded it.
+        let bytes = std::fs::read(&self.path).ok()?;
+        if parse_lenient(&bytes).is_some() {
+            return None;
+        }
+        move_aside(&self.path)
     }
 
     /// The file path.
@@ -280,13 +292,15 @@ mod tests {
         std::fs::write(&path, b"garbage").unwrap();
         let corrupt = OwTauriFile::load(path.clone());
         assert!(corrupt.corrupt_at_load);
-        let backup = corrupt.corrupt_backup.clone().unwrap();
+        assert!(path.exists(), "loading never moves the file");
+        let backup = corrupt.repair().unwrap();
         assert_eq!(
             std::fs::read(&backup).unwrap(),
             b"garbage",
             "the old file is kept"
         );
         assert!(!path.exists());
+        assert!(corrupt.repair().is_none(), "moved once");
         corrupt.update(|s| s.muid = Some("X".into())).unwrap();
         let reloaded = OwTauriFile::load(path);
         assert_eq!(reloaded.get().muid.as_deref(), Some("X"));
