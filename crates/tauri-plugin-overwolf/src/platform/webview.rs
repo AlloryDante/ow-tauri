@@ -457,30 +457,73 @@ pub(crate) fn default_store_cookie_details(
 pub(crate) fn content_inset_top<R: Runtime>(window: &tauri::Window<R>) -> f64 {
     #[cfg(target_os = "macos")]
     {
-        let Ok(ptr) = window.ns_window() else {
-            return 0.0;
-        };
-        let address = ptr as usize;
-        if objc2::MainThreadMarker::new().is_some() {
-            return macos::content_inset_top(address);
-        }
-        let (tx, rx) = std::sync::mpsc::channel();
-        if window
-            .run_on_main_thread(move || {
-                let _ = tx.send(macos::content_inset_top(address));
-            })
-            .is_err()
-        {
-            return 0.0;
-        }
-        rx.recv_timeout(std::time::Duration::from_millis(500))
-            .unwrap_or(0.0)
+        on_ns_window(window, 0.0, macos::content_inset_top)
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = window;
         0.0
     }
+}
+
+/// The title bar height inside the window's content view that Electron
+/// leaves out of a framed window's content area (`getContentBounds()`,
+/// B.2.2), in logical pixels: on macOS [`content_inset_top`] (Tauri's
+/// windows extend their content view under the title bar, and Tauri's
+/// inner size includes it), or 0 when the title bar is transparent
+/// (`frame: false`, where the app's content extends under it as in
+/// Electron's frameless windows). 0 elsewhere, where Tauri's inner size is
+/// already the client area.
+pub(crate) fn frame_title_bar_overlap<R: Runtime>(window: &tauri::Window<R>) -> f64 {
+    #[cfg(target_os = "macos")]
+    {
+        on_ns_window(window, 0.0, |address| {
+            if macos::title_bar_transparent(address) {
+                0.0
+            } else {
+                macos::content_inset_top(address)
+            }
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window;
+        0.0
+    }
+}
+
+/// Runs `read` with the window's `NSWindow*` address on the main thread
+/// (directly when already there), waiting up to 500 ms; `default` when the
+/// window has no native handle or the main thread does not answer, and on
+/// any runtime but Tauri's own (the test runtime's handle points at no
+/// window).
+#[cfg(target_os = "macos")]
+fn on_ns_window<R: Runtime, T: Send + 'static>(
+    window: &tauri::Window<R>,
+    default: T,
+    read: fn(usize) -> T,
+) -> T {
+    if std::any::TypeId::of::<R>() != std::any::TypeId::of::<tauri::Wry>() {
+        return default;
+    }
+    let Ok(ptr) = window.ns_window() else {
+        return default;
+    };
+    let address = ptr as usize;
+    if objc2::MainThreadMarker::new().is_some() {
+        return read(address);
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    if window
+        .run_on_main_thread(move || {
+            let _ = tx.send(read(address));
+        })
+        .is_err()
+    {
+        return default;
+    }
+    rx.recv_timeout(std::time::Duration::from_millis(500))
+        .unwrap_or(default)
 }
 
 /// Shows `window` without making it key and without activating the app
@@ -939,6 +982,20 @@ mod macos {
         let window: &AnyObject = unsafe { &*(address as *const AnyObject) };
         // SAFETY: a public NSWindow method without arguments.
         let () = unsafe { msg_send![window, orderFrontRegardless] };
+    }
+
+    /// `-[NSWindow titlebarAppearsTransparent]` (Tauri's overlay title
+    /// bar, which `frame: false` uses on macOS).
+    pub(super) fn title_bar_transparent(address: usize) -> bool {
+        if address == 0 {
+            return false;
+        }
+        // SAFETY: `address` is the live `NSWindow*` Tauri handed out for this
+        // window, used on the main thread.
+        let window: &AnyObject = unsafe { &*(address as *const AnyObject) };
+        // SAFETY: a public NSWindow property (macOS 10.10+).
+        let transparent: Bool = unsafe { msg_send![window, titlebarAppearsTransparent] };
+        transparent.as_bool()
     }
 
     /// `NSWindow.contentView.frame` top minus `contentLayoutRect` top, in

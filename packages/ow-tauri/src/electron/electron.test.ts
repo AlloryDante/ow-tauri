@@ -596,6 +596,172 @@ describe('BrowserWindow (B.2.2)', () => {
     ipcMain.removeHandler('global');
   });
 
+  it('sizes the frame and places new windows as Electron does (B.2.2)', async () => {
+    const work = { x: 0, y: 0, width: 1024, height: 720 };
+    const display = {
+      ...defaultSnapshot().displays[0]!,
+      bounds: { ...work, height: 768 },
+      workArea: work,
+    };
+    const insets = { left: 8, top: 31, right: 8, bottom: 8 };
+    await start({
+      snapshot: { platform: 'win32', displays: [display] },
+      commands: {
+        window_create: (args) => {
+          const options = (args as { options: { frame?: boolean } }).options;
+          const bounds = { x: 0, y: 0, width: 1000, height: 720 };
+          const inset = options.frame === false ? { left: 0, top: 0, right: 0, bottom: 0 } : insets;
+          return {
+            id: host.callsOf('window_create').length,
+            label: `bw-${String(host.callsOf('window_create').length)}`,
+            bounds,
+            contentBounds: {
+              x: inset.left,
+              y: inset.top,
+              width: 1000 - inset.left - inset.right,
+              height: 720 - inset.top - inset.bottom,
+            },
+          };
+        },
+      },
+    });
+    // `browser-window-created` sees the centred, clamped frame; the
+    // constructor then applies x / y [OBS: Windows lab].
+    const seen: { x: number; y: number; width: number; height: number }[] = [];
+    windowHooks().created = (w) => seen.push(w.getBounds());
+    const win = new BrowserWindow({ show: false, width: 1000, height: 760, x: 0, y: 0 });
+    expect(seen).toEqual([{ x: 12, y: 0, width: 1000, height: 720 }]);
+    expect(win.getBounds()).toEqual({ x: 0, y: 0, width: 1000, height: 720 });
+    await win.whenCreated();
+    expect(win.getContentBounds()).toEqual({ x: 8, y: 31, width: 984, height: 681 });
+    expect(win.getContentSize()).toEqual([984, 681]);
+    host.clearCalls();
+    // Frame sizes become content sizes for Tauri.
+    win.setSize(600, 400);
+    expect(win.getSize()).toEqual([600, 400]);
+    expect(win.getContentSize()).toEqual([584, 361]);
+    win.setContentSize(500, 300);
+    expect(win.getSize()).toEqual([516, 339]);
+    win.setMinimumSize(200, 100);
+    win.setBounds({ x: 5, y: 6, width: 300, height: 200 });
+    win.setContentBounds({ x: 20, y: 40, width: 100, height: 50 });
+    expect(win.getBounds()).toEqual({ x: 12, y: 9, width: 116, height: 89 });
+    await settle();
+    const sent = host.calls
+      .filter((c) => c.command.startsWith('plugin:window|'))
+      .map((c) => [c.command.slice('plugin:window|'.length), c.args['value']]);
+    expect(sent).toEqual([
+      ['set_size', { Logical: { width: 584, height: 361 } }],
+      ['set_size', { Logical: { width: 500, height: 300 } }],
+      ['set_min_size', { Logical: { width: 184, height: 61 } }],
+      ['set_position', { Logical: { x: 5, y: 6 } }],
+      ['set_size', { Logical: { width: 284, height: 161 } }],
+      ['set_position', { Logical: { x: 12, y: 9 } }],
+      ['set_size', { Logical: { width: 100, height: 50 } }],
+    ]);
+    // `resize` / `move` events carry both rectangles.
+    host.push(
+      windowEvent(1, 'resize', {
+        data: {
+          bounds: { x: 0, y: 0, width: 400, height: 300 },
+          contentBounds: { x: 1, y: 28, width: 398, height: 271 },
+        },
+      }),
+    );
+    await settle();
+    expect(win.getContentBounds()).toEqual({ x: 1, y: 28, width: 398, height: 271 });
+    // Later windows know the frame synchronously; `useContentSize` sizes the content.
+    const second = new BrowserWindow({
+      show: false,
+      width: 200,
+      height: 100,
+      useContentSize: true,
+      x: 0,
+      y: 0,
+    });
+    expect(second.getBounds()).toEqual({ x: 0, y: 0, width: 202, height: 129 });
+    expect(second.getContentSize()).toEqual([200, 100]);
+    const frameless = new BrowserWindow({
+      show: false,
+      frame: false,
+      width: 200,
+      height: 100,
+      x: 0,
+      y: 0,
+    });
+    expect(frameless.getContentBounds()).toEqual(frameless.getBounds());
+    delete windowHooks().created;
+  });
+
+  it('places and sizes windows as Electron does on macOS (B.2.2)', async () => {
+    // [OBS] macOS lab: 1470 x 956 display, menu bar 33, Dock 86; a 1200 x
+    // 800 frame has a 1200 x 768 content area below a 32 px title bar.
+    const screen = { x: 0, y: 0, width: 1470, height: 956 };
+    const display = {
+      ...defaultSnapshot().displays[0]!,
+      bounds: screen,
+      workArea: { ...screen, y: 33, height: 837 },
+    };
+    await start({
+      snapshot: { platform: 'darwin', displays: [display] },
+      commands: {
+        // Tauri's inner area is the whole frame (its content view extends
+        // under the title bar); the content area starts below the title bar.
+        window_create: () => {
+          const n = host.callsOf('window_create').length;
+          const bounds = { x: 0, y: 33, width: 1200, height: 800 };
+          return {
+            id: n,
+            label: `bw-${String(n)}`,
+            bounds,
+            contentBounds: { x: 0, y: 65, width: 1200, height: 768 },
+            innerBounds: bounds,
+          };
+        },
+      },
+    });
+    const seen: { x: number; y: number; width: number; height: number }[] = [];
+    windowHooks().created = (w) => seen.push(w.getBounds());
+    const win = new BrowserWindow({ show: false, width: 1200, height: 800, x: 0, y: 0 });
+    // Centred on the display, then moved up above the Dock.
+    expect(seen).toEqual([{ x: 135, y: 70, width: 1200, height: 800 }]);
+    await win.whenCreated();
+    expect(win.getBounds()).toEqual({ x: 0, y: 33, width: 1200, height: 800 });
+    expect(win.getContentBounds()).toEqual({ x: 0, y: 65, width: 1200, height: 768 });
+    host.clearCalls();
+    // Tauri's inner size is the frame here: no title bar to take off.
+    win.setSize(600, 400);
+    expect(win.getContentSize()).toEqual([600, 368]);
+    win.setContentSize(500, 300);
+    expect(win.getSize()).toEqual([500, 332]);
+    win.setMinimumSize(200, 100);
+    await settle();
+    const sent = host.calls
+      .filter((c) => c.command.startsWith('plugin:window|'))
+      .map((c) => [c.command.slice('plugin:window|'.length), c.args['value']]);
+    expect(sent).toEqual([
+      ['set_size', { Logical: { width: 600, height: 400 } }],
+      ['set_size', { Logical: { width: 500, height: 332 } }],
+      ['set_min_size', { Logical: { width: 200, height: 100 } }],
+    ]);
+    // Later windows know both insets synchronously.
+    const second = new BrowserWindow({
+      show: false,
+      width: 1000,
+      height: 324,
+      useContentSize: true,
+    });
+    expect(second.getBounds()).toEqual({ x: 235, y: 300, width: 1000, height: 356 });
+    expect(second.getContentSize()).toEqual([1000, 324]);
+    const centred = new BrowserWindow({ show: false, width: 1000, height: 324, center: true });
+    expect(centred.getBounds()).toEqual({ x: 235, y: 290, width: 1000, height: 324 });
+    // No resize to the display: AppKit keeps the size.
+    expect(new BrowserWindow({ show: false, width: 3000, height: 2000 }).getSize()).toEqual([
+      3000, 2000,
+    ]);
+    delete windowHooks().created;
+  });
+
   it('covers the remaining window members', async () => {
     await start();
     const win = new BrowserWindow({

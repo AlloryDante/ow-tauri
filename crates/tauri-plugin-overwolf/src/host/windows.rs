@@ -6,7 +6,10 @@ use std::sync::{Arc, Weak};
 
 use serde_json::{Value, json};
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
-use tauri::{LogicalPosition, Manager, Runtime, WebviewBuilder, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    LogicalPosition, LogicalSize, Manager, Runtime, WebviewBuilder, WebviewUrl,
+    WebviewWindowBuilder,
+};
 use tokio::sync::oneshot;
 use url::Url;
 
@@ -17,11 +20,29 @@ use crate::ipc::messages::{HostMessage, WindowEventName};
 use crate::lifecycle::CLOSE_TIMEOUT_MS;
 use crate::platform::webview::MinimizeStage;
 use crate::state::log::LogLevel;
+use crate::window::geometry::{Bounds, Insets, Placement, initial_frame};
 use crate::window::options::{
     LoadTarget, NAVIGATION_HOOK_IS_TOP_LEVEL_ONLY, ResolvedLoad, UiNavigation, WindowClassWire,
     WindowCreateRequest, parse_color, resolve_load, ui_navigation,
 };
 use crate::window::{WindowKind, WindowState, derive_state_events, remote_label, ui_label};
+
+/// A window `window_create` made: its ids and its initial geometry (B.2.2).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CreatedWindow {
+    /// The window id.
+    pub(crate) id: u32,
+    /// The window's label (`bw-<id>`).
+    pub(crate) label: String,
+    /// The frame, as `getBounds()` reports it.
+    pub(crate) bounds: Bounds,
+    /// The content area, as `getContentBounds()` reports it.
+    pub(crate) content_bounds: Bounds,
+    /// The area Tauri's inner size measures (and `set_size` sets): the
+    /// content area, except on macOS where it includes the title bar.
+    pub(crate) inner_bounds: Bounds,
+}
 
 /// JSON string literal for embedding in a script.
 fn js_string(s: &str) -> String {
@@ -58,14 +79,78 @@ pub(crate) fn origin_string(url: &Url) -> String {
     s
 }
 
-/// Bounds and state data attached to `resize` / `move` events.
-fn bounds_data<R: Runtime>(window: &tauri::Window<R>) -> Option<Value> {
+/// A window's geometry in logical pixels (B.2.2).
+#[derive(Debug, Clone, Copy)]
+struct Frame {
+    /// The frame, as Electron's `getBounds()` reports it.
+    outer: Bounds,
+    /// The content area, as Electron's `getContentBounds()` reports it.
+    content: Bounds,
+    /// Tauri's inner position and size: what `set_size` sizes. The content
+    /// area, except on macOS, where Tauri's content view extends under the
+    /// title bar.
+    inner: Bounds,
+}
+
+/// The window's [`Frame`].
+fn frame_of<R: Runtime>(window: &tauri::Window<R>) -> Option<Frame> {
     let scale = window.scale_factor().ok()?;
-    let pos = window.outer_position().ok()?.to_logical::<f64>(scale);
-    let size = window.outer_size().ok()?.to_logical::<f64>(scale);
-    Some(
-        json!({ "bounds": { "x": pos.x, "y": pos.y, "width": size.width, "height": size.height } }),
-    )
+    let op = window.outer_position().ok()?.to_logical::<f64>(scale);
+    let os = window.outer_size().ok()?.to_logical::<f64>(scale);
+    let ip = window.inner_position().ok()?.to_logical::<f64>(scale);
+    let is = window.inner_size().ok()?.to_logical::<f64>(scale);
+    let inner = Bounds {
+        x: ip.x,
+        y: ip.y,
+        width: is.width,
+        height: is.height,
+    };
+    // [OBS: macOS lab, a 1200 x 800 frame has a 1200 x 768 content area
+    // 32 px below its top on both hosts' pages.]
+    let overlap = crate::platform::webview::frame_title_bar_overlap(window).min(inner.height);
+    Some(Frame {
+        outer: Bounds {
+            x: op.x,
+            y: op.y,
+            width: os.width,
+            height: os.height,
+        },
+        content: Bounds {
+            y: inner.y + overlap,
+            height: inner.height - overlap,
+            ..inner
+        },
+        inner,
+    })
+}
+
+/// Bounds data attached to `resize` / `move` events: the frame, the
+/// content area and Tauri's inner area (B.2.2, A.3).
+fn bounds_data<R: Runtime>(window: &tauri::Window<R>) -> Option<Value> {
+    let f = frame_of(window)?;
+    Some(json!({ "bounds": f.outer, "contentBounds": f.content, "innerBounds": f.inner }))
+}
+
+/// The primary display's full bounds and work area in DIP, for placing a
+/// new window as Electron does; a 1920 x 1080 display when unknown.
+fn primary_screen<R: Runtime>(window: &tauri::Window<R>) -> (Bounds, Bounds) {
+    window
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| crate::screen::to_display(&super::main_webview::monitor_info(&m)))
+        .map_or_else(
+            || {
+                let b = Bounds {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1920.0,
+                    height: 1080.0,
+                };
+                (b, b)
+            },
+            |d| (Bounds::from(d.bounds), Bounds::from(d.work_area)),
+        )
 }
 
 /// The window's `NSWindow*` address (macOS); `None` elsewhere.
@@ -169,7 +254,7 @@ impl<R: Runtime> Host<R> {
     pub(crate) fn create_window(
         self: &Arc<Self>,
         req: &WindowCreateRequest,
-    ) -> Result<(u32, String), Error> {
+    ) -> Result<CreatedWindow, Error> {
         req.validate()?;
         let ignored = req.options.ignored_keys();
         let preload = match &req.preload {
@@ -202,16 +287,22 @@ impl<R: Runtime> Host<R> {
             Url::parse("about:blank").map_err(|_| Error::backend("about:blank does not parse"))?;
         let (w, h) = o.size();
         let visible = o.show.unwrap_or(true);
-        // `show: false` creates the window without focus, as Electron does:
-        // a later `showInactive()` must find it unfocused (Windows lab: the
-        // webview took focus at creation, so ad guests read
-        // `windowFocused: true`). `show()` still focuses it.
+        // Electron's geometry (B.2.2): `width` / `height` are the frame
+        // unless `useContentSize`, and the window is placed per platform.
+        // The frame is only known once the window exists, so the window is
+        // built hidden and placed before it is shown.
+        let position = o.x.zip(o.y);
+        let use_content_size = o.use_content_size == Some(true);
+        // Built hidden and without focus: a `show: false` window must stay
+        // unfocused, as in Electron (Windows lab: the webview took focus at
+        // creation, so ad guests read `windowFocused: true`); a shown one is
+        // shown and focused below, once its geometry is final.
         let mut b = WebviewWindowBuilder::new(&self.app, &label, WebviewUrl::External(blank))
             .on_new_window(self.new_window_handler(id))
             .initialization_script(renderer_init_script(&origin, &bootstrap))
             .inner_size(w, h)
-            .visible(visible)
-            .focused(visible)
+            .visible(false)
+            .focused(false)
             .title(
                 o.title
                     .clone()
@@ -219,20 +310,6 @@ impl<R: Runtime> Host<R> {
             );
         if let Some(p) = &preload {
             b = b.initialization_script(preload_init_script(&origin, p));
-        }
-        if let (Some(x), Some(y)) = (o.x, o.y) {
-            b = b.position(x, y);
-        } else if o.center.unwrap_or(false) || (o.x.is_none() && o.y.is_none()) {
-            b = b.center();
-        }
-        if o.min_width.is_some() || o.min_height.is_some() {
-            b = b.min_inner_size(o.min_width.unwrap_or(0.0), o.min_height.unwrap_or(0.0));
-        }
-        if o.max_width.is_some() || o.max_height.is_some() {
-            b = b.max_inner_size(
-                o.max_width.unwrap_or(f64::MAX),
-                o.max_height.unwrap_or(f64::MAX),
-            );
         }
         if let Some(v) = o.resizable {
             b = b.resizable(v);
@@ -288,15 +365,16 @@ impl<R: Runtime> Host<R> {
         }
         // Lab windows are built hidden and shown invisible (feature `lab`).
         b = crate::lab::window_builder(b, visible);
-        // A hidden window (and every lab window) is built without activating
-        // the app, as ow-electron builds `show: false` windows; a shown one
-        // activates it, as ow-electron's `show()` does.
-        let window = if visible && !crate::lab::invisible() {
-            b.build()
-        } else {
-            crate::platform::webview::without_app_activation(|| b.build())
+        // Built hidden, so building does not activate the app, as
+        // ow-electron builds `show: false` windows; a shown one activates it
+        // when it is shown below, as ow-electron's `show()` does.
+        let window =
+            crate::platform::webview::without_app_activation(|| b.build()).map_err(Error::from)?;
+        let geometry = self.apply_initial_geometry(&window, o, (w, h), position, use_content_size);
+        if visible && !crate::lab::invisible() {
+            window.show().map_err(Error::from)?;
+            window.set_focus().map_err(Error::from)?;
         }
-        .map_err(Error::from)?;
         crate::lab::after_build(&window, visible);
         self.install_app_hooks(window.as_ref());
         if let Some(z) = o.web_preferences.as_ref().and_then(|w| w.zoom_factor) {
@@ -334,7 +412,120 @@ impl<R: Runtime> Host<R> {
                 ),
             );
         }
-        Ok((id, label))
+        Ok(CreatedWindow {
+            id,
+            label,
+            bounds: geometry.outer,
+            content_bounds: geometry.content,
+            inner_bounds: geometry.inner,
+        })
+    }
+
+    /// Gives a new (hidden) window Electron's frame (B.2.2): measures the
+    /// frame the platform drew around the requested content size, then
+    /// resizes and places the window so that `width` / `height` (and the
+    /// minimum and maximum sizes) are the frame's unless `useContentSize`,
+    /// placed as [`initial_frame`] says. Returns the frame and the content
+    /// area. A full-screen window keeps the platform's geometry.
+    fn apply_initial_geometry(
+        self: &Arc<Self>,
+        window: &tauri::WebviewWindow<R>,
+        o: &crate::window::options::BrowserWindowOptionsWire,
+        (w, h): (f64, f64),
+        position: Option<(f64, f64)>,
+        use_content_size: bool,
+    ) -> Frame {
+        let native = window.as_ref().window();
+        let Some(measured) = frame_of(&native) else {
+            let b = Bounds {
+                x: o.x.unwrap_or(0.0),
+                y: o.y.unwrap_or(0.0),
+                width: w,
+                height: h,
+            };
+            return Frame {
+                outer: b,
+                content: b,
+                inner: b,
+            };
+        };
+        if o.fullscreen == Some(true) {
+            return measured;
+        }
+        // Linux measures no frame before the window is mapped: the content
+        // size is used as the frame there (PARITY).
+        let content_insets = Insets::between(measured.outer, measured.content);
+        let native_insets = Insets::between(measured.outer, measured.inner);
+        let size = if use_content_size {
+            (
+                w + content_insets.horizontal(),
+                h + content_insets.vertical(),
+            )
+        } else {
+            (w, h)
+        };
+        let (screen, work) = primary_screen(&native);
+        let placement = Placement::current();
+        let mut frame = initial_frame(size, position, placement, work, screen).outer;
+        if position.is_none() && o.center == Some(true) && placement == Placement::ScreenCenter {
+            // macOS `center: true`: centred in the work area, as the
+            // platform's own `center` does.
+            frame.x = work.x + ((work.width - frame.width) / 2.0).round();
+            frame.y = work.y + ((work.height - frame.height) / 2.0).round();
+        }
+        let inner = native_insets.content_of(frame);
+        // Electron's `minWidth` ... `maxHeight` constrain the frame, or the
+        // content area with `useContentSize`; Tauri's constrain its inner
+        // area.
+        let limit = |v: f64, content_inset: f64, native_inset: f64| {
+            let frame = if use_content_size {
+                v + content_inset
+            } else {
+                v
+            };
+            (frame - native_inset).max(0.0)
+        };
+        if o.min_width.is_some() || o.min_height.is_some() {
+            let _ = window.set_min_size(Some(LogicalSize::new(
+                limit(
+                    o.min_width.unwrap_or(0.0),
+                    content_insets.horizontal(),
+                    native_insets.horizontal(),
+                ),
+                limit(
+                    o.min_height.unwrap_or(0.0),
+                    content_insets.vertical(),
+                    native_insets.vertical(),
+                ),
+            )));
+        }
+        if o.max_width.is_some() || o.max_height.is_some() {
+            let _ = window.set_max_size(Some(LogicalSize::new(
+                o.max_width.map_or(f64::MAX, |v| {
+                    limit(v, content_insets.horizontal(), native_insets.horizontal())
+                }),
+                o.max_height.map_or(f64::MAX, |v| {
+                    limit(v, content_insets.vertical(), native_insets.vertical())
+                }),
+            )));
+        }
+        if let Err(err) = window
+            .set_size(LogicalSize::new(inner.width, inner.height))
+            .and_then(|()| window.set_position(LogicalPosition::new(frame.x, frame.y)))
+        {
+            self.log(
+                LogLevel::Warn,
+                &format!(
+                    "{}: setting the initial bounds failed: {err}",
+                    window.label()
+                ),
+            );
+        }
+        Frame {
+            outer: frame,
+            content: content_insets.content_of(frame),
+            inner,
+        }
     }
 
     fn window_kind(self: &Arc<Self>, id: u32) -> Result<WindowKind, Error> {

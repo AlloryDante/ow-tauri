@@ -683,6 +683,13 @@ async function startWindowAndActions() {
   record('events.jsonl', { kind: 'step', step: 'load-file' });
   await mainWindow.loadFile('index.html', { search: query.toString() });
   record('events.jsonl', { kind: 'step', step: 'loaded' });
+  // As ow-electron's `did-finish-load` record (app/main.cjs): the geometry
+  // the Windows lab's G1 / G2 checks compare (CONTRACT B.2.2).
+  record('windows.jsonl', {
+    kind: 'did-finish-load',
+    url: mainWindow.webContents.getURL(),
+    ...describeWindow(mainWindow),
+  });
   runActions();
   for (const at of [30_000, 120_000, 300_000]) {
     if (at < config.durationMs) setTimeout(() => snapshotOverwolf(`t+${at / 1000}s`), at);

@@ -23,6 +23,15 @@ import { OwTauriError, OwTauriUnsupportedError } from '../shared/errors.js';
 import { decode } from '../shared/otj.js';
 import type { Display, Rectangle, WindowMessage } from '../shared/protocol.js';
 import { defineUnsupported } from '../shared/unsupported.js';
+import {
+  NO_INSETS,
+  contentOf,
+  initialFrame,
+  insetsBetween,
+  outerOf,
+  placementOf,
+  type Insets,
+} from './geometry.js';
 import { createEvent, kernel, toAssetPath } from './runtime.js';
 import type { UnsupportedMethod } from './unsupported-types.js';
 import type {
@@ -101,7 +110,16 @@ interface WindowState {
   maximized: boolean;
   fullscreen: boolean;
   fullscreenable: boolean;
+  /** The frame (`getBounds()`), as Electron reports it. */
   bounds: Rectangle;
+  /** The frame around the content area (`getContentBounds()` = bounds minus insets). */
+  insets: Insets;
+  /**
+   * The frame around Tauri's inner area, which `set_size` sizes: the same
+   * as `insets` except on macOS, where Tauri's inner area includes the
+   * title bar.
+   */
+  nativeInsets: Insets;
   minSize: [number, number];
   maxSize: [number, number];
   title: string;
@@ -139,6 +157,10 @@ class WindowRegistry {
   focusedId: number | null = null;
   pendingCreates = 0;
   held: WindowMessage[] = [];
+  /** The frame insets of the last framed window the plugin measured (B.2.2). */
+  framedInsets: Insets | null = null;
+  /** Its insets around Tauri's inner area. */
+  framedNativeInsets: Insets | null = null;
   /** App-level hooks, set by the `app` module. */
   hooks: {
     created?: (win: BrowserWindow) => void;
@@ -158,6 +180,8 @@ class WindowRegistry {
       this.focusedId = null;
       this.pendingCreates = 0;
       this.held = [];
+      this.framedInsets = null;
+      this.framedNativeInsets = null;
     });
   }
 
@@ -280,15 +304,28 @@ export function parseColor(color: string): [number, number, number, number] | nu
   return [n(hex.slice(2, 4)), n(hex.slice(4, 6)), n(hex.slice(6, 8)), n(hex.slice(0, 2))];
 }
 
-function primaryWorkArea(): Rectangle {
+function primaryDisplay(): { bounds: Rectangle; workArea: Rectangle } {
   const displays = kernel.state.get('displays');
   const primaryId = kernel.state.get('primaryDisplayId');
+  const fallback = { x: 0, y: 0, width: 1920, height: 1080 };
   if (Array.isArray(displays) && displays.length > 0) {
     const list = displays as Display[];
     const primary = list.find((d) => d.id === primaryId) ?? list[0];
-    if (primary?.workArea) return primary.workArea;
+    if (primary?.workArea) return { bounds: primary.bounds, workArea: primary.workArea };
   }
-  return { x: 0, y: 0, width: 1920, height: 1080 };
+  return { bounds: fallback, workArea: fallback };
+}
+
+function primaryWorkArea(): Rectangle {
+  return primaryDisplay().workArea;
+}
+
+function isRectangle(value: unknown): value is Rectangle {
+  if (typeof value !== 'object' || value === null) return false;
+  const r = value as Record<string, unknown>;
+  return ['x', 'y', 'width', 'height'].every(
+    (k) => typeof r[k] === 'number' && Number.isFinite(r[k]),
+  );
 }
 
 function num(value: unknown, fallback: number): number {
@@ -462,6 +499,10 @@ export class BrowserWindow extends EventEmitter {
   #destroyed = false;
   readonly #loadWaiters: LoadWaiter[] = [];
   #host: Created | null = null;
+  /** Whether the window has a frame (`frame !== false`). */
+  #framed = true;
+  /** Whether app code set the bounds since the constructor. */
+  #boundsSet = false;
 
   /**
    * Creates the window (main webview only).
@@ -477,9 +518,16 @@ export class BrowserWindow extends EventEmitter {
     if (!adopted) checkOptions(options);
     Object.defineProperty(this, WINDOW_BRAND, { value: true });
     this.id = adopted?.id ?? kernel.windowIds.reserve();
-    this.#state = initialState(options);
-    this.webContents = new WebContents(this, this.#state);
     const reg = registry();
+    const framed = options.frame !== false;
+    const initial = initialState(
+      options,
+      framed ? (reg.framedInsets ?? NO_INSETS) : NO_INSETS,
+      framed ? (reg.framedNativeInsets ?? NO_INSETS) : NO_INSETS,
+    );
+    this.#state = initial.state;
+    this.#framed = framed;
+    this.webContents = new WebContents(this, this.#state);
     reg.windows.set(this.id, this);
     if (adopted) {
       const hostId = kernel.windowIds.toHost(adopted.id) ?? adopted.id;
@@ -490,7 +538,15 @@ export class BrowserWindow extends EventEmitter {
       this.#created = this.#create(options);
       this.#created.catch(() => undefined);
     }
-    reg.hooks.created?.(this);
+    // Electron emits `browser-window-created` before it applies `x` / `y`:
+    // listeners see the centred frame [OBS: Windows and macOS labs].
+    const outer = this.#state.bounds;
+    if (!adopted) this.#state.bounds = initial.created;
+    try {
+      reg.hooks.created?.(this);
+    } finally {
+      if (!this.#boundsSet) this.#state.bounds = outer;
+    }
   }
 
   /**
@@ -735,13 +791,14 @@ export class BrowserWindow extends EventEmitter {
    */
   setBounds(bounds: Partial<Rectangle>): void {
     const next = { ...this.#state.bounds, ...bounds };
-    this.#set({ bounds: next });
+    this.#setBounds(next);
     this.#native('set_position', { Logical: { x: next.x, y: next.y } });
-    this.#native('set_size', { Logical: { width: next.width, height: next.height } });
+    this.#nativeContentSize(next.width, next.height);
   }
 
   /**
-   * The window bounds.
+   * The window bounds: the outer frame, title bar and borders included, as
+   * in Electron.
    *
    * @returns a copy of the cached bounds
    */
@@ -750,27 +807,43 @@ export class BrowserWindow extends EventEmitter {
   }
 
   /**
-   * The content bounds (the cached window bounds; Tauri windows report inner sizes).
+   * Sets the bounds of the content area; the frame grows around it.
    *
-   * @returns a copy of the cached bounds
+   * @param bounds - the content area in logical pixels; missing fields keep their value
+   */
+  setContentBounds(bounds: Partial<Rectangle>): void {
+    const content = { ...this.getContentBounds(), ...bounds };
+    this.#setBounds(outerOf(content, this.#state.insets));
+    this.#nativeLazy('set_position', () => {
+      const outer = outerOf(content, this.#state.insets);
+      return { Logical: { x: outer.x, y: outer.y } };
+    });
+    this.#nativeContentSize(content.width, content.height, true);
+  }
+
+  /**
+   * The bounds of the content area (the frame without its title bar and
+   * borders), as in Electron.
+   *
+   * @returns the content area
    */
   getContentBounds(): Rectangle {
-    return { ...this.#state.bounds };
+    return contentOf(this.#state.bounds, this.#state.insets);
   }
 
   /**
-   * Resizes the window.
+   * Resizes the window's frame.
    *
-   * @param width - logical width
-   * @param height - logical height
+   * @param width - logical width of the frame
+   * @param height - logical height of the frame
    */
   setSize(width: number, height: number): void {
-    this.#set({ bounds: { ...this.#state.bounds, width, height } });
-    this.#native('set_size', { Logical: { width, height } });
+    this.#setBounds({ ...this.#state.bounds, width, height });
+    this.#nativeContentSize(width, height);
   }
 
   /**
-   * The window size.
+   * The size of the frame.
    *
    * @returns `[width, height]`
    */
@@ -779,22 +852,29 @@ export class BrowserWindow extends EventEmitter {
   }
 
   /**
-   * Same as {@link BrowserWindow.setSize}.
+   * Resizes the content area; the frame grows around it.
    *
-   * @param width - logical width
-   * @param height - logical height
+   * @param width - logical width of the content area
+   * @param height - logical height of the content area
    */
   setContentSize(width: number, height: number): void {
-    this.setSize(width, height);
+    const { insets, bounds } = this.#state;
+    this.#setBounds({
+      ...bounds,
+      width: width + insets.left + insets.right,
+      height: height + insets.top + insets.bottom,
+    });
+    this.#nativeContentSize(width, height, true);
   }
 
   /**
-   * Same as {@link BrowserWindow.getSize}.
+   * The size of the content area.
    *
    * @returns `[width, height]`
    */
   getContentSize(): [number, number] {
-    return this.getSize();
+    const content = this.getContentBounds();
+    return [content.width, content.height];
   }
 
   /**
@@ -804,7 +884,7 @@ export class BrowserWindow extends EventEmitter {
    * @param y - logical top edge
    */
   setPosition(x: number, y: number): void {
-    this.#set({ bounds: { ...this.#state.bounds, x, y } });
+    this.#setBounds({ ...this.#state.bounds, x, y });
     this.#native('set_position', { Logical: { x, y } });
   }
 
@@ -825,7 +905,7 @@ export class BrowserWindow extends EventEmitter {
    */
   setMinimumSize(width: number, height: number): void {
     this.#set({ minSize: [width, height] });
-    this.#native('set_min_size', width > 0 || height > 0 ? { Logical: { width, height } } : null);
+    this.#nativeLazy('set_min_size', () => this.#contentLimit(width, height));
   }
 
   /**
@@ -845,7 +925,7 @@ export class BrowserWindow extends EventEmitter {
    */
   setMaximumSize(width: number, height: number): void {
     this.#set({ maxSize: [width, height] });
-    this.#native('set_max_size', width > 0 || height > 0 ? { Logical: { width, height } } : null);
+    this.#nativeLazy('set_max_size', () => this.#contentLimit(width, height));
   }
 
   /**
@@ -861,13 +941,11 @@ export class BrowserWindow extends EventEmitter {
   center(): void {
     const area = primaryWorkArea();
     const { width, height } = this.#state.bounds;
-    this.#set({
-      bounds: {
-        x: Math.round(area.x + (area.width - width) / 2),
-        y: Math.round(area.y + (area.height - height) / 2),
-        width,
-        height,
-      },
+    this.#setBounds({
+      x: Math.round(area.x + (area.width - width) / 2),
+      y: Math.round(area.y + (area.height - height) / 2),
+      width,
+      height,
     });
     this.#native('center');
   }
@@ -1163,6 +1241,8 @@ export class BrowserWindow extends EventEmitter {
     const bounds = data['bounds'] as Partial<Rectangle> | undefined;
     if (bounds && typeof bounds === 'object')
       this.#set({ bounds: { ...this.#state.bounds, ...bounds } });
+    if (isRectangle(data['contentBounds']))
+      this.#learnInsets(data['contentBounds'], data['innerBounds']);
     const reg = registry();
     switch (message.event) {
       case 'close': {
@@ -1276,12 +1356,26 @@ export class BrowserWindow extends EventEmitter {
             ? toAssetPath(options.webPreferences.preload, appPath())
             : null,
         windowClass: 'ui',
-      })) as { id?: unknown; label?: unknown } | null;
+      })) as {
+        id?: unknown;
+        label?: unknown;
+        bounds?: unknown;
+        contentBounds?: unknown;
+        innerBounds?: unknown;
+      } | null;
       const hostId = response?.id;
       if (typeof hostId !== 'number')
         throw new OwTauriError('backend', 'window_create returned no window id');
       kernel.windowIds.bind(this.id, hostId);
       const label = typeof response?.label === 'string' ? response.label : `bw-${String(hostId)}`;
+      // The plugin measured the frame (B.2.2): the cache takes it unless app
+      // code already set other bounds, whose commands follow.
+      if (isRectangle(response?.bounds)) {
+        const measured = response.bounds;
+        if (!this.#boundsSet) this.#state.bounds = { ...measured };
+        if (isRectangle(response.contentBounds))
+          this.#learnInsets(response.contentBounds, response.innerBounds, measured);
+      }
       this.#host = { hostId, label, webviewLabel: label };
       return this.#host;
     } catch (error) {
@@ -1362,6 +1456,74 @@ export class BrowserWindow extends EventEmitter {
         `BrowserWindow ${String(this.id)}: ${command} failed: ${(error as Error).message}`,
       );
     });
+  }
+
+  /**
+   * Like `#native`, with the value computed when the command runs (after
+   * the plugin reported the frame).
+   */
+  #nativeLazy(command: string, value: () => unknown): void {
+    if (this.#destroyed) return;
+    this.#op(async ({ label }) => {
+      await kernel.raw(`plugin:window|${command}`, { label, value: value() });
+    }).catch((error: unknown) => {
+      kernel.log(
+        'warn',
+        `BrowserWindow ${String(this.id)}: ${command} failed: ${(error as Error).message}`,
+      );
+    });
+  }
+
+  /**
+   * Sets Tauri's inner size that gives a frame of `width` x `height`, or a
+   * content area of that size when `content`; computed when the command
+   * runs, with the insets the plugin reported by then.
+   */
+  #nativeContentSize(width: number, height: number, content = false): void {
+    this.#nativeLazy('set_size', () => {
+      const { insets, nativeInsets: n } = this.#state;
+      const frameWidth = content ? width + insets.left + insets.right : width;
+      const frameHeight = content ? height + insets.top + insets.bottom : height;
+      return {
+        Logical: {
+          width: Math.max(0, frameWidth - n.left - n.right),
+          height: Math.max(0, frameHeight - n.top - n.bottom),
+        },
+      };
+    });
+  }
+
+  /** A frame size limit as Tauri's inner size limit; `null` for `0, 0`. */
+  #contentLimit(width: number, height: number): unknown {
+    if (!(width > 0 || height > 0)) return null;
+    const { left, top, right, bottom } = this.#state.nativeInsets;
+    return {
+      Logical: {
+        width: width > 0 ? Math.max(0, width - left - right) : 0,
+        height: height > 0 ? Math.max(0, height - top - bottom) : 0,
+      },
+    };
+  }
+
+  #setBounds(bounds: Rectangle): void {
+    this.#boundsSet = true;
+    this.#state.bounds = bounds;
+  }
+
+  /**
+   * Takes the insets from a frame report: the content area, and Tauri's
+   * inner area when reported (else the content area).
+   */
+  #learnInsets(content: Rectangle, inner: unknown, outer = this.#state.bounds): void {
+    const insets = insetsBetween(outer, content);
+    const nativeInsets = isRectangle(inner) ? insetsBetween(outer, inner) : insets;
+    this.#state.insets = insets;
+    this.#state.nativeInsets = nativeInsets;
+    if (this.#framed) {
+      const reg = registry();
+      reg.framedInsets = insets;
+      reg.framedNativeInsets = nativeInsets;
+    }
   }
 
   #set(patch: Partial<WindowState>): void {
@@ -1877,26 +2039,54 @@ function wireOptions(options: BrowserWindowConstructorOptions): Record<string, u
   return wire;
 }
 
-function initialState(options: BrowserWindowConstructorOptions): WindowState {
-  const area = primaryWorkArea();
-  const width = num(options.width, 800);
-  const height = num(options.height, 600);
+function initialState(
+  options: BrowserWindowConstructorOptions,
+  insets: Insets,
+  nativeInsets: Insets,
+): { state: WindowState; created: Rectangle } {
+  const display = primaryDisplay();
+  const useContentSize = options.useContentSize === true;
+  const grow = (v: number, inset: number): number => (useContentSize && v > 0 ? v + inset : v);
+  const width = grow(num(options.width, 800), insets.left + insets.right);
+  const height = grow(num(options.height, 600), insets.top + insets.bottom);
+  const position: [number, number] | null =
+    typeof options.x === 'number' && typeof options.y === 'number' ? [options.x, options.y] : null;
+  const frame = initialFrame(
+    [width, height],
+    position,
+    placementOf(kernel.state.get('platform')),
+    display.workArea,
+    display.bounds,
+  );
+  if (
+    !position &&
+    options.center === true &&
+    placementOf(kernel.state.get('platform')) === 'screen-center'
+  ) {
+    // macOS `center: true`: centred in the work area, as the platform's `center`.
+    const area = display.workArea;
+    frame.outer.x = area.x + Math.round((area.width - frame.outer.width) / 2);
+    frame.outer.y = area.y + Math.round((area.height - frame.outer.height) / 2);
+  }
   const show = bool(options.show, true);
-  return {
+  const state: WindowState = {
     visible: show,
     focused: show && bool(options.focusable, true),
     minimized: false,
     maximized: false,
     fullscreen: bool(options.fullscreen, false),
     fullscreenable: bool(options.fullscreenable, true),
-    bounds: {
-      x: num(options.x, Math.round(area.x + (area.width - width) / 2)),
-      y: num(options.y, Math.round(area.y + (area.height - height) / 2)),
-      width,
-      height,
-    },
-    minSize: [num(options.minWidth, 0), num(options.minHeight, 0)],
-    maxSize: [num(options.maxWidth, 0), num(options.maxHeight, 0)],
+    bounds: frame.outer,
+    insets,
+    nativeInsets,
+    minSize: [
+      grow(num(options.minWidth, 0), insets.left + insets.right),
+      grow(num(options.minHeight, 0), insets.top + insets.bottom),
+    ],
+    maxSize: [
+      grow(num(options.maxWidth, 0), insets.left + insets.right),
+      grow(num(options.maxHeight, 0), insets.top + insets.bottom),
+    ],
     title: typeof options.title === 'string' ? options.title : '',
     alwaysOnTop: bool(options.alwaysOnTop, false),
     resizable: bool(options.resizable, true),
@@ -1913,4 +2103,5 @@ function initialState(options: BrowserWindowConstructorOptions): WindowState {
     zoomFactor: num(options.webPreferences?.zoomFactor, 1),
     devToolsOpened: false,
   };
+  return { state, created: frame.created };
 }

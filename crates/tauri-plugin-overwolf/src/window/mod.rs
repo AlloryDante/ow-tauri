@@ -14,6 +14,7 @@
 //! assert_eq!(classify("bw-03"), WebviewClass::Other);
 //! ```
 
+pub mod geometry;
 pub mod options;
 
 use std::collections::BTreeMap;

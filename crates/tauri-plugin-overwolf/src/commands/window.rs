@@ -8,17 +8,11 @@ use tauri::{Manager, Runtime, State, Webview};
 use super::{body, host, require_main, require_ui};
 use crate::error::{Error, Result};
 use crate::ext::Overwolf;
+use crate::host::CreatedWindow;
 use crate::ipc::messages::present;
 use crate::screen::{ElectronDisplay, Point, physical_to_dip};
 use crate::window::options::{LoadTarget, WindowClassWire, WindowCreateRequest};
 use crate::window::{WindowKind, normalize_window_name, remote_label, ui_label};
-
-/// `window_create` result.
-#[derive(Debug, Serialize)]
-pub(crate) struct Created {
-    id: u32,
-    label: String,
-}
 
 /// `screen_snapshot` result.
 #[derive(Debug, Serialize)]
@@ -39,7 +33,7 @@ pub(crate) async fn window_create<R: Runtime>(
     webview: Webview<R>,
     state: State<'_, Overwolf<R>>,
     request: Request<'_>,
-) -> Result<Created> {
+) -> Result<CreatedWindow> {
     require_main(&webview)?;
     let request: WindowCreateRequest = body(&request, "window_create")?;
     if request.window_class == WindowClassWire::Overlay {
@@ -47,8 +41,7 @@ pub(crate) async fn window_create<R: Runtime>(
             "Overlay windows need the overlay package, which is not available.",
         ));
     }
-    let (id, label) = host(&state).create_window(&request)?;
-    Ok(Created { id, label })
+    host(&state).create_window(&request)
 }
 
 #[tauri::command]

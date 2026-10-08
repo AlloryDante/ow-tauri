@@ -290,7 +290,6 @@ Known differences from ow-electron, each deliberate:
 | crash-report threshold of 10 s | interim until R3-4 | E.2 |
 | consent cookies written by the host if the page could not | only when both cookies are missing (`consent.hostCookieFallback`) | D.6.3 |
 | ow-tauri options (`analytics.userSwitch`, `analytics.muidStrategy: per-install`, a numeric `ads.maxRecoveries`, `logging.enabled`, `ads.transparentGuests: false`) | off by default; documented as non-parity | A.1 |
-| windows are sized by their inner (content) size; ow-electron sizes the outer frame and fits it to the work area | Tauri's window builder sizes the content; changing it needs a product decision | B.2.2 |
 
 The test-mode rewrite of a non-empty `unit` to `testAd` was a deviation
 until wave 3e; it is removed, and `unit` passes through as in ow-electron
@@ -312,6 +311,7 @@ CONTRACT with its fallback, and `parity-diff.mjs` classes it
 | Electron's `<webview>` events `did-frame-*`, `media-*` and the like | all | B.3.5 |
 | guests mounted together report 400025 over their creation time (WebView2 creates them one after another on the main thread); host requests due meanwhile leave up to about 300 ms late | Windows | E.2 |
 | `SameSite=None` cookies read back as no policy; `document.cookie` order follows the WebKit store | macOS | D.6.3 |
+| a new window's frame is measured before it is mapped, when GTK reports none: `width` / `height` size its content until the window manager adds the frame | Linux | B.2.2 |
 
 ## Optimised, same outcome
 

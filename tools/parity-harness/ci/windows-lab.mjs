@@ -15,7 +15,7 @@
 //
 // Writes <out>/summary.json and <out>/summary.md, and appends the table to
 // $GITHUB_STEP_SUMMARY. Exits 1 when a scenario has a BUG difference, a
-// Windows check fails, or a run failed.
+// Windows check fails (advisory checks only report), or a run failed.
 
 import { spawnSync } from 'node:child_process';
 import {
@@ -246,7 +246,7 @@ function main() {
       r.tauri.exit?.timedOut ||
       !r.diffFound ||
       (r.counts.BUG ?? 0) > 0 ||
-      r.checks.some((c) => c.pass === false),
+      r.checks.some((c) => c.pass === false && !c.advisory),
   );
   writeFileSync(
     join(values.out, 'summary.json'),

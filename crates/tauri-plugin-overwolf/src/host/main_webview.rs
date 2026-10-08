@@ -17,7 +17,7 @@ use crate::window::options::{MainNavigation, NAVIGATION_HOOK_IS_TOP_LEVEL_ONLY, 
 /// The runtime bundle embedded into `ow-main` and every `bw-*` webview.
 pub(crate) const BOOTSTRAP_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/bootstrap.js"));
 
-fn monitor_info(m: &tauri::Monitor) -> MonitorInfo {
+pub(super) fn monitor_info(m: &tauri::Monitor) -> MonitorInfo {
     let work = m.work_area();
     MonitorInfo {
         name: m.name().cloned().unwrap_or_default(),

@@ -16,7 +16,13 @@ import {
 import { adformatFacts, compositeAt, guestMuted } from './lib/adformat-report.mjs';
 import { isTransientFsError, snapshotDir } from './lib/fs-snapshot.mjs';
 import { labRequests, windowsDebugger } from './lib/tauri-host.mjs';
-import { audioChecks, labLayersChecks, topLabel, windowsChecks } from './lib/windows-checks.mjs';
+import {
+  audioChecks,
+  geometryChecks,
+  labLayersChecks,
+  topLabel,
+  windowsChecks,
+} from './lib/windows-checks.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'windows-lab-test-'));
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -146,7 +152,7 @@ test('lab-layers: L1-W, L2 and L3-W pass on a transparent, raised, pass-through 
       ['L3-W', 'perf-loaded', true],
     ],
   );
-  assert.deepEqual(windowsChecks('lab-layers', e, t), checks);
+  assert.deepEqual(windowsChecks('lab-layers', e, t).slice(0, checks.length), checks);
 });
 
 test('lab-layers: an opaque guest, a buried guest and a lost click fail', () => {
@@ -205,7 +211,61 @@ test('audio: L5 compares the mute states read back at each probe', () => {
       ['mute-after-mute', null],
     ],
   );
-  assert.deepEqual(windowsChecks('sizes', e, t), []);
+  // Runs without window records: only the geometry checks, with nothing to judge.
+  assert.deepEqual(
+    windowsChecks('sizes', e, t).map((c) => [c.id, c.scenario, c.pass]),
+    [
+      ['G1', 'sizes', null],
+      ['G2', 'sizes', null],
+    ],
+  );
+});
+
+test('G1 compares the app window frame, G2 the content area (advisory)', () => {
+  const loaded = (url, bounds, contentBounds) => ({
+    kind: 'did-finish-load',
+    url,
+    bounds,
+    ...(contentBounds ? { contentBounds } : {}),
+  });
+  const rect = (x, y, width, height) => ({ x, y, width, height });
+  const e = run('e-geometry', {
+    'windows.jsonl': [
+      loaded('file:///x/cmp.html', rect(444, 340, 136, 39)),
+      loaded(
+        'file:///D:/a/app/index.html?layouts=none',
+        rect(0, 0, 1000, 720),
+        rect(8, 31, 984, 681),
+      ),
+    ],
+  });
+  const same = run('t-geometry-same', {
+    'windows.jsonl': [
+      loaded(
+        'tauri://localhost/index.html?layouts=none',
+        rect(0, 0, 1000, 720),
+        rect(8, 31, 984, 681),
+      ),
+    ],
+  });
+  const other = run('t-geometry-other', {
+    'windows.jsonl': [
+      loaded('tauri://localhost/index.html', rect(0, 0, 1000, 760), rect(8, 20, 984, 732)),
+    ],
+  });
+  const pass = (checks) => checks.map((c) => [c.id, c.pass, c.advisory === true]);
+  assert.deepEqual(pass(geometryChecks(e, same)), [
+    ['G1', true, false],
+    ['G2', true, true],
+  ]);
+  assert.deepEqual(pass(geometryChecks(e, other)), [
+    ['G1', false, false],
+    ['G2', false, true],
+  ]);
+  assert.deepEqual(geometryChecks(e, other)[0].detail, {
+    electron: rect(0, 0, 1000, 720),
+    tauri: rect(0, 0, 1000, 760),
+  });
 });
 
 test('the top child window ignores hidden and unlabelled windows', () => {

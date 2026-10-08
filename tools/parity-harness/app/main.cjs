@@ -136,6 +136,7 @@ function enforceHidden(win) {
     windowId: win.id,
     title: win.getTitle(),
     bounds: win.getBounds(),
+    contentBounds: win.getContentBounds(),
     visible: win.isVisible(),
   });
   record('windows.jsonl', { kind: 'created', ...info() });

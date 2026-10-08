@@ -44,6 +44,7 @@ use crate::window::WindowRegistry;
 
 pub(crate) use main_webview::monitors;
 pub(crate) use setup::{SetupOptions, displays_of, setup as build_host};
+pub(crate) use windows::CreatedWindow;
 
 /// Interval of the timer task.
 const TICK: Duration = Duration::from_millis(250);

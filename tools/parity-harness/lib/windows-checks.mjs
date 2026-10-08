@@ -17,6 +17,13 @@
 //   L5    mute: each guest's mute state read back natively (WebView2
 //         IsMuted) equals ow-electron's isAudioMuted() at the same moments
 //         (audio).
+//   G1    window frame: the app window's getBounds() when its page has
+//         loaded equals ow-electron's (CONTRACT B.2.2: width / height size
+//         the frame, the frame is clamped to the work area, then x / y
+//         apply). Every scenario.
+//   G2    content area: getContentBounds() at the same moment equals
+//         ow-electron's. Advisory (never fails the job): the two hosts'
+//         native frames may differ in thickness; the detail shows both.
 //
 // Each check returns {id, scenario, pass, detail}. `pass` is null when the
 // run has nothing to judge (for example no display_ad_loaded before the
@@ -205,6 +212,46 @@ export function audioChecks(electronDir, tauriDir) {
   });
 }
 
+/** The app window's `did-finish-load` record of a run (its `index.html`). */
+function appWindowLoaded(runDir) {
+  const loads = readJsonl(join(runDir, 'windows.jsonl')).filter(
+    (r) => r.kind === 'did-finish-load' && /\/index\.html/.test(String(r.url ?? '')),
+  );
+  return loads.length ? loads[loads.length - 1] : null;
+}
+
+const sameRect = (a, b) =>
+  ['x', 'y', 'width', 'height'].every((k) => Math.round(a[k]) === Math.round(b[k]));
+
+const isRect = (r) =>
+  r !== null &&
+  typeof r === 'object' &&
+  ['x', 'y', 'width', 'height'].every((k) => typeof r[k] === 'number');
+
+/**
+ * G1 / G2 for any pair: the app window's frame and content area once its
+ * page has loaded.
+ * @param {string} electronDir
+ * @param {string} tauriDir
+ */
+export function geometryChecks(electronDir, tauriDir) {
+  const e = appWindowLoaded(electronDir);
+  const t = appWindowLoaded(tauriDir);
+  const check = (id, key, advisory) => {
+    const want = isRect(e?.[key]) ? e[key] : null;
+    const got = isRect(t?.[key]) ? t[key] : null;
+    return {
+      id,
+      scenario: null,
+      probe: key,
+      pass: want && got ? sameRect(want, got) : null,
+      ...(advisory ? { advisory: true } : {}),
+      detail: { electron: want, tauri: got },
+    };
+  };
+  return [check('G1', 'bounds', false), check('G2', 'contentBounds', true)];
+}
+
 /**
  * The Windows checks that apply to `scenario`.
  * @param {string} scenario
@@ -212,7 +259,8 @@ export function audioChecks(electronDir, tauriDir) {
  * @param {string} tauriDir
  */
 export function windowsChecks(scenario, electronDir, tauriDir) {
-  if (scenario === 'lab-layers') return labLayersChecks(electronDir, tauriDir);
-  if (scenario === 'audio') return audioChecks(electronDir, tauriDir);
-  return [];
+  const geometry = geometryChecks(electronDir, tauriDir).map((c) => ({ ...c, scenario }));
+  if (scenario === 'lab-layers') return [...labLayersChecks(electronDir, tauriDir), ...geometry];
+  if (scenario === 'audio') return [...audioChecks(electronDir, tauriDir), ...geometry];
+  return geometry;
 }

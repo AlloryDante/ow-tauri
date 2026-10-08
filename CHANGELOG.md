@@ -146,6 +146,18 @@ the npm package share one version number.
   program, and the ow-electron build can import `ow-tauri/main` and
   `ow-tauri/renderer` against ow-electron's own types; a type test checks
   both with ow-electron's typings installed (CONTRACT B.4).
+- `BrowserWindow` geometry follows Electron (CONTRACT B.2.2): `width` /
+  `height` and the minimum and maximum sizes are the outer frame unless
+  `useContentSize` (now supported); `getBounds()` / `getSize()` report the
+  frame and `getContentBounds()` / `getContentSize()` the area inside it,
+  with `setContentBounds()` / `setContentSize()` to match. A new window is
+  centred and clamped to the work area on Windows and Linux, centred on the
+  display and kept above the Dock on macOS, then moved to `x` / `y`;
+  `browser-window-created` sees the centred frame. `window_create` and the
+  `resize` / `move` events carry `bounds`, `contentBounds` and
+  `innerBounds`. The macOS and Windows lab observations are unit vectors;
+  the Windows lab compares the app window's frame (G1) and content area
+  (G2, advisory) with ow-electron's.
 - Invisible lab (feature `lab`, `OW_TAURI_LAB_INVISIBLE=1`, macOS): the app
   is never activated for the whole run. App activation is a no-op and
   `makeKeyAndOrderFront:` orders the window front without making it key, so

@@ -270,6 +270,43 @@ fn every_command_is_scoped_to_its_webview_class() {
 }
 
 #[test]
+fn window_create_reports_electron_geometry() {
+    // CONTRACT B.2.2: `window_create` answers with the frame (`bounds`) and
+    // the content area (`contentBounds`) and Tauri's inner area
+    // (`innerBounds`), placed as Electron places a new window. The mock
+    // runtime has no monitor (a 1920 x 1080 display is assumed) and draws no
+    // frame, so the three rectangles are equal.
+    let (app, _) = app("geometry");
+    WebviewWindowBuilder::new(&app, "ow-main", WebviewUrl::App("index.html".into()))
+        .build()
+        .unwrap();
+    let create = |options: Value| {
+        invoke(
+            &app,
+            "ow-main",
+            "window_create",
+            json!({ "options": options, "preload": null, "windowClass": "ui" }),
+        )
+        .unwrap()
+    };
+    let rect = |x: f64, y: f64, w: f64, h: f64| json!({ "x": x, "y": y, "width": w, "height": h });
+    let centred = create(json!({ "show": false, "width": 400, "height": 300 }));
+    assert_eq!(centred["bounds"], rect(760.0, 390.0, 400.0, 300.0));
+    assert_eq!(centred["contentBounds"], centred["bounds"]);
+    assert_eq!(centred["innerBounds"], centred["bounds"]);
+    let placed = create(json!({ "show": false, "width": 400, "height": 300, "x": 5, "y": 6 }));
+    assert_eq!(placed["bounds"], rect(5.0, 6.0, 400.0, 300.0));
+    // Windows and Linux clamp the frame to the work area; macOS does not.
+    let large = create(json!({ "show": false, "width": 3000, "height": 300, "x": 0, "y": 0 }));
+    let want = if cfg!(target_os = "macos") {
+        3000.0
+    } else {
+        1920.0
+    };
+    assert_eq!(large["bounds"], rect(0.0, 0.0, want, 300.0));
+}
+
+#[test]
 fn child_webview_named_like_a_window_is_refused_by_the_class_check() {
     let (app, _) = app("child");
     webviews(&app);

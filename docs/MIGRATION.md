@@ -782,9 +782,12 @@ Different:
   test an upgrade over an ow-electron install before shipping.
 - Analytics and ad requests say `tauri` where ow-electron says `electron`
   ([CONTRACT section 0, Host label](CONTRACT.md#host-label)).
-- Window sizes: `width` and `height` are the content size, so a framed
-  window is slightly larger than on ow-electron (`useContentSize` is
-  ignored).
+- Window sizes follow Electron: `width` and `height` are the outer frame
+  unless `useContentSize`, a window larger than the work area is clamped on
+  Windows and Linux, and `getContentBounds()` is the area inside the frame
+  ([CONTRACT B.2.2](CONTRACT.md#b22-browserwindow-main)). On Linux the
+  frame is not known before the window is mapped, so there `width` and
+  `height` size the content.
 - No game events, overlay or recorder ([Before you start](#before-you-start)).
 - macOS and Linux keep the ad gaps of
   [PARITY.md](PARITY.md#known-platform-gaps).
