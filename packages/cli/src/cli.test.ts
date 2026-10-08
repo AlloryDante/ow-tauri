@@ -270,83 +270,98 @@ describe('zip reader', () => {
   });
 });
 
+/**
+ * The sign cases run the whole signing round (zip, hashes, two fake service
+ * calls) several times; on the Windows runners they take longer than
+ * vitest's 5 s default.
+ */
+const SIGN_TIMEOUT_MS = 20_000;
+
 describe('ow-tauri sign', () => {
-  it('signs a package.json synthesised from the config and writes signed/', async () => {
-    const outcome = await sign(await options());
-    expect(outcome.status).toBe('signed');
-    const out = join(dir, 'signed');
-    const signed = JSON.parse(readFileSync(join(out, 'package.json'), 'utf8')) as {
-      overwolf: { uid: string };
-    };
-    expect(signed.overwolf.uid).toBe(UID);
-    expect(JSON.parse(readFileSync(join(out, '_metadata.json'), 'utf8'))).toEqual({
-      signature: 'stand-in',
-    });
-    expect(readFileSync(join(out, 'integrity.dll'), 'utf8')).toBe('MZ-stand-in-dll');
-    expect(JSON.parse(readFileSync(join(out, 'owe.json'), 'utf8'))).toEqual({ appUid: UID });
-    const result = JSON.parse(readFileSync(join(out, 'sign-result.json'), 'utf8')) as Record<
-      string,
-      unknown
-    >;
-    expect(result).toEqual({
-      uid: UID,
-      isOwCertificateEnabled: true,
-      enableOWCertSigning: true,
-      mainFile: 'dist/index.html',
-      mainPath: join(dir, 'dist', 'index.html'),
-      appExeNames: ['demo-app-shell.exe', 'Demo App.exe'],
-      mainSha256: createHash('sha256').update('<!doctype html>\n').digest('hex'),
-      version: '1.2.3',
-    });
-
-    const post = service.seen.find((s) => s.url === '/sign/electron');
-    expect(post?.headers.authorization).toBe('Key dev@example.com:k-test');
-    expect(post?.headers['x-ow-app-key']).toBe('pk-test');
-    expect(post?.headers['content-type']).toBe('application/json');
-    const body = JSON.parse(post?.body.toString() ?? '{}') as Record<string, unknown>;
-    expect(body).toEqual({
-      packageJson: {
-        name: 'demo-app-shell',
-        productName: 'Demo App',
+  it(
+    'signs a package.json synthesised from the config and writes signed/',
+    async () => {
+      const outcome = await sign(await options());
+      expect(outcome.status).toBe('signed');
+      const out = join(dir, 'signed');
+      const signed = JSON.parse(readFileSync(join(out, 'package.json'), 'utf8')) as {
+        overwolf: { uid: string };
+      };
+      expect(signed.overwolf.uid).toBe(UID);
+      expect(JSON.parse(readFileSync(join(out, '_metadata.json'), 'utf8'))).toEqual({
+        signature: 'stand-in',
+      });
+      expect(readFileSync(join(out, 'integrity.dll'), 'utf8')).toBe('MZ-stand-in-dll');
+      expect(JSON.parse(readFileSync(join(out, 'owe.json'), 'utf8'))).toEqual({ appUid: UID });
+      const result = JSON.parse(readFileSync(join(out, 'sign-result.json'), 'utf8')) as Record<
+        string,
+        unknown
+      >;
+      expect(result).toEqual({
+        uid: UID,
+        isOwCertificateEnabled: true,
+        enableOWCertSigning: true,
+        mainFile: 'dist/index.html',
+        mainPath: join(dir, 'dist', 'index.html'),
+        appExeNames: ['demo-app-shell.exe', 'Demo App.exe'],
+        mainSha256: createHash('sha256').update('<!doctype html>\n').digest('hex'),
         version: '1.2.3',
-        author: 'Example Studio',
-        overwolf: { uid: UID },
-        main: 'dist/index.html',
-      },
-      fileHashes: {
-        'dist/index.html': createHash('sha256').update('<!doctype html>\n').digest('hex'),
-      },
-    });
-    expect(service.seen.some((s) => s.url.includes('asar'))).toBe(false);
-  });
+      });
 
-  it('refuses a signed uid that differs from the configured one, or pins it with --write-uid', async () => {
-    writeConfig({ author: 'Example Studio', name: 'Demo App', signing: SIGNING });
-    const computed = computeUid('Example Studio', 'Demo App');
-    // Even when signing is not required, a mismatch never builds.
-    await expect(sign(await options({ platform: 'linux' }))).rejects.toThrow(
-      uidMismatchMessage(UID, computed),
-    );
-    expect(uidMismatchMessage(UID, computed)).toBe(
-      `[OW] the console signed uid ${UID} but plugins.overwolf resolves to ${computed}; set plugins.overwolf.uid to "${UID}" (or run ow-tauri sign --write-uid)`,
-    );
-    expect(existsSync(join(dir, 'signed'))).toBe(false);
-    const log = collectLog();
-    expect((await sign(await options({ writeUid: true, log }))).status).toBe('signed');
-    const config = JSON.parse(readFileSync(join(tauriDir, 'tauri.conf.json'), 'utf8')) as {
-      plugins: { overwolf: Record<string, unknown> };
-    };
-    expect(config.plugins.overwolf).toEqual({
-      author: 'Example Studio',
-      name: 'Demo App',
-      signing: SIGNING,
-      uid: UID,
-    });
-    expect(log.lines.join('\n')).toContain(`wrote plugins.overwolf.uid "${UID}"`);
-    expect(JSON.parse(readFileSync(join(dir, 'signed', 'owe.json'), 'utf8'))).toEqual({
-      appUid: UID,
-    });
-  });
+      const post = service.seen.find((s) => s.url === '/sign/electron');
+      expect(post?.headers.authorization).toBe('Key dev@example.com:k-test');
+      expect(post?.headers['x-ow-app-key']).toBe('pk-test');
+      expect(post?.headers['content-type']).toBe('application/json');
+      const body = JSON.parse(post?.body.toString() ?? '{}') as Record<string, unknown>;
+      expect(body).toEqual({
+        packageJson: {
+          name: 'demo-app-shell',
+          productName: 'Demo App',
+          version: '1.2.3',
+          author: 'Example Studio',
+          overwolf: { uid: UID },
+          main: 'dist/index.html',
+        },
+        fileHashes: {
+          'dist/index.html': createHash('sha256').update('<!doctype html>\n').digest('hex'),
+        },
+      });
+      expect(service.seen.some((s) => s.url.includes('asar'))).toBe(false);
+    },
+    SIGN_TIMEOUT_MS,
+  );
+
+  it(
+    'refuses a signed uid that differs from the configured one, or pins it with --write-uid',
+    async () => {
+      writeConfig({ author: 'Example Studio', name: 'Demo App', signing: SIGNING });
+      const computed = computeUid('Example Studio', 'Demo App');
+      // Even when signing is not required, a mismatch never builds.
+      await expect(sign(await options({ platform: 'linux' }))).rejects.toThrow(
+        uidMismatchMessage(UID, computed),
+      );
+      expect(uidMismatchMessage(UID, computed)).toBe(
+        `[OW] the console signed uid ${UID} but plugins.overwolf resolves to ${computed}; set plugins.overwolf.uid to "${UID}" (or run ow-tauri sign --write-uid)`,
+      );
+      expect(existsSync(join(dir, 'signed'))).toBe(false);
+      const log = collectLog();
+      expect((await sign(await options({ writeUid: true, log }))).status).toBe('signed');
+      const config = JSON.parse(readFileSync(join(tauriDir, 'tauri.conf.json'), 'utf8')) as {
+        plugins: { overwolf: Record<string, unknown> };
+      };
+      expect(config.plugins.overwolf).toEqual({
+        author: 'Example Studio',
+        name: 'Demo App',
+        signing: SIGNING,
+        uid: UID,
+      });
+      expect(log.lines.join('\n')).toContain(`wrote plugins.overwolf.uid "${UID}"`);
+      expect(JSON.parse(readFileSync(join(dir, 'signed', 'owe.json'), 'utf8'))).toEqual({
+        appUid: UID,
+      });
+    },
+    SIGN_TIMEOUT_MS,
+  );
 
   it('sends no uid when none is configured and accepts a matching signed uid', async () => {
     writeConfig({ author: 'Example Studio', name: 'Demo App', signing: SIGNING });
