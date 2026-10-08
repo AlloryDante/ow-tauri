@@ -32,13 +32,13 @@ pub(crate) enum DialogKind {
     Confirm,
     /// `prompt()`.
     #[cfg_attr(
-        all(not(windows), not(test)),
+        all(target_os = "macos", not(test)),
         expect(dead_code, reason = "only WebView2 reports a prompt")
     )]
     Prompt,
     /// A `beforeunload` handler that asks to stay on the page.
     #[cfg_attr(
-        all(not(windows), not(test)),
+        all(target_os = "macos", not(test)),
         expect(dead_code, reason = "only WebView2 reports a beforeunload prompt")
     )]
     BeforeUnload,
@@ -104,6 +104,10 @@ pub(crate) fn accepted(kind: DialogKind, pressed: Option<usize>) -> bool {
 
 /// Records a dialog the invisible lab did not show. Returns whether it was
 /// blocked.
+#[cfg_attr(
+    all(target_os = "linux", test),
+    expect(dead_code, reason = "Linux keeps WebKitGTK's dialogs")
+)]
 fn block_in_lab(kind: DialogKind) -> bool {
     crate::lab::block_os_surface("js-dialog", || json!({ "type": kind.name() }))
 }
