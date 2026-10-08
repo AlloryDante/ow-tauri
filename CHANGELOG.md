@@ -164,6 +164,12 @@ the npm package share one version number.
   `visibilitychange`, so the page sees exactly ow-electron's events. A
   minimized window's performance ad now dismisses itself before its
   `shutdown` on macOS as in ow-electron (it did in 3 of 10 runs).
+- Host requests (analytics and the consent feature request) run on a
+  thread of their own (`ow-host-requests`) instead of Tauri's async
+  runtime. Commands that wait for the main thread no longer hold back a
+  request that is due: on Windows, four guests mounting at once could
+  occupy every runtime worker while WebView2 created them, and requests
+  left up to ~300 ms late (CONTRACT E.1).
 - Invisible lab (feature `lab`, `OW_TAURI_LAB_INVISIBLE=1`, macOS): the app
   is never activated for the whole run. App activation is a no-op and
   `makeKeyAndOrderFront:` orders the window front without making it key, so

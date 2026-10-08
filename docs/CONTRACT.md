@@ -2525,7 +2525,10 @@ with a warning, and #2 with it. #6 leaves when the guest's webview exists:
 ow-electron creates the guests mounted together within about 100 ms, while
 on Windows WebView2 creates them on the main thread one after another
 (80 to 150 ms each), so their 400025 reports spread over that time [OBS:
-Windows lab].
+Windows lab]. Host requests run on a thread of their own, not on the
+runtime that runs commands: a command waiting for the main thread (a guest
+being created, a window queried) never delays a request that is already
+due [DEC].
 
 **Periodic heartbeat (#9)** [OBS: R2-9, a 13-hour session of ow-electron
 42.11.4 whose window was never shown]. After the launch burst (#1 to #4,

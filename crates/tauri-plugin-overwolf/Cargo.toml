@@ -107,7 +107,7 @@ bytes = { version = "1.12.1", optional = true }
 tower-service = { version = "0.3.3", optional = true }
 async-compression = { version = "0.4.48", optional = true, features = ["tokio", "gzip", "zlib", "brotli", "zstd"] }
 tauri-plugin-global-shortcut = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true, features = ["io-util"] }
+tokio = { workspace = true, optional = true, features = ["io-util", "rt-multi-thread"] }
 uuid = { workspace = true, optional = true }
 sys-locale = { workspace = true, optional = true }
 log = { workspace = true, optional = true }

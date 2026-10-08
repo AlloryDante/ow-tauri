@@ -352,6 +352,46 @@ async fn perform(
     transport.send(request).await
 }
 
+/// The name of the thread host requests run on ([`on_lane`]).
+pub(crate) const LANE_THREAD: &str = "ow-host-requests";
+
+/// The runtime host requests run on: one worker thread of its own, apart
+/// from Tauri's async runtime. Commands and the host's timer step run on
+/// Tauri's workers and block there while the main thread answers them
+/// (`Window::is_visible`, `Window::add_child`); on a 4-core machine four
+/// guests mounting at once, each waiting for WebView2 to create it on the
+/// main thread, left no worker free, and requests already due waited
+/// behind guest creation (up to ~300 ms, Windows lab). `None` when the
+/// thread could not be started: requests then use Tauri's runtime.
+fn lane() -> Option<&'static tokio::runtime::Runtime> {
+    static LANE: OnceLock<Option<tokio::runtime::Runtime>> = OnceLock::new();
+    LANE.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name(LANE_THREAD)
+            .enable_all()
+            .build()
+            .ok()
+    })
+    .as_ref()
+}
+
+/// Runs `task` on the host-request runtime ([`lane`]). The returned future
+/// resolves when `task` has finished; dropping it does not cancel `task`.
+fn on_lane(task: impl Future<Output = ()> + Send + 'static) -> BoxFuture<()> {
+    if let Some(lane) = lane() {
+        let handle = lane.spawn(task);
+        Box::pin(async move {
+            let _ = handle.await;
+        })
+    } else {
+        let handle = tauri::async_runtime::spawn(task);
+        Box::pin(async move {
+            let _ = handle.await;
+        })
+    }
+}
+
 /// One analytics request waiting for its turn.
 struct Job {
     request: HostRequest,
@@ -362,7 +402,9 @@ struct Job {
 /// Sends host requests: analytics requests in call order (each starts when
 /// the previous one finished, or [`ORDER_WINDOW`] after it started); the
 /// consent request at once, in parallel with them (E.2 #2). Tracks the analytics
-/// requests in flight for the exit drain.
+/// requests in flight for the exit drain. Requests run on a thread of their
+/// own ([`LANE_THREAD`]), so a busy main thread or Tauri runtime never holds
+/// back one that is due.
 #[derive(Clone)]
 pub(crate) struct Dispatcher {
     transport: Arc<dyn Transport>,
@@ -417,7 +459,7 @@ impl Dispatcher {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Job>();
             let transport = Arc::clone(&self.transport);
             let hooks = Arc::clone(&self.hooks);
-            tauri::async_runtime::spawn(async move {
+            drop(on_lane(async move {
                 while let Some(job) = rx.recv().await {
                     let Job {
                         mut request,
@@ -427,14 +469,14 @@ impl Dispatcher {
                     let hooks = hooks.get().cloned();
                     prepare(hooks.as_ref(), &mut request).await;
                     let transport = Arc::clone(&transport);
-                    let mut handle = tauri::async_runtime::spawn(async move {
+                    let mut done = on_lane(async move {
                         let out = perform(transport, request).await;
                         drop(guard);
                         let _ = reply.send(out);
                     });
-                    let _ = tokio::time::timeout(ORDER_WINDOW, &mut handle).await;
+                    let _ = tokio::time::timeout(ORDER_WINDOW, &mut done).await;
                 }
-            });
+            }));
             tx
         })
     }
@@ -464,11 +506,11 @@ impl Dispatcher {
         } else {
             let transport = Arc::clone(&self.transport);
             let hooks = self.hooks.get().cloned();
-            tauri::async_runtime::spawn(async move {
+            drop(on_lane(async move {
                 let mut request = request;
                 prepare(hooks.as_ref(), &mut request).await;
                 let _ = reply.send(perform(transport, request).await);
-            });
+            }));
         }
         Box::pin(async move {
             rx.await
@@ -785,6 +827,96 @@ mod tests {
         assert_eq!(connections_for(&short, gap), 2);
         assert_eq!(POOL_IDLE_TIMEOUT, None);
         assert_eq!(connections_for(&HyperTransport::new(), gap), 1);
+    }
+
+    /// Records where and when each request started.
+    #[derive(Default)]
+    struct Starts(std::sync::Mutex<Vec<(String, Option<String>)>>);
+
+    struct StartRecording(Arc<Starts>);
+    impl Transport for StartRecording {
+        fn send(&self, r: HostRequest) -> BoxFuture<Result<HostResponse, String>> {
+            let thread = std::thread::current().name().map(str::to_owned);
+            self.0.0.lock().unwrap().push((r.url, thread));
+            Box::pin(async { Ok(HostResponse::default()) })
+        }
+    }
+
+    /// Regression (Windows lab): host requests ran on Tauri's async runtime,
+    /// whose workers all waited for the main thread while WebView2 created
+    /// guests there, so requests already due left up to ~300 ms late. Here
+    /// every worker of Tauri's runtime is blocked; both kinds of request
+    /// still start at once, on their own thread.
+    #[test]
+    fn host_requests_leave_while_every_runtime_worker_is_blocked() {
+        let workers = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let blocked = Arc::new(AtomicUsize::new(0));
+        for _ in 0..workers {
+            let gate = Arc::clone(&gate);
+            let blocked = Arc::clone(&blocked);
+            drop(tauri::async_runtime::spawn(async move {
+                blocked.fetch_add(1, Ordering::SeqCst);
+                let (open, wake) = &*gate;
+                let mut open = open.lock().unwrap();
+                while !*open {
+                    open = wake.wait(open).unwrap();
+                }
+            }));
+        }
+        let release = || {
+            *gate.0.lock().unwrap() = true;
+            gate.1.notify_all();
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while blocked.load(Ordering::SeqCst) < workers && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let probe = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ran = Arc::clone(&probe);
+        drop(tauri::async_runtime::spawn(async move {
+            ran.store(true, Ordering::SeqCst);
+        }));
+
+        let starts = Arc::new(Starts::default());
+        let d = Dispatcher::new(Arc::new(StartRecording(Arc::clone(&starts))));
+        let sent = std::time::Instant::now();
+        let tracked = d.send(request("http://127.0.0.1/tracked"), true);
+        let untracked = d.send(request("http://127.0.0.1/consent"), false);
+        while starts.0.lock().unwrap().len() < 2 && sent.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let elapsed = sent.elapsed();
+        let starved = !probe.load(Ordering::SeqCst);
+        let mut seen = starts.0.lock().unwrap().clone();
+        release();
+
+        assert!(
+            starved,
+            "Tauri's runtime ran a task: the test blocked too few workers"
+        );
+        seen.sort();
+        assert_eq!(
+            seen,
+            [
+                (
+                    "http://127.0.0.1/consent".to_owned(),
+                    Some(LANE_THREAD.to_owned())
+                ),
+                (
+                    "http://127.0.0.1/tracked".to_owned(),
+                    Some(LANE_THREAD.to_owned())
+                ),
+            ]
+        );
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "started after {elapsed:?}"
+        );
+        tauri::async_runtime::block_on(async {
+            assert_eq!(tracked.await.unwrap().status, 0);
+            assert_eq!(untracked.await.unwrap().status, 0);
+        });
     }
 
     #[test]
