@@ -1187,6 +1187,10 @@ pub(crate) fn command<R: Runtime>(
 /// native reload on Windows, a new shaped load elsewhere, which repeats the
 /// document headers, D.8.3).
 pub(crate) fn reload_guest<R: Runtime>(core: &Arc<Core<R>>, label: &str) {
+    if core.lifecycle.has_exited() {
+        // The app is ending: a guest is never reloaded or recreated now.
+        return;
+    }
     let now = core.now();
     let recreate_on_reload = core.identity.config.ads.recreate_on_reload;
     let plan = with_guest(core, label, |g| {
@@ -1410,6 +1414,11 @@ pub(crate) fn guest_crashed<R: Runtime>(
     reason: GoneReason,
     exit_code: i64,
 ) {
+    if core.lifecycle.has_exited() {
+        // Web content processes end with the app: no event, no recovery.
+        log::debug!(target: LOG_TARGET, "web content process of {label} ended after exit");
+        return;
+    }
     let now = core.now();
     let max = core.identity.config.ads.max_recoveries;
     let decision = with_guest(core, label, |g| {

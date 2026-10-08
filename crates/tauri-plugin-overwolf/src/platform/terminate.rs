@@ -45,8 +45,9 @@ pub(crate) fn warn_if_unwired(forwards: bool) {
 }
 
 /// Handles the end of `webview`'s web content process: an app webview is
-/// reloaded; the plugin's own webviews (ad guests, consent windows) are
-/// recovered by their owners.
+/// reloaded; the plugin's own webviews are recovered by their owners (an
+/// ad guest as after any crash, a hidden consent window is closed, the
+/// visible consent settings window is reloaded).
 ///
 /// Call it from the app's own `on_web_content_process_terminate` hook, and
 /// declare `Builder::forwards_web_content_process_terminate()`.
@@ -69,13 +70,31 @@ pub(crate) fn warn_if_unwired(forwards: bool) {
 pub fn handle_web_content_process_terminate<R: Runtime>(webview: &Webview<R>) {
     let label = webview.label();
     if crate::config::is_reserved_label(label) {
-        // Guest and consent recovery belong to the ads and consent hosts.
         log::debug!(target: LOG_TARGET, "web content process of {label} ended");
-        return;
+        if recovered_by_the_plugin(webview, label) {
+            return;
+        }
     }
     if let Err(err) = webview.reload() {
         log::warn!(target: LOG_TARGET, "could not reload {label} after its web content process ended: {err}");
     }
+}
+
+/// W0c ruling 1: an ad guest (`owad-*`) is recovered by the ads host as
+/// after any crash (§4.4.7); a hidden consent window (`ow-cmp*`) closes as
+/// after any crash, which resolves its round. Returns `false` for the
+/// visible consent settings window, which reloads in place as an app
+/// webview does.
+fn recovered_by_the_plugin<R: Runtime>(webview: &Webview<R>, label: &str) -> bool {
+    let Some(core) = crate::host::core_of(webview) else {
+        // No plugin state: no guest or consent window of the plugin exists.
+        return true;
+    };
+    if label.starts_with(crate::config::ADVIEW_LABEL_PREFIX) {
+        crate::host::ads::web_content_terminated(&core, label);
+        return true;
+    }
+    crate::host::consent::web_content_terminated(&core, label)
 }
 
 /// A ready `on_web_content_process_terminate` hook that calls

@@ -66,11 +66,8 @@ impl Lifecycle {
         let _ = rx.wait_for(|started| *started).await;
     }
 
-    /// Whether [`on_exit`] ran.
-    #[allow(
-        dead_code,
-        reason = "the ads host (W2) stops recreating guests after it"
-    )]
+    /// Whether [`on_exit`] ran. The ads host neither recovers nor reloads a guest after it.
+    #[cfg_attr(not(ow_tauri_ads), allow(dead_code, reason = "only the ads host asks"))]
     pub(crate) fn has_exited(&self) -> bool {
         self.exited.load(Ordering::SeqCst)
     }

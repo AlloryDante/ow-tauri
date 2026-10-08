@@ -373,10 +373,7 @@ pub(crate) fn guest_event<R: Runtime>(
 /// macOS: the web content process of guest `label` ended (the app's
 /// `on_web_content_process_terminate` hook, W0c ruling 1): the guest is
 /// recovered as after any crash (§4.4.7).
-#[allow(
-    dead_code,
-    reason = "platform/terminate.rs routes owad-* labels here (change request W2-fix-r1 CR-1)"
-)]
+#[cfg(target_os = "macos")]
 pub(crate) fn web_content_terminated<R: Runtime>(core: &Arc<Core<R>>, label: &str) {
     #[cfg(ow_tauri_ads)]
     driver::guest_crashed(core, label, crate::ads::GoneReason::Crashed, 0);

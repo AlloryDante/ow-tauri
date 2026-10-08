@@ -476,3 +476,38 @@ fn the_last_window_rule() {
     assert!(core.consent.is_gate_open());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// W0c ruling 1: on macOS the app's terminate hook closes a hidden consent
+/// window as after any crash (its round resolves); any other consent
+/// window is left to reload in place.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_terminate_hook_closes_a_hidden_consent_window() {
+    let capture = Capture::answering(r#"{"params":[]}"#);
+    let (app, dir, core) = mock_app(
+        "consent-terminate",
+        &json!({ "consent": { "readyTimeoutMs": 60_000 } }),
+        &[],
+        capture,
+    );
+    window(&app, "main");
+    let (tx, rx) = oneshot::channel();
+    {
+        let mut s = lock(&core.consent.state);
+        s.rounds = 7;
+        s.waiters.push((7, tx));
+    }
+    open_hidden_window(&core, CMP_DEFAULT_LABEL, &default_consent_url(), Some(7)).unwrap();
+    assert!(core.consent.owns_window(CMP_DEFAULT_LABEL));
+    let webview = crate::compat::webview(&app, CMP_DEFAULT_LABEL).unwrap();
+    crate::platform::terminate::handle_web_content_process_terminate(&webview);
+    assert!(wait_until(Duration::from_secs(5), || !core
+        .consent
+        .owns_window(CMP_DEFAULT_LABEL)));
+    assert!(block_on(rx).is_ok(), "the round resolved");
+    assert!(lock(&core.consent.state).resolved.contains(&7));
+    // Not a hidden consent window: left to the caller's in-place reload.
+    assert!(!web_content_terminated(&core, CMP_SETTINGS_LABEL));
+    assert!(!web_content_terminated(&core, CMP_DEFAULT_LABEL));
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -983,6 +983,21 @@ fn destroy_soon<R: Runtime>(core: &Arc<Core<R>>, label: &str) {
     });
 }
 
+/// macOS: the web content process of consent window `label` ended (the
+/// app's `on_web_content_process_terminate` hook, W0c ruling 1). A hidden
+/// window closes as after any crash ([`close_hidden`], as the platform
+/// crash report of [`open_hidden_window`] does) and `true` is returned;
+/// `false` for any other window (the visible settings window), which the
+/// caller reloads in place.
+#[cfg(target_os = "macos")]
+pub(crate) fn web_content_terminated<R: Runtime>(core: &Arc<Core<R>>, label: &str) -> bool {
+    if !lock(&core.consent.state).hidden.contains_key(label) {
+        return false;
+    }
+    close_hidden(core, label);
+    true
+}
+
 /// Closes a hidden consent window. After a startup window, the cookie
 /// fallback runs first (D.6.3).
 pub(crate) fn close_hidden<R: Runtime>(core: &Arc<Core<R>>, label: &str) {

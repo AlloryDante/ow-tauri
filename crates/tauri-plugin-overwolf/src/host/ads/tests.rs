@@ -780,3 +780,81 @@ fn the_first_load_follows_the_consent_gate() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The `render-process-gone` reasons an element heard, in order.
+#[cfg(target_os = "macos")]
+fn gone_reasons(events: &Events) -> Vec<Value> {
+    events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|e| e["name"] == "render-process-gone")
+        .map(|e| e["data"]["details"]["reason"].clone())
+        .collect()
+}
+
+/// W0c ruling 1, §4.4.7: on macOS the app's terminate hook recovers an ad
+/// guest as after any crash: `render-process-gone` ("crashed"), a recreate
+/// on the §4.4.6 path under the same label, and after
+/// `ads.maxRecoveries` the guest closes.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_terminate_hook_recovers_a_guest() {
+    use crate::platform::terminate::handle_web_content_process_terminate;
+    let (app, dir, core, _) = app_with("ads-terminate", &json!({ "maxRecoveries": 1 }), &["main"]);
+    let (label, events) = mount_on(&core, &app, "main", "e1");
+    with_guest(&core, &label, |g| g.navigated = true);
+    handle_web_content_process_terminate(&app.get_webview(&label).unwrap());
+    assert_eq!(gone_reasons(&events), [json!("crashed")]);
+    let reloads = of_kind(&core, &label, "reload");
+    assert_eq!(reloads.len(), 1, "{reloads:?}");
+    assert_eq!(reloads[0]["recreate"], true, "recovered by a recreate");
+    assert!(wait_until(Duration::from_secs(2), || !of_kind(
+        &core,
+        &label,
+        "recreated"
+    )
+    .is_empty()));
+    assert!(wait_until(Duration::from_secs(2), || with_guest(
+        &core,
+        &label,
+        |g| g.generations.admits()
+    ) == Some(true)));
+    assert!(guest_exists(&core, &label));
+    assert_eq!(
+        count(&events, "did-attach"),
+        1,
+        "a recovery never reattaches"
+    );
+    // The recreated guest's process ends too: over ads.maxRecoveries.
+    handle_web_content_process_terminate(&app.get_webview(&label).unwrap());
+    assert_eq!(gone_reasons(&events), [json!("crashed"), json!("crashed")]);
+    assert_eq!(count(&events, "destroyed"), 1);
+    assert!(!guest_exists(&core, &label));
+    assert!(
+        app.get_webview("main").is_some(),
+        "the embedder is never reloaded for a guest"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// After `RunEvent::Exit` a guest's ended process is neither reported nor
+/// recovered, and a reload asked for then does nothing.
+#[test]
+fn no_recovery_after_exit() {
+    let (app, dir, core, _) = app_with("ads-after-exit", &json!({}), &["main"]);
+    let (label, events) = mount_on(&core, &app, "main", "e1");
+    with_guest(&core, &label, |g| g.navigated = true);
+    crate::host::lifecycle::on_exit(&core);
+    guest_crashed(&core, &label, GoneReason::Crashed, 0);
+    reload_guest(&core, &label);
+    assert_eq!(count(&events, "render-process-gone"), 0);
+    assert!(of_kind(&core, &label, "reload").is_empty());
+    #[cfg(target_os = "macos")]
+    crate::platform::terminate::handle_web_content_process_terminate(
+        &app.get_webview(&label).unwrap(),
+    );
+    assert_eq!(count(&events, "render-process-gone"), 0);
+    assert!(of_kind(&core, &label, "reload").is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
