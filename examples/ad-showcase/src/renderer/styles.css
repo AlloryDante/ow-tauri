@@ -22,6 +22,10 @@
   --fam-house: #06b6d4;
   --fam-lifecycle: #98a1b2;
   --fam-error: #ef4444;
+  /* The TEST / LIVE badges keep their colours in both themes (dark text). */
+  --badge-test: #f59e0b;
+  --badge-live: #22c55e;
+  --on-badge: #14171c;
   --radius: 10px;
   --radius-chip: 6px;
   --topbar: 48px;
@@ -38,9 +42,20 @@
     --border: #dde1e8;
     --text: #14171c;
     --muted: #5d6676;
-    --accent: #0f9f8f;
+    --accent: #0f766e;
     --on-accent: #ffffff;
     --fam-lifecycle: #5d6676;
+    --ok: #166534;
+    --warn: #92400e;
+    --err: #b91c1c;
+    --info: #1d4ed8;
+    --fam-display: #1d4ed8;
+    --fam-video: #7c3aed;
+    --fam-performance: #92400e;
+    --fam-reward: #166534;
+    --fam-high-impact: #be185d;
+    --fam-house: #0e7490;
+    --fam-error: #b91c1c;
   }
 }
 
@@ -52,9 +67,20 @@
   --border: #dde1e8;
   --text: #14171c;
   --muted: #5d6676;
-  --accent: #0f9f8f;
+  --accent: #0f766e;
   --on-accent: #ffffff;
   --fam-lifecycle: #5d6676;
+  --ok: #166534;
+  --warn: #92400e;
+  --err: #b91c1c;
+  --info: #1d4ed8;
+  --fam-display: #1d4ed8;
+  --fam-video: #7c3aed;
+  --fam-performance: #92400e;
+  --fam-reward: #166534;
+  --fam-high-impact: #be185d;
+  --fam-house: #0e7490;
+  --fam-error: #b91c1c;
 }
 
 * {
@@ -170,15 +196,15 @@ p {
   letter-spacing: 0.04em;
   padding: 2px 8px;
   border-radius: var(--radius-chip);
-  color: #14171c;
+  color: var(--on-badge);
 }
 
 .badge-test {
-  background: var(--warn);
+  background: var(--badge-test);
 }
 
 .badge-live {
-  background: var(--ok);
+  background: var(--badge-live);
 }
 
 .banner {
@@ -479,32 +505,28 @@ textarea.input {
 
 .slot-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  height: 20px;
+  gap: 4px 8px;
+  min-height: 20px;
   min-width: 0;
   white-space: nowrap;
 }
 
-/* A narrow slot (160x600) cuts its cid short, then its status chip,
-   instead of running into the next card. */
+/* Size, adstyle and the status chip are never cut. The cid takes what is
+   left of the first line and ends with an ellipsis (full text in its
+   tooltip); when the size, adstyle and chip do not fit next to each other,
+   as on a 160x600 or a 300x250 reward slot, the header wraps onto a
+   second line instead. */
 .slot-head > * {
   flex: none;
 }
 
-.slot-head > .slot-cid,
-.slot-head > .chip {
-  min-width: 0;
+.slot-head > .slot-cid {
+  flex: 1 1 0;
+  min-width: 4ch;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.slot-head > .slot-cid {
-  flex: 0 100 auto;
-}
-
-.slot-head > .chip {
-  flex: 0 1 auto;
 }
 
 .slot-size {
@@ -518,8 +540,6 @@ textarea.input {
 
 .tag {
   color: var(--fam-high-impact);
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .slot-box {
@@ -548,6 +568,14 @@ textarea.input {
   color: var(--muted);
   font-size: 12px;
   pointer-events: none;
+}
+
+/* A creative smaller than its slot leaves the hatch showing; the words would
+   read as if the filled slot had no ad. */
+.slot[data-status='loaded'] .slot-fallback,
+.slot[data-status='playing'] .slot-fallback,
+.slot[data-status='ready'] .slot-fallback {
+  visibility: hidden;
 }
 
 .slot-placeholder {
@@ -897,6 +925,28 @@ textarea.input {
   min-width: 0;
 }
 
+.segmented {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.segmented > .btn:first-child {
+  border-radius: var(--radius-chip) 0 0 var(--radius-chip);
+}
+
+.segmented > .btn:last-child {
+  border-radius: 0 var(--radius-chip) var(--radius-chip) 0;
+  border-left-width: 0;
+}
+
+.segmented > .btn[aria-pressed='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
 .tl-export {
   padding: 0 12px;
   color: var(--muted);
@@ -916,8 +966,7 @@ textarea.input {
 }
 
 .tl-row {
-  display: grid;
-  grid-template-columns: 76px 8px minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -937,21 +986,34 @@ textarea.input {
 }
 
 .tl-time {
+  flex: none;
   color: var(--muted);
 }
 
+.tl-row > .dot {
+  flex: none;
+}
+
+/* The event name has priority: the cid gives way first (it shrinks to
+   nothing before the name loses a character); the row's tooltip has both. */
 .tl-name {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .tl-cid {
-  color: var(--muted);
+  flex: 0 1000 auto;
+  min-width: 0;
   max-width: 96px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.85;
 }
 
 .tl-payload {
@@ -1022,6 +1084,13 @@ textarea.input {
   display: flex;
   justify-content: space-between;
   gap: 8px;
+}
+
+.count-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .rail.collapsed > :not(.rail-head) {

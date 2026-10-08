@@ -153,12 +153,13 @@ async function runSteps(host) {
     host.quit();
     return;
   }
-  // Stills and comparisons use the dark theme (the default where the system
-  // is dark; the lab's system appearance may be light).
+  // Stills and comparisons use one theme, dark unless the run asks for light
+  // (the lab's system appearance may be either).
+  const theme = cfg.theme === 'light' ? 'light' : 'dark';
   await exec(
-    "(() => { document.documentElement.dataset.theme = 'dark'; try { localStorage.setItem('ad-showcase.theme', 'dark'); } catch {} })()",
+    `(() => { document.documentElement.dataset.theme = '${theme}'; try { localStorage.setItem('ad-showcase.theme', '${theme}'); } catch {} })()`,
   );
-  await step('started');
+  await step('started', { theme });
 
   const scenario = cfg.steps in SCENARIOS ? cfg.steps : 'smoke';
   let loaded = false;

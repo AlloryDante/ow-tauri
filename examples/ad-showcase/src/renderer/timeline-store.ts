@@ -23,13 +23,22 @@ export interface TimelineEntry {
   payload: Record<string, unknown>;
   /** Milliseconds since the element was created, when the row is about one. */
   sinceMount: number | null;
+  /**
+   * The page visit the row belongs to (see {@link TimelineStore.beginVisit}):
+   * an element's rows belong to the visit that created the element, even
+   * when they arrive after the page was left; `app` rows to the visit during
+   * which they arrived.
+   */
+  visit: number;
 }
 
-/** The fields of a new row; the store adds `seq`. */
-export type NewEntry = Omit<TimelineEntry, 'seq'>;
+/** The fields of a new row; the store adds `seq` and `visit`. */
+export type NewEntry = Omit<TimelineEntry, 'seq' | 'visit'>;
 
 /** Which rows are shown. */
 export interface TimelineFilter {
+  /** A page visit, or `null` for every page (the rail's scope). */
+  visit: number | null;
   /** A `cid`, or `null` for every element. */
   cid: string | null;
   /** A family, or `null` for every family. */
@@ -55,17 +64,67 @@ export class TimelineStore {
   readonly #entries: TimelineEntry[] = [];
   readonly #counts = new Map<string, number>();
   readonly #listeners = new Set<(entry: TimelineEntry) => void>();
+  readonly #visitListeners = new Set<(visit: number) => void>();
+  /** The visit of the element that last used each `cid`. */
+  readonly #cidVisit = new Map<string, number>();
   #seq = 0;
+  #visit = 0;
+
+  /**
+   * Starts a new page visit: rows of elements first seen from now on, and
+   * `app` rows from now on, belong to it. Call it before the page mounts.
+   *
+   * @returns the new visit number
+   */
+  beginVisit(): number {
+    this.#visit += 1;
+    for (const listener of this.#visitListeners) listener(this.#visit);
+    return this.#visit;
+  }
+
+  /** The current page visit (0 before the first page). */
+  get visit(): number {
+    return this.#visit;
+  }
+
+  /**
+   * Binds `cid` to the current visit: call it when an element with that
+   * `cid` is created, so that a page visited again, whose elements reuse
+   * their `cid`s, shows the new elements' rows on the new visit. Without it
+   * a `cid` belongs to the visit it was first seen in.
+   *
+   * @param cid - the element's row label
+   */
+  bindElement(cid: string): void {
+    if (cid !== 'app') this.#cidVisit.set(cid, this.#visit);
+  }
+
+  /**
+   * Subscribes to page visits.
+   *
+   * @param listener - called with each new visit number
+   * @returns an unsubscribe function
+   */
+  onVisit(listener: (visit: number) => void): () => void {
+    this.#visitListeners.add(listener);
+    return () => this.#visitListeners.delete(listener);
+  }
 
   /**
    * Appends a row and notifies listeners.
    *
-   * @param entry - the row without its sequence number
+   * @param entry - the row without its sequence number and visit
    * @returns the stored row
    */
   add(entry: NewEntry): TimelineEntry {
     this.#seq += 1;
-    const stored: TimelineEntry = { seq: this.#seq, ...entry };
+    let visit = this.#visit;
+    if (entry.cid !== 'app') {
+      const first = this.#cidVisit.get(entry.cid);
+      if (first === undefined) this.#cidVisit.set(entry.cid, visit);
+      else visit = first;
+    }
+    const stored: TimelineEntry = { seq: this.#seq, ...entry, visit };
     this.#entries.push(stored);
     this.#counts.set(entry.name, (this.#counts.get(entry.name) ?? 0) + 1);
     for (const listener of this.#listeners) listener(stored);
@@ -77,9 +136,25 @@ export class TimelineStore {
     return this.#entries;
   }
 
-  /** Counts per event name, most frequent first, then by name. */
+  /** Counts per event name over every row, most frequent first, then by name. */
   counts(): [string, number][] {
-    return [...this.#counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    return sortCounts(this.#counts);
+  }
+
+  /**
+   * Counts per event name of the rows in one visit (or every row for
+   * `null`), most frequent first, then by name.
+   *
+   * @param visit - a page visit, or `null` for every page
+   * @returns the counts
+   */
+  countsIn(visit: number | null): [string, number][] {
+    if (visit === null) return this.counts();
+    const counts = new Map<string, number>();
+    for (const e of this.#entries) {
+      if (e.visit === visit) counts.set(e.name, (counts.get(e.name) ?? 0) + 1);
+    }
+    return sortCounts(counts);
   }
 
   /** How many rows of `name` arrived. */
@@ -87,9 +162,17 @@ export class TimelineStore {
     return this.#counts.get(name) ?? 0;
   }
 
-  /** Every `cid` seen, in first-seen order. */
-  cids(): string[] {
-    return [...new Set(this.#entries.map((e) => e.cid))];
+  /**
+   * Every `cid` seen, in first-seen order; with `visit`, only those of rows
+   * in that visit.
+   *
+   * @param visit - a page visit, or `null` (default) for every page
+   * @returns the `cid`s
+   */
+  cids(visit: number | null = null): string[] {
+    return [
+      ...new Set(this.#entries.filter((e) => visit === null || e.visit === visit).map((e) => e.cid)),
+    ];
   }
 
   /**
@@ -131,9 +214,15 @@ export class TimelineStore {
  */
 export function matches(entry: TimelineEntry, filter: TimelineFilter): boolean {
   return (
+    (filter.visit === null || entry.visit === filter.visit) &&
     (filter.cid === null || entry.cid === filter.cid) &&
     (filter.family === null || entry.family === filter.family)
   );
+}
+
+/** Counts sorted most frequent first, then by name. */
+function sortCounts(counts: ReadonlyMap<string, number>): [string, number][] {
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
 }
 
 /**

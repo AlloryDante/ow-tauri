@@ -4,7 +4,8 @@
 //   node e2e/run.mjs [--host tauri|electron] [--steps smoke|tour|live-*]
 //                    [--mode test|live] [--run-id ID] [--no-build]
 //                    [--identity FILE] [--timeout S] [--ad-wait MS]
-//                    [--dwell MS] [--stills DIR] [--live-cap N]
+//                    [--dwell MS] [--stills DIR] [--theme dark|light]
+//                    [--live-cap N]
 //
 // --mode test (default): test ads (--test-ad), smoke or tour.
 // --mode live: real ads, only with a live-* scenario (live-layout,
@@ -23,6 +24,8 @@
 //   (e2e/electron-main.cjs) keeps every window at opacity 0.
 // --steps smoke (default): start, page 1, wait for display_ad_loaded, quit.
 //   --steps tour: every page and its buttons (no ad is ever clicked).
+// --theme dark (default) or light: the showcase theme the steps set before
+//   the first still, so both themes can be recorded.
 //
 // Both: an isolated home, the window monitor (CGWindowListCopyWindowInfo;
 // the app is killed the moment one of its windows becomes visible), a check
@@ -66,6 +69,7 @@ const { values: opts } = parseArgs({
     dwell: { type: 'string', default: '8000' },
     mode: { type: 'string', default: 'test' },
     stills: { type: 'string' },
+    theme: { type: 'string', default: 'dark' },
     'live-cap': { type: 'string', default: '10' },
     'live-observe': { type: 'string', default: '90000' },
   },
@@ -77,6 +81,7 @@ function fail(message) {
 }
 if (process.platform !== 'darwin') fail('the invisible lab and the window monitor are macOS only');
 if (!['tauri', 'electron'].includes(opts.host)) fail(`unknown --host ${opts.host}`);
+if (!['dark', 'light'].includes(opts.theme)) fail(`unknown --theme ${opts.theme}`);
 const LIVE_STEPS = {
   'live-layout': { route: 'layouts/combo-classic', loads: 2 },
   'live-300x250': { route: 'sizes/300x250', loads: 1 },
@@ -287,6 +292,7 @@ async function main() {
     adWaitMs: Number(opts['ad-wait']),
     dwellMs: Number(opts.dwell),
     liveObserveMs: Number(opts['live-observe']),
+    theme: opts.theme,
     ...(opts.stills ? { stillsDir: resolve(opts.stills) } : {}),
   };
   env.OW_SHOWCASE_E2E_CONFIG = JSON.stringify(config);

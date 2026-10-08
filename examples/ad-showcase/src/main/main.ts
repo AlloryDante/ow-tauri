@@ -14,6 +14,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { host } from '#host';
 import { authorName, exportFileName, formulaUid, relaunchArgs } from '../shared/identity.js';
+import { homeRelative, redactHome } from '../shared/paths.js';
 import { PAGE_SWITCH, formatRoute, parseRoute, withPageSwitch } from '../shared/route.js';
 import {
   Channel,
@@ -41,6 +42,23 @@ let mainWindow: BrowserWindow | null = null;
 function joinPath(base: string, ...parts: string[]): string {
   const sep = base.includes('\\') ? '\\' : '/';
   return [base.replace(/[\\/]+$/, ''), ...parts].join(sep);
+}
+
+/** The home folder, or `''` when the host cannot tell. */
+function homeDir(): string {
+  try {
+    return app.getPath('home');
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * A path as the window may show it: inside the home folder it starts with
+ * `~`, so no screen, still or export carries the user's home folder.
+ */
+function shown(path: string): string {
+  return homeRelative(path, homeDir());
 }
 
 /** Sends a window state change to the window, if it is still open. */
@@ -71,7 +89,7 @@ async function hostInfo(): Promise<HostInfo> {
     phasePercent: overwolf.phasePercent,
     productName: app.getName(),
     appVersion: app.getVersion(),
-    exportsDir: joinPath(app.getPath('userData'), 'exports'),
+    exportsDir: shown(joinPath(app.getPath('userData'), 'exports')),
   };
 }
 
@@ -79,9 +97,11 @@ async function readParity(): Promise<ParityLookup> {
   const path = joinPath(app.getPath('userData'), 'parity-report.json');
   try {
     const text = await host.readText(path);
-    return { path, report: text === null ? null : (JSON.parse(text) as ParityReport) };
+    // The report quotes capture paths and page URLs: shown without the home folder.
+    const report = text === null ? null : (JSON.parse(redactHome(text, homeDir())) as ParityReport);
+    return { path: shown(path), report };
   } catch (error) {
-    return { path, report: null, error: String(error) };
+    return { path: shown(path), report: null, error: redactHome(String(error), homeDir()) };
   }
 }
 
@@ -137,8 +157,9 @@ function registerIpc(): void {
         'exports',
         exportFileName(host.name, mode, new Date()),
       );
-      await host.writeText(path, json);
-      return { path };
+      // Event payloads can carry local URLs: the file never names the home folder.
+      await host.writeText(path, redactHome(json, homeDir()));
+      return { path: shown(path) };
     },
   );
   ipcMain.handle(Channel.parity, () => readParity());

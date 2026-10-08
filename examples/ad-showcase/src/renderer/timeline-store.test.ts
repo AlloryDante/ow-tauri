@@ -63,14 +63,77 @@ describe('TimelineStore', () => {
   });
 });
 
-describe('matches', () => {
-  const entry = { seq: 1, ...row('a', 'x', 'video') };
+describe('page visits', () => {
+  it('scopes element rows to the visit that created the element, app rows to their arrival', () => {
+    const store = new TimelineStore();
+    const visits: number[] = [];
+    store.onVisit((v) => visits.push(v));
+    expect(store.beginVisit()).toBe(1);
+    store.add(row('app', 'control:page', 'control'));
+    store.add(row('sz1', 'did-attach', 'lifecycle'));
+    store.add(row('sz1', 'display_ad_loaded'));
+    expect(store.beginVisit()).toBe(2);
+    store.add(row('app', 'control:page', 'control'));
+    // A late row of the first page's element stays on the first page.
+    store.add(row('sz1', 'destroyed', 'lifecycle'));
+    store.add(row('ly1', 'display_ad_loaded'));
+    expect(visits).toEqual([1, 2]);
+    expect(store.visit).toBe(2);
+    expect(store.entries.map((e) => [e.cid, e.visit])).toEqual([
+      ['app', 1],
+      ['sz1', 1],
+      ['sz1', 1],
+      ['app', 2],
+      ['sz1', 1],
+      ['ly1', 2],
+    ]);
+    expect(store.cids(2)).toEqual(['app', 'ly1']);
+    expect(store.cids()).toEqual(['app', 'sz1', 'ly1']);
+    expect(store.countsIn(2)).toEqual([
+      ['control:page', 1],
+      ['display_ad_loaded', 1],
+    ]);
+    expect(store.countsIn(1)).toEqual([
+      ['control:page', 1],
+      ['destroyed', 1],
+      ['did-attach', 1],
+      ['display_ad_loaded', 1],
+    ]);
+    expect(store.countsIn(null)).toEqual(store.counts());
+  });
 
-  it('filters by cid and family', () => {
-    expect(matches(entry, { cid: null, family: null })).toBe(true);
-    expect(matches(entry, { cid: 'a', family: 'video' })).toBe(true);
-    expect(matches(entry, { cid: 'b', family: null })).toBe(false);
-    expect(matches(entry, { cid: null, family: 'display' })).toBe(false);
+  it('puts the rows of a page visited again on the new visit', () => {
+    const store = new TimelineStore();
+    store.beginVisit();
+    store.bindElement('sz1');
+    store.add(row('sz1', 'display_ad_loaded'));
+    store.beginVisit();
+    store.add(row('sz1', 'destroyed', 'lifecycle'));
+    store.beginVisit();
+    // The page comes back and creates a new element with the same cid.
+    store.bindElement('sz1');
+    store.add(row('sz1', 'did-attach', 'lifecycle'));
+    store.bindElement('app');
+    store.add(row('app', 'control:page', 'control'));
+    expect(store.entries.map((e) => [e.name, e.visit])).toEqual([
+      ['display_ad_loaded', 1],
+      ['destroyed', 1],
+      ['did-attach', 3],
+      ['control:page', 3],
+    ]);
+    expect(store.cids(3)).toEqual(['sz1', 'app']);
+  });
+});
+
+describe('matches', () => {
+  const entry = { seq: 1, visit: 3, ...row('a', 'x', 'video') };
+
+  it('filters by visit, cid and family', () => {
+    expect(matches(entry, { visit: null, cid: null, family: null })).toBe(true);
+    expect(matches(entry, { visit: 3, cid: 'a', family: 'video' })).toBe(true);
+    expect(matches(entry, { visit: 2, cid: null, family: null })).toBe(false);
+    expect(matches(entry, { visit: null, cid: 'b', family: null })).toBe(false);
+    expect(matches(entry, { visit: null, cid: null, family: 'display' })).toBe(false);
   });
 });
 

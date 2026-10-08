@@ -1,7 +1,8 @@
 /**
  * The event timeline rail: newest row at the bottom with autoscroll, a pause
- * toggle, filters by element and by family, a payload view per row, counts
- * per event name and the JSON export.
+ * toggle, a scope (this page's elements and app rows, or every page),
+ * filters by element and by family, a payload view per row, counts per event
+ * name for the scope and the JSON export.
  *
  * @packageDocumentation
  */
@@ -18,6 +19,9 @@ import {
 
 /** Rows kept in the DOM; older ones stay in the store and in exports. */
 const MAX_ROWS = 1500;
+
+/** What the rail shows: the current page visit, or every page. */
+export type TimelineScope = 'page' | 'all';
 
 /** What the rail needs from the app shell. */
 export interface TimelineViewOptions {
@@ -41,8 +45,13 @@ export class TimelineView {
   readonly #pauseButton: HTMLButtonElement;
   readonly #exportStatus: HTMLElement;
   readonly #total: HTMLElement;
+  readonly #scopeButtons: Record<TimelineScope, HTMLButtonElement>;
   readonly #options: TimelineViewOptions;
-  #filter: TimelineFilter = { cid: null, family: null };
+  #scope: TimelineScope = 'page';
+  #filter: TimelineFilter;
+  /** Counts per event name of the rows in scope. */
+  #scopeCounts = new Map<string, number>();
+  #scopeRows = 0;
   #paused = false;
   #pending = 0;
   #collapsed = false;
@@ -50,6 +59,17 @@ export class TimelineView {
   constructor(options: TimelineViewOptions) {
     this.#options = options;
     this.#store = options.store;
+    this.#filter = { visit: this.#store.visit, cid: null, family: null };
+    this.#scopeButtons = {
+      page: button('This page', 'timeline-scope-page', () => {
+        this.setScope('page');
+      }),
+      all: button('All pages', 'timeline-scope-all', () => {
+        this.setScope('all');
+      }),
+    };
+    this.#scopeButtons.page.title = "The current page's elements, plus app and control rows";
+    this.#scopeButtons.all.title = 'Every element of every page visited';
     this.#cidSelect = h('select', {
       class: 'select',
       attrs: { 'aria-label': 'Filter by element' },
@@ -113,6 +133,12 @@ export class TimelineView {
       h(
         'div',
         { class: 'rail-tools' },
+        h(
+          'div',
+          { class: 'segmented', attrs: { role: 'group', 'aria-label': 'Timeline scope' } },
+          this.#scopeButtons.page,
+          this.#scopeButtons.all,
+        ),
         this.#cidSelect,
         this.#familySelect,
         this.#pauseButton,
@@ -125,8 +151,52 @@ export class TimelineView {
     this.#store.subscribe((entry) => {
       this.#onEntry(entry);
     });
+    this.#store.onVisit(() => {
+      if (this.#scope === 'page') this.#rescope();
+    });
+    this.#rescope();
+  }
+
+  /**
+   * Shows the current page's rows (`page`, the default) or every row (`all`).
+   * The element filter, the row count and the counts follow the scope.
+   *
+   * @param scope - the scope
+   */
+  setScope(scope: TimelineScope): void {
+    if (scope === this.#scope) return;
+    this.#scope = scope;
+    this.#rescope();
+  }
+
+  /** The current scope. */
+  get scope(): TimelineScope {
+    return this.#scope;
+  }
+
+  #rescope(): void {
+    const visit = this.#scope === 'page' ? this.#store.visit : null;
+    // A cid picked on another page means nothing in the new scope.
+    const cid =
+      this.#filter.cid !== null && this.#store.cids(visit).includes(this.#filter.cid)
+        ? this.#filter.cid
+        : null;
+    this.#filter = { ...this.#filter, visit, cid };
+    for (const [key, b] of Object.entries(this.#scopeButtons)) {
+      b.setAttribute('aria-pressed', String(key === this.#scope));
+    }
+    this.#scopeCounts = new Map(this.#store.countsIn(visit));
+    this.#scopeRows = [...this.#scopeCounts.values()].reduce((a, b) => a + b, 0);
+    this.#pending = 0;
+    if (this.#paused) this.#pauseButton.textContent = 'Resume';
     this.#refreshCids();
     this.#renderCounts();
+    this.#renderTotal();
+    this.#rerender();
+  }
+
+  #inScope(entry: TimelineEntry): boolean {
+    return this.#filter.visit === null || entry.visit === this.#filter.visit;
   }
 
   /**
@@ -171,11 +241,15 @@ export class TimelineView {
   }
 
   #onEntry(entry: TimelineEntry): void {
-    this.#total.textContent = String(this.#store.entries.length);
-    if (!this.#cidSelect.querySelector(`option[value="${CSS.escape(entry.cid)}"]`)) {
-      this.#refreshCids();
+    if (this.#inScope(entry)) {
+      this.#scopeRows += 1;
+      this.#scopeCounts.set(entry.name, (this.#scopeCounts.get(entry.name) ?? 0) + 1);
+      if (!this.#cidSelect.querySelector(`option[value="${CSS.escape(entry.cid)}"]`)) {
+        this.#refreshCids();
+      }
+      this.#renderCounts();
     }
-    this.#renderCounts();
+    this.#renderTotal();
     if (!matches(entry, this.#filter)) return;
     if (this.#paused) {
       this.#pending += 1;
@@ -195,21 +269,39 @@ export class TimelineView {
   }
 
   #refreshCids(): void {
-    const current = this.#cidSelect.value;
+    const current = this.#filter.cid ?? '';
     this.#cidSelect.replaceChildren(
       h('option', { text: 'all elements', attrs: { value: '' } }),
-      ...this.#store.cids().map((cid) => h('option', { text: cid, attrs: { value: cid } })),
+      ...this.#store
+        .cids(this.#filter.visit)
+        .map((cid) => h('option', { text: cid, attrs: { value: cid } })),
     );
     this.#cidSelect.value = current;
   }
 
+  #renderTotal(): void {
+    const all = this.#store.entries.length;
+    this.#total.textContent = String(this.#scopeRows);
+    this.#total.title =
+      this.#scope === 'page'
+        ? `${String(this.#scopeRows)} rows on this page, ${String(all)} in all`
+        : `${String(all)} rows in all`;
+  }
+
   #renderCounts(): void {
-    const counts = this.#store.counts();
+    const counts = [...this.#scopeCounts.entries()].sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+    );
     this.#counts.replaceChildren(
       ...(counts.length === 0
         ? [h('span', { class: 'muted', text: 'No events yet.' })]
         : counts.map(([name, n]) =>
-            h('span', { class: 'count' }, h('span', { text: name }), h('b', { text: String(n) })),
+            h(
+              'span',
+              { class: 'count', attrs: { title: name } },
+              h('span', { class: 'count-name', text: name }),
+              h('b', { text: String(n) }),
+            ),
           )),
     );
   }
@@ -236,6 +328,8 @@ function row(entry: TimelineEntry): HTMLElement {
     h('span', { class: 'tl-name', text: entry.name }),
     h('span', { class: 'tl-cid mono', text: entry.cid }),
   );
+  // The name column wins the space; the full text is one hover away.
+  head.title = `${clock(entry.t)}  ${entry.name}  ${entry.cid}`;
   return h('div', { class: 'tl-item' }, head, details);
 }
 

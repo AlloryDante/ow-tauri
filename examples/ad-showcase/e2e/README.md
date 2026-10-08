@@ -45,7 +45,14 @@ node e2e/run.mjs --host tauri --mode live --steps live-layout     # LIVE, budget
   the title bar band, which the still leaves out. Nothing captures the
   screen, so no screen-recording permission is involved. With
   `OW_SHOWCASE_STILL_PARTS=1` each webview's own snapshot is kept too
-  (`<name>.<label>.png`).
+  (`<name>.<label>.png`). `--theme light` records the light theme (dark
+  is the default).
+- `--stills DIR` (ow-electron): each ad guest renders itself in process
+  (`webContents.capturePage()`) into
+  `DIR/<page>-<state>.electron-guest-<id>-<w>x<h>.png`, and the `still` row
+  of `e2e.jsonl` gives each guest's painted share and colour count, so a
+  blank test creative is told apart from a host that shows nothing (the
+  970x90 test creative is blank on both hosts).
 - The ow-electron wrapper records what the ad guests log to
   `guest-console.jsonl` (`<owadview> is not visible. waiting...`, `not
 valid slot size`), as the ow-tauri trace does for its guests.
@@ -105,7 +112,7 @@ no fatal error and (test mode) a `display_ad_loaded` arrived.
 ## Configuration
 
 - `OW_SHOWCASE_E2E_CONFIG`: the driver's configuration (`runDir`, `steps`,
-  `mode`, `adWaitMs`, `dwellMs`, `liveObserveMs`, `stillsDir`). Without it
+  `mode`, `adWaitMs`, `dwellMs`, `liveObserveMs`, `theme`, `stillsDir`). Without it
   the driver stays inert.
 - `OW_TAURI_LAB_DIR`, `OW_TAURI_LAB_PACKAGE_JSON` (ow-tauri): the trace
   folder and the manifest to run with (`.stage/package.json`, so the staged

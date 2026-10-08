@@ -59,7 +59,7 @@ export interface HostInfo {
   productName: string;
   /** `app.getVersion()`. */
   appVersion: string;
-  /** The folder exports go to: `<userData>/exports`. */
+  /** The folder exports go to: `<userData>/exports`, home folder as `~`. */
   exportsDir: string;
 }
 
@@ -71,7 +71,7 @@ export interface ExportRequest {
 
 /** Where an export was written. */
 export interface ExportResult {
-  /** Absolute path of the written file. */
+  /** The written file, with the home folder as `~` (`~/.../exports/<file>.json`). */
   path: string;
 }
 
@@ -95,7 +95,7 @@ export interface ParityDiff {
 
 /** The parity report, if one was placed where the app looks for it. */
 export interface ParityLookup {
-  /** The path the main process read (or would read). */
+  /** The path the main process read (or would read), with the home folder as `~`. */
   path: string;
   /** The parsed report, or `null` when the file does not exist. */
   report: ParityReport | null;

@@ -135,6 +135,7 @@ app.whenReady().then(() => {
 require('./main/main.js');
 
 // --- The steps ----------------------------------------------------------------
+const STILL_TIMEOUT_MS = 3000;
 const isShowcase = (w) => /renderer\/index\.html/.test(w.webContents.getURL() || '');
 const host = {
   name: 'electron',
@@ -160,7 +161,61 @@ const host = {
       visible: w.isVisible(),
       url: (w.webContents.getURL() || '').replace(/^.*\/renderer\//, '<app>/renderer/'),
     })),
+  // Each ad guest renders itself (`webContents.capturePage()`, in process;
+  // nothing captures the screen): `<name>.electron-guest-<id>-<w>x<h>.png`
+  // in the stills folder, plus how much of it is painted, so a blank
+  // creative can be told from a host that shows nothing. A hidden guest
+  // (display: none) never answers capturePage(); it is skipped after
+  // STILL_TIMEOUT_MS.
+  still: async (name) => {
+    const guests = webContents
+      .getAllWebContents()
+      .filter((wc) => !wc.isDestroyed() && wc.getType() === 'owadview');
+    const shots = [];
+    for (const wc of guests) {
+      const image = await Promise.race([
+        wc.capturePage(),
+        new Promise((done) => setTimeout(() => done(null), STILL_TIMEOUT_MS)),
+      ]);
+      if (!image) {
+        shots.push({ id: wc.id, timedOut: true });
+        continue;
+      }
+      const { width, height } = image.getSize();
+      shots.push({ id: wc.id, width, height, ...paintStats(image.toBitmap()) });
+      if (config.stillsDir && width > 0 && height > 0) {
+        fs.mkdirSync(config.stillsDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(config.stillsDir, `${name}.electron-guest-${wc.id}-${width}x${height}.png`),
+          image.toPNG(),
+        );
+      }
+    }
+    return { guests: shots };
+  },
 };
+
+/**
+ * How much of a BGRA bitmap is painted: the share of pixels that are not
+ * transparent, and how many distinct colours (4 bits per channel) they use.
+ * A blank creative is transparent or one flat colour.
+ */
+function paintStats(bitmap) {
+  let opaque = 0;
+  const colours = new Set();
+  const pixels = bitmap.length / 4;
+  for (let i = 0; i < bitmap.length; i += 4) {
+    if (bitmap[i + 3] < 16) continue;
+    opaque += 1;
+    if (colours.size < 64) {
+      colours.add(((bitmap[i] >> 4) << 8) | ((bitmap[i + 1] >> 4) << 4) | (bitmap[i + 2] >> 4));
+    }
+  }
+  return {
+    opaqueShare: pixels ? Math.round((opaque / pixels) * 1000) / 1000 : 0,
+    colours: colours.size,
+  };
+}
 host.record({ kind: 'driver', host: 'electron', versions: process.versions });
 app
   .whenReady()

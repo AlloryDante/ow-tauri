@@ -1,9 +1,9 @@
 /**
  * Ad slots: a card with a header row (size, `cid`, `adstyle`, status chip)
  * above a container of exactly the slot size that holds one `<owadview>`.
- * The container shows a hatch and "no fill yet" behind the transparent ad,
- * so an unfilled slot visibly shows the app's own fallback. Nothing of ours
- * is drawn over the ad box.
+ * The container shows a hatch and "no fill yet" (the words hide once the
+ * slot has an ad) behind the transparent ad, so an unfilled slot visibly
+ * shows the app's own fallback. Nothing of ours is drawn over the ad box.
  *
  * Every event the element dispatches goes to the timeline; elements are
  * created fresh for every page visit and never re-appended once removed
@@ -306,6 +306,7 @@ export function listenAll(
   created: number,
   onEvent?: (name: string, event: Event) => void,
 ): void {
+  ctx.store.bindElement(cid);
   for (const name of EVENT_NAMES) {
     el.addEventListener(name, (event) => {
       ctx.store.add({

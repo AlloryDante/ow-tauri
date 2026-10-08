@@ -6,6 +6,7 @@
  * @packageDocumentation
  */
 import type { ParityDiff, ParityLookup } from '../../shared/ipc.js';
+import { shellPath } from '../../shared/paths.js';
 import { button, h, note, pageHeader } from '../dom.js';
 import type { MountPage } from './page.js';
 
@@ -42,7 +43,7 @@ function renderReport(body: HTMLElement, lookup: ParityLookup): void {
           'node run.mjs --mode test --present transparent --window-monitor --run-id E1',
           'node run.mjs --host tauri --mode test --present transparent --window-monitor --run-id T1',
           'node parity-diff.mjs captures/E1 captures/T1',
-          `cp captures/T1/parity-diff.json "${lookup.path}"`,
+          `cp captures/T1/parity-diff.json ${shellPath(lookup.path)}`,
         ].join('\n'),
       ),
       h('p', {

@@ -4,8 +4,8 @@
  * fold of a scroll box (test ads load only in view), and each size alone.
  *
  * All seven at once do not fit a 1280x860 window with a header row per slot
- * (they need about 1040x770 of the content area), and a slot that is not
- * fully in view waits instead of loading, so the page shows one group at a
+ * (they need about 1040x770 of the content area), and a slot less than
+ * half in view waits instead of loading, so the page shows one group at a
  * time; switching removes the old containers and creates new ones. The
  * group or size is the page's route argument (`#sizes/banners`), so a
  * restart comes back to it.
@@ -172,7 +172,7 @@ export const mountSizes: MountPage = (root, ctx) => {
   root.append(
     pageHeader(
       'Sizes',
-      'The seven container sizes Overwolf documents, each with its own cid. A slot loads once it is fully in view.',
+      'The seven container sizes Overwolf documents, each with its own cid. A slot loads once at least half of it is in view.',
       h(
         'div',
         { class: 'toolbar' },

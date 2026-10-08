@@ -8,6 +8,7 @@
 import { maskId } from '../shared/identity.js';
 import type { AdMode, HostInfo, ShowcaseApi } from '../shared/ipc.js';
 import { formatRoute, parseRoute } from '../shared/route.js';
+import { consentChip, type ConsentState } from './consent-chip.js';
 import { button, h } from './dom.js';
 import { mountConsent } from './pages/consent.js';
 import { mountControls } from './pages/controls.js';
@@ -144,14 +145,21 @@ export function startApp(root: HTMLElement, api: ShowcaseApi, info: HostInfo): v
       uidButton.setAttribute('aria-pressed', String(uidShown));
     },
   });
-  const consentChip = h('span', { class: 'chip tone-muted', text: 'consent: checking…' });
+  const consentEl = h('span', { class: 'chip', attrs: { role: 'status' } });
+  const showConsent = (state: ConsentState): void => {
+    const chip = consentChip(state);
+    consentEl.textContent = chip.text;
+    consentEl.className = `chip tone-${chip.tone}`;
+    consentEl.title = chip.title;
+    consentEl.dataset['state'] = state;
+  };
+  showConsent('checking');
   void api.cmpRequired().then(
     (required) => {
-      consentChip.textContent = required ? 'consent: CMP required' : 'consent: not required';
-      consentChip.className = `chip tone-${required ? 'warn' : 'ok'}`;
+      showConsent(required ? 'required' : 'not-required');
     },
     () => {
-      consentChip.textContent = 'consent: unknown';
+      showConsent('failed');
     },
   );
   const themeButton = button(
@@ -217,7 +225,7 @@ export function startApp(root: HTMLElement, api: ShowcaseApi, info: HostInfo): v
       modeBadge,
     ),
     hostChip,
-    h('div', { class: 'top-right' }, uidButton, consentChip, themeButton, restartButton),
+    h('div', { class: 'top-right' }, uidButton, consentEl, themeButton, restartButton),
   );
 
   // ----------------------------------------------------------------- layout
@@ -305,6 +313,9 @@ export function startApp(root: HTMLElement, api: ShowcaseApi, info: HostInfo): v
       if (id === page.id) b.setAttribute('aria-current', 'page');
       else b.removeAttribute('aria-current');
     }
+    // The rail's default scope is this visit: the page's own elements plus
+    // app and control rows from now on.
+    store.beginVisit();
     control('page', 'app', { page: page.id });
     const pageRoot = h('div', { class: `page page-${page.id}`, data: { page: page.id } });
     main.append(pageRoot);

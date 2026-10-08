@@ -99,20 +99,27 @@ full on screen only, and timeline exports carry the masked uid.
 ## The window
 
 - **Top bar**: host and version, the TEST/LIVE badge, the uid (masked), the
-  consent state, the theme toggle and Restart.
+  consent chip (`checking…`, `EU rules apply`, `not required` or `could not
+  check`; its tooltip names `isCMPRequired()`), the theme toggle and
+  Restart.
 - **Sidebar**: the nine pages (keys `1` to `9`).
 - **Timeline** (right rail): every event of every `<owadview>` plus every
   action you take (`control:*` rows), with the time, the slot's `cid` and
-  the time since the slot was created. Filter by slot or by family, pause,
-  click a row to see its payload, and **Export JSON** to
-  `<userData>/exports/timeline-<host>-<mode>-<time>.json`. The counts per
-  event are at the bottom.
+  the time since the slot was created. **This page** (the default) shows the
+  slots created on the current visit of the page plus the app and control
+  rows; **All pages** shows everything. The counts per event at the bottom
+  and the slot filter follow the scope. Filter by slot or by family, pause,
+  click a row to see its payload (a row's tooltip has its full name and
+  `cid`), and **Export JSON** to
+  `<userData>/exports/timeline-<host>-<mode>-<time>.json`. Paths in the
+  window and in the export show the home folder as `~`.
 
 ## Pages
 
 1. **Sizes**: the seven documented sizes (970x90, 728x90, 160x600, 400x600,
    400x60, 400x300, 300x250), each with its own `cid`. A slot loads only
-   once it is fully in view, and all seven do not fit one window, so the
+   once at least half of it is in view, and all seven do not fit one
+   window, so the
    **Show** select picks a group: **Towers and rectangles** (160x600,
    400x600, 400x300, 300x250; the default), **Banners** (970x90, 728x90,
    400x60), **Below the fold** (a 300x250 in a scroll box that loads only
