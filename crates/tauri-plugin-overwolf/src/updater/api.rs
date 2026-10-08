@@ -160,6 +160,12 @@ impl<R: Runtime> Updater<R> {
     ///
     /// `network` for a failed request, `verification` for a bad feed,
     /// `unsupported` until the engine is wired.
+    #[allow(
+        unknown_lints,
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "frozen async interface; the update engine (W3) awaits"
+    )]
     pub async fn check(&self) -> Result<Option<Update>> {
         let _ = &self.builder.app;
         Err(unavailable())
@@ -199,6 +205,12 @@ impl Update {
     /// # Errors
     ///
     /// `network`, `io` or `verification`.
+    #[allow(
+        unknown_lints,
+        clippy::unused_async,
+        clippy::unused_async_trait_impl,
+        reason = "frozen async interface; the update engine (W3) awaits"
+    )]
     pub async fn download<C: FnMut(usize, Option<u64>), D: FnOnce()>(
         &self,
         on_chunk: C,
@@ -215,7 +227,7 @@ impl Update {
     ///
     /// `verification` or `io`.
     pub fn install(&self, downloaded: DownloadedUpdate) -> Result<()> {
-        drop(downloaded);
+        let DownloadedUpdate { _private: () } = downloaded;
         Err(unavailable())
     }
 

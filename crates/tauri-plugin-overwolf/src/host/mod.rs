@@ -68,6 +68,13 @@ pub(crate) struct Core<R: Runtime> {
     /// The state files (DESIGN §4.12).
     pub(crate) state: StateFiles,
     /// What the builder asked for.
+    #[cfg_attr(
+        not(target_os = "macos"),
+        allow(
+            dead_code,
+            reason = "read by the macOS terminate check; the W2 hosts read the rest"
+        )
+    )]
     pub(crate) options: SetupOptions,
 }
 

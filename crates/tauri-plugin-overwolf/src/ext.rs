@@ -549,7 +549,6 @@ impl<R: Runtime> Overwolf<R> {
     /// # }
     /// ```
     #[cfg(all(feature = "updater", windows))]
-    #[must_use]
     pub fn updater_builder(&self) -> crate::updater::UpdaterBuilder<R> {
         crate::updater::UpdaterBuilder::new(self.0.app.clone())
     }
