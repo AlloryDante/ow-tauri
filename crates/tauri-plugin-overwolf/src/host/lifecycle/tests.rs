@@ -135,9 +135,16 @@ fn setup_writes_nothing_and_the_burst_starts_at_ready() {
         seen_at_ready.load(Ordering::SeqCst),
         "the burst was queued at Ready"
     );
-    let urls = capture.urls();
     // `cmp-eu-only` runs in parallel with the burst (CONTRACT E.2 #2), so
-    // its place in the capture is free; it is sent once.
+    // its place in the capture is free (and it may still be on its way
+    // when the loop ends); it is sent once.
+    crate::host::windows::tests::wait_until(Duration::from_secs(5), || {
+        capture
+            .urls()
+            .iter()
+            .any(|u| u.as_str() == crate::analytics::CMP_EU_ONLY_URL)
+    });
+    let urls = capture.urls();
     let eu_only = urls
         .iter()
         .filter(|u| u.as_str() == crate::analytics::CMP_EU_ONLY_URL)

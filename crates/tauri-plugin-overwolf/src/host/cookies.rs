@@ -131,6 +131,10 @@ fn now_secs() -> f64 {
 /// [`CONSENT_COOKIE_URL`] carries, by name; `None` when the store does not
 /// answer (or on Linux, which has no ads store). `via_label` is the consent
 /// window that reads it on Windows.
+#[cfg_attr(
+    not(any(target_os = "macos", windows)),
+    allow(clippy::unused_async, reason = "Linux has no ads store to wait for")
+)]
 pub(crate) async fn consent_cookies_in_store<R: Runtime>(
     core: &Arc<Core<R>>,
     via_label: &str,

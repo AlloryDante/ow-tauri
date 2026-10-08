@@ -407,7 +407,14 @@ mod tests {
         accept_native_user_agent(&core2, Some(&native));
         let ua = core2.analytics.user_agent();
         if cfg!(windows) {
-            assert!(ua.starts_with(&native), "{ua}");
+            // The native user agent with the app's token (E.1).
+            let label = host_label(&core2.identity.config.analytics);
+            assert_eq!(
+                ua,
+                composed_user_agent(&native, &core2.identity.app, &label),
+                "{ua}"
+            );
+            assert!(ua.contains("Windows NT 11.0"), "{ua}");
         } else {
             // macOS accepts the template only; Linux never reads natively.
             assert_eq!(ua, template);
