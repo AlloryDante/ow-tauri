@@ -171,7 +171,9 @@ export class TimelineStore {
    */
   cids(visit: number | null = null): string[] {
     return [
-      ...new Set(this.#entries.filter((e) => visit === null || e.visit === visit).map((e) => e.cid)),
+      ...new Set(
+        this.#entries.filter((e) => visit === null || e.visit === visit).map((e) => e.cid),
+      ),
     ];
   }
 
