@@ -25,14 +25,12 @@ pub(crate) fn window<R: Runtime, M: Manager<R>>(manager: &M, label: &str) -> Opt
 
 /// The webview `label`.
 #[cfg(ow_tauri_ads)]
-#[allow(dead_code, reason = "the ads and consent hosts (W2) look webviews up")]
 pub(crate) fn webview<R: Runtime, M: Manager<R>>(manager: &M, label: &str) -> Option<Webview<R>> {
     manager.get_webview(label)
 }
 
 /// The webview `label`.
 #[cfg(not(ow_tauri_ads))]
-#[allow(dead_code, reason = "the ads and consent hosts (W2) look webviews up")]
 pub(crate) fn webview<R: Runtime, M: Manager<R>>(manager: &M, label: &str) -> Option<Webview<R>> {
     manager
         .get_webview_window(label)

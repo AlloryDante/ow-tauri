@@ -21,9 +21,9 @@
 use serde_json::Value;
 
 /// Whether the trace is on (`OW_TAURI_LAB_DIR` is set, feature `lab`).
-#[allow(
-    dead_code,
-    reason = "wired by the ads and consent hosts (W2) and the harness (W3)"
+#[cfg_attr(
+    not(feature = "plugin"),
+    allow(dead_code, reason = "only the plugin runtime calls it")
 )]
 #[must_use]
 pub(crate) fn trace_on() -> bool {
@@ -39,9 +39,9 @@ pub(crate) fn record(file: &str, entry: impl FnOnce() -> Value) {
 
 /// A process-wide sequence number for trace records (request ids, guest
 /// numbers).
-#[allow(
-    dead_code,
-    reason = "wired by the ads and consent hosts (W2) and the harness (W3)"
+#[cfg_attr(
+    not(feature = "plugin"),
+    allow(dead_code, reason = "only the plugin runtime calls it")
 )]
 #[must_use]
 pub(crate) fn next_id() -> u64 {
@@ -50,9 +50,9 @@ pub(crate) fn next_id() -> u64 {
 
 /// Whether lab windows are invisible (`OW_TAURI_LAB_INVISIBLE=1`, feature
 /// `lab`).
-#[allow(
-    dead_code,
-    reason = "wired by the ads and consent hosts (W2) and the harness (W3)"
+#[cfg_attr(
+    not(feature = "plugin"),
+    allow(dead_code, reason = "only the plugin runtime calls it")
 )]
 #[must_use]
 pub(crate) fn invisible() -> bool {
@@ -62,9 +62,9 @@ pub(crate) fn invisible() -> bool {
 /// The body that answers the startup `cmp-eu-only` request instead of the
 /// network (`OW_TAURI_LAB_CMP_EU_ONLY`, feature `lab`); `None` outside the
 /// lab. Recorded in `host-requests.jsonl` when used.
-#[allow(
-    dead_code,
-    reason = "wired by the ads and consent hosts (W2) and the harness (W3)"
+#[cfg_attr(
+    not(feature = "plugin"),
+    allow(dead_code, reason = "only the plugin runtime calls it")
 )]
 #[must_use]
 pub(crate) fn cmp_eu_only_stub() -> Option<Vec<u8>> {
@@ -86,9 +86,9 @@ pub(crate) fn cmp_eu_only_stub() -> Option<Vec<u8>> {
 /// surface the app asked for (a file or message dialog, the file manager,
 /// the system browser) must not open. The caller then answers as the OS
 /// would when the user dismisses it at once. Always `false` outside the lab.
-#[allow(
-    dead_code,
-    reason = "wired by the ads and consent hosts (W2) and the harness (W3)"
+#[cfg_attr(
+    not(feature = "plugin"),
+    allow(dead_code, reason = "only the plugin runtime calls it")
 )]
 #[must_use]
 pub(crate) fn block_os_surface(kind: &str, detail: impl FnOnce() -> Value) -> bool {
@@ -106,9 +106,9 @@ pub(crate) fn block_os_surface(kind: &str, detail: impl FnOnce() -> Value) -> bo
 
 /// Whether the plugin may focus a window (always, unless lab windows are
 /// invisible).
-#[allow(
-    dead_code,
-    reason = "wired by the ads and consent hosts (W2) and the harness (W3)"
+#[cfg_attr(
+    not(feature = "plugin"),
+    allow(dead_code, reason = "only the plugin runtime calls it")
 )]
 #[must_use]
 pub(crate) fn may_focus() -> bool {
@@ -116,9 +116,9 @@ pub(crate) fn may_focus() -> bool {
 }
 
 /// The names of the cookies in a `cookie` header value, in order.
-#[allow(
-    dead_code,
-    reason = "wired by the ads and consent hosts (W2) and the harness (W3)"
+#[cfg_attr(
+    not(feature = "plugin"),
+    allow(dead_code, reason = "only the plugin runtime calls it")
 )]
 pub(crate) fn cookie_names(header: &str) -> Vec<String> {
     header

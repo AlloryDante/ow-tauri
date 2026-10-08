@@ -121,7 +121,7 @@ impl AnalyticsHost {
     }
 
     /// Whether the launch burst was queued.
-    #[allow(dead_code, reason = "tests and the ads host (W2-A) check it")]
+    #[cfg(test)]
     pub(crate) fn is_started(&self) -> bool {
         lock(&self.state).session.is_started()
     }
@@ -191,19 +191,28 @@ impl AnalyticsHost {
     }
 
     /// An ad guest attached (E.2 #6, 400025).
-    #[allow(dead_code, reason = "the ads host (W2-A) calls it after a forced poll")]
+    #[cfg_attr(
+        not(ow_tauri_ads),
+        allow(dead_code, reason = "only the ads host calls it")
+    )]
     pub(crate) fn guest_attached(&self) -> usize {
         self.run(Session::guest_attached)
     }
 
     /// The Counter of a reported guest crash (E.2 #8), before the reload.
-    #[allow(dead_code, reason = "the ads host (W2-A) reports guest crashes")]
+    #[cfg_attr(
+        not(ow_tauri_ads),
+        allow(dead_code, reason = "only the ads host calls it")
+    )]
     pub(crate) fn guest_crash_counter(&self, session_secs: u64, reason: &str) -> usize {
         self.run(|s| s.guest_crash_counter(session_secs, reason))
     }
 
     /// The 400024 of a reported guest crash (E.2 #8), after the reload.
-    #[allow(dead_code, reason = "the ads host (W2-A) reports guest crashes")]
+    #[cfg_attr(
+        not(ow_tauri_ads),
+        allow(dead_code, reason = "only the ads host calls it")
+    )]
     pub(crate) fn guest_crash_stats(&self, session_secs: u64, reason: &str) -> usize {
         self.run(|s| s.guest_crash_stats(session_secs, reason))
     }

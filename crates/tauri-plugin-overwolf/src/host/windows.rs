@@ -296,7 +296,7 @@ impl AppWindows {
     }
 
     /// Whether window `label` is tracked.
-    #[allow(dead_code, reason = "the ads host (W2-A) checks embedder windows")]
+    #[cfg(test)]
     pub(crate) fn contains(&self, label: &str) -> bool {
         lock(&self.state).entries.contains_key(label)
     }

@@ -227,21 +227,27 @@ impl ConsentCore {
     }
 
     /// Whether the ad guests may make their first navigation (D.6.5).
-    #[allow(dead_code, reason = "the ads host (W2-A) checks it")]
+    #[cfg(test)]
     pub(crate) fn is_gate_open(&self) -> bool {
         *self.gate.borrow()
     }
 
     /// A receiver that changes to `true` when the gate opens (D.6.5); the
     /// ads host waits on it for at most 3 s from a mount.
-    #[allow(dead_code, reason = "the ads host (W2-A) waits on it")]
+    #[cfg_attr(
+        not(ow_tauri_ads),
+        allow(dead_code, reason = "only the ads host calls it")
+    )]
     pub(crate) fn subscribe_gate(&self) -> watch::Receiver<bool> {
         self.gate.subscribe()
     }
 
     /// Adds a function called with the stored value after every consent
     /// save (D.5).
-    #[allow(dead_code, reason = "the ads host (W2-A) pushes consent to the guests")]
+    #[cfg_attr(
+        not(ow_tauri_ads),
+        allow(dead_code, reason = "only the ads host calls it")
+    )]
     pub(crate) fn add_consent_listener(&self, listener: ConsentListener) {
         lock(&self.listeners).push(listener);
     }
