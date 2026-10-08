@@ -177,21 +177,26 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: install (ow-tauri workspace only)
-        run: npm ci --workspace ow-tauri --include-workspace-root --no-audit --no-fund
+      # The npm workspaces are packages/* (api, cli, guest-shims); the
+      # examples and the parity harness rejoin them in W3/W4.
+      - name: install
+        run: npm ci --no-audit --no-fund
       - name: format
         run: npm run format:check
-      - name: lint
+      - name: lint (incl. no Node imports in tauri-plugin-overwolf-api)
         run: npm run lint
       - name: typecheck
         run: npm run typecheck
-      - name: test
-        run: npm test
+      - name: test (with coverage thresholds)
+        run: npm run test:coverage
       - name: docs
         run: npm run docs
-      - name: injected scripts match their sources (crates/tauri-plugin-overwolf/js)
+      - name: generated scripts match their sources (crates/tauri-plugin-overwolf/js, api-iife.js)
         if: runner.os == 'Linux'
-        run: npm run check:injected --workspace ow-tauri
+        run: npm run check:generated
+      - name: published packages (publint, are-the-types-wrong)
+        if: runner.os == 'Linux'
+        run: npm run check:packages
 
   docs-links:
     name: Docs links
@@ -230,14 +235,16 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-      - name: npm audit (ow-tauri and the workspace root)
-        run: npm audit --audit-level=high --workspace ow-tauri --include-workspace-root
+      - name: npm audit (the workspaces and the workspace root)
+        run: npm audit --audit-level=high --workspaces --include-workspace-root
       - name: Overwolf packages are on the latest dist-tag
         run: node scripts/check-overwolf-dist-tags.mjs
 
   example:
     name: Example build (${{ matrix.os }})
-    if: github.event_name != 'schedule'
+    # restored in W3/W4: the examples build on the removed packages/ow-tauri
+    # until their port to tauri-plugin-overwolf-api lands.
+    if: false && github.event_name != 'schedule'
     needs: [rust, node]
     strategy:
       fail-fast: false
@@ -273,6 +280,7 @@ jobs:
       - name: install
         if: steps.gate.outputs.ported == 'true'
         run: npm ci --no-audit --no-fund
+      # restored in W3/W4 (job disabled above): builds the removed ow-tauri package.
       - name: build frontend and Rust app (no bundling, no launch)
         if: steps.gate.outputs.ported == 'true'
         run: |
