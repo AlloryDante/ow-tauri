@@ -1819,7 +1819,13 @@ fn a_hidden_page_reload_waits_and_runs_when_visible_again() {
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(state("ready"), true, "no reload during the hold");
     ow.test_ads_window_visible(1, true);
-    assert_eq!(state("reloadScheduled"), true);
+    // Due now: the plugin's own 250 ms ticker may run it before the test's
+    // tick does (a busy machine), so only the outcome is checked. A reload
+    // still held to the end of the hold would not run at this tick.
+    assert!(
+        state("reloadScheduled") == true || state("ready") == false,
+        "the held reload is due once visible"
+    );
     ow.test_ads_tick(ow.test_now());
     assert_eq!(state("reloadScheduled"), false);
     assert_eq!(state("ready"), false, "the reload ran once visible");
