@@ -49,8 +49,11 @@ window. WebKit re-sends keys the page did not handle through that same
 
 Knobs: `SPIKE_DELIVERY=window` (straight to `-[NSWindow sendEvent:]`),
 `SPIKE_EVENT_SOURCE=ns`, `SPIKE_ARROW_STRINGS=function-keys`,
-`SPIKE_TRACE_ALL=1` (logs which views receive `keyDown:`), and
-`SPIKE_MITIGATE=native|js` (the two mitigations under test).
+`SPIKE_TRACE_ALL=1` (logs which views receive `keyDown:`),
+`SPIKE_MITIGATE=responder|native|js` (the tauri#10194 mitigations under test),
+`SPIKE_FOCUS_AT_OPEN=1` (`Webview::set_focus()` on the app webview at open) and
+`SPIKE_CHILD_FOCUSED=1` (child webviews built `focused(true)`; the default here is
+`focused(false)`, as the plugin builds its guests).
 
 ## Windows (CI)
 
