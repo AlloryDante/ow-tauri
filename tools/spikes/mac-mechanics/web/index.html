@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>app page</title>
+<style>
+  html, body { margin: 0; background: #fff; font: 14px sans-serif; }
+  #box { position: absolute; left: 20px; top: 20px; width: 100px; height: 100px; background: #9cf; }
+  #field { position: absolute; left: 20px; top: 140px; width: 200px; }
+</style>
+<script>
+  // App page of the spike (tauri://localhost). Records what reaches it.
+  window.__appLog = [];
+  window.__ready = false;
+  for (const t of ['mousedown', 'click', 'keydown']) {
+    document.addEventListener(t, (e) => window.__appLog.push({ t, key: e.key || null, x: e.clientX ?? null, y: e.clientY ?? null, trusted: e.isTrusted }), true);
+  }
+  window.addEventListener('load', () => { window.__ready = true; });
+</script>
+</head>
+<body>
+  <div id="box"></div>
+  <input id="field" placeholder="app field">
+</body>
+</html>

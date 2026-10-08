@@ -1,0 +1,60 @@
+name: Spike - macOS mechanics
+
+# Spike (manual only, W0c-A): the macOS mechanisms the plugin design relies
+# on (user-agent read, native gesture arming, zoom, close timing, crash
+# probe, sessionStorage carry-over), measured on real WKWebViews with
+# tools/spikes/mac-mechanics on the macOS versions the runners provide.
+# Guests load only a loopback fixture page; no ads are loaded. The app runs
+# in the same invisible lab as on a developer Mac (alpha 0, Accessory).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  macos:
+    name: Spike on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: tools/spikes/mac-mechanics
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tools/spikes/mac-mechanics -> target
+      - name: Build
+        run: cargo build --locked
+      - name: Run the items
+        run: |
+          sw_vers > out-sw_vers.txt || true
+          ./run-mac.sh out target/debug/mac-mechanics-spike
+          SPIKE_CLOSE_VARIANTS="late late close" ./run-mac.sh out-late target/debug/mac-mechanics-spike close
+          mv out-sw_vers.txt out/
+      - name: Summary
+        if: always()
+        run: |
+          for f in out/*.json out-late/*.json; do
+            case "$f" in *.front.json) continue;; esac
+            echo "== $f"; python3 -c "import json,sys; d=json.load(open('$f')); print(json.dumps(d.get('verdict'), indent=1))" || true
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: spike-mac-mechanics-${{ matrix.os }}
+          path: |
+            tools/spikes/mac-mechanics/out
+            tools/spikes/mac-mechanics/out-late

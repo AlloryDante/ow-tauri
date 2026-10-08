@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>fixture guest</title>
+<style>
+  html, body { margin: 0; background: #eee; font: 14px sans-serif; }
+  #btn { position: absolute; left: 10px; top: 10px; width: 140px; height: 50px; }
+  #lnk { position: absolute; left: 10px; top: 80px; }
+  #box { position: absolute; left: 20px; top: 120px; width: 100px; height: 100px; background: #fc9; }
+</style>
+<script>
+  // Loopback fixture page standing in for a guest document. It is not an ad
+  // and loads nothing from the network.
+  const ID = new URLSearchParams(location.search).get('id') || 'g';
+  window.__log = [];
+  function beacon(k, v) {
+    window.__log.push({ k, v, t: Date.now() });
+    fetch('/beacon?id=' + encodeURIComponent(ID) + '&k=' + encodeURIComponent(k) + '&v=' + encodeURIComponent(String(v)), { cache: 'no-store', keepalive: true }).catch(() => {});
+  }
+  window.__beacon = beacon;
+  window.__ticks = 0;
+  setInterval(() => { window.__ticks++; }, 100);
+  document.addEventListener('visibilitychange', () => beacon('visibilitychange', document.visibilityState));
+  window.addEventListener('pagehide', () => beacon('pagehide', ''));
+  window.__ready = false;
+  window.addEventListener('load', () => { window.__ready = true; });
+</script>
+</head>
+<body>
+  <button id="btn">open</button>
+  <a id="lnk" href="/popup.html?from=link" target="_top">top link</a>
+  <div id="box"></div>
+  <script>
+    const btn = document.getElementById('btn');
+    btn.addEventListener('mousedown', (e) => beacon('mousedown', e.isTrusted));
+    btn.addEventListener('click', (e) => {
+      beacon('click', e.isTrusted);
+      const w = window.open('http://127.0.0.1:' + location.port + '/popup.html?from=' + ID, '_blank');
+      beacon('window.open returned', w === null ? 'null' : 'object');
+    });
+    document.addEventListener('keydown', (e) => beacon('keydown', e.key));
+    beacon('loaded', location.href);
+  </script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+# Spike (W0c-A): macOS mechanisms the plugin design relies on, measured on a
+# real WKWebView in the invisible lab with loopback fixture pages (never ads).
+# Not part of the root workspace; never published or bundled. See README.md.
+#
+#   CARGO_TARGET_DIR=<scratch> cargo build -j 4
+#   ./run-mac.sh <out-dir> <scratch>/debug/mac-mechanics-spike
+[workspace]
+
+[package]
+name = "mac-mechanics-spike"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+[dependencies]
+# `unstable` = `Window::add_child` (guests are child webviews), as the plugin uses it on macOS.
+tauri = { version = "2.12.1", features = ["unstable"] }
+serde_json = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+block2 = "0.6.2"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSGeometry", "NSString", "NSObject"] }
+libc = "0.2"
+
+[build-dependencies]
+tauri-build = { version = "2.7.1", features = [] }

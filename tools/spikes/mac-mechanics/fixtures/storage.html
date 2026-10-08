@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>fixture storage</title>
+<script>
+  // Runs before any other page script: what does sessionStorage hold now?
+  (function () {
+    const keys = [];
+    for (let i = 0; i < sessionStorage.length; i++) keys.push(sessionStorage.key(i));
+    keys.sort();
+    const lengths = {};
+    for (const k of keys) lengths[k] = (sessionStorage.getItem(k) || '').length;
+    window.__first = { keys, lengths, k1: sessionStorage.getItem('k1'), uni: sessionStorage.getItem('uni ☃'), nav: (performance.getEntriesByType('navigation')[0] || {}).type || null, at: Date.now() };
+    fetch('/beacon?id=storage&k=first-script&v=' + encodeURIComponent(JSON.stringify({ keys, nav: window.__first.nav })), { cache: 'no-store' }).catch(() => {});
+  })();
+  window.__ready = false;
+  window.addEventListener('load', () => { window.__ready = true; });
+</script>
+</head>
+<body>storage fixture</body>
+</html>
