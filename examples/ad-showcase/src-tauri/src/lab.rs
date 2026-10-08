@@ -20,10 +20,13 @@
 //! input to an ad guest.
 
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use tauri::{Manager, Runtime, Webview};
+#[cfg(target_os = "macos")]
+use tauri::Manager;
+use tauri::{Runtime, Webview};
 use tauri_plugin_overwolf::OverwolfExt;
 
 #[cfg(target_os = "macos")]
@@ -52,7 +55,10 @@ pub fn manifest(embedded: &'static str) -> Result<&'static str, String> {
     Ok(Box::leak(json.into_boxed_str()))
 }
 
-/// Whether the app must stay out of the Dock, the app switcher and the front.
+/// Whether the app must stay out of the Dock, the app switcher and the front
+/// (macOS: the shell then makes it an accessory app that is not activated at
+/// launch; elsewhere the plugin keeps the lab windows hidden).
+#[cfg(target_os = "macos")]
 #[must_use]
 pub fn invisible() -> bool {
     tauri_plugin_overwolf::lab_invisible()
@@ -140,6 +146,7 @@ pub fn e2e_probe_guests<R: Runtime>(webview: Webview<R>, phase: String) -> Resul
 }
 
 /// The showcase window: the one whose webview shows `renderer/index.html`.
+#[cfg(target_os = "macos")]
 fn showcase_window<R: Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<(tauri::Window<R>, String), String> {
