@@ -57,7 +57,7 @@ jobs:
         shell: bash
         run: |
           cargo clippy -p tauri-plugin-overwolf --all-targets --no-default-features --locked -- -D warnings
-          cargo clippy -p tauri-plugin-overwolf --all-targets --no-default-features --features embed-resource --locked -- -D warnings
+          cargo clippy -p tauri-plugin-overwolf --all-targets --no-default-features --features build --locked -- -D warnings
       # --all-features turns on test-util, whose hooks use code that an app's
       # build never reaches; check the library as an app (and the lab) builds it.
       - name: clippy (the plugin library as an app builds it)
@@ -82,8 +82,21 @@ jobs:
         run: cargo test -p tauri-plugin-overwolf --lib --all-features --locked platform::tests::safari_version_is_read -- --exact --nocapture
       - name: doc
         run: cargo doc --workspace --no-deps --all-features --locked
-      - name: mingw-w64 (GNU cross-link of the OWE resource)
+      # DESIGN §4.6: `unstable` reaches Tauri on Windows and macOS only, and
+      # never through the build step's feature set.
+      - name: no Tauri `unstable` on Linux or in the build step
         if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for args in "" "--no-default-features --features build"; do
+            out="$(cargo tree -p tauri-plugin-overwolf $args -e features -i tauri --target x86_64-unknown-linux-gnu --locked 2>&1 || true)"
+            if grep -q '"unstable"' <<<"$out"; then echo "$out"; exit 1; fi
+          done
+      # restored in W3: the OWE resource step returns with build::run's
+      # signing support (W1 ships build::run without it).
+      - name: mingw-w64 (GNU cross-link of the OWE resource)
+        if: false
         run: |
           sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
           rustup target add x86_64-pc-windows-gnu
@@ -91,8 +104,9 @@ jobs:
       # VERSIONINFO that tauri-build writes, with MSVC (native, Windows) and
       # with GNU (mingw-w64 cross from Linux), in a release build that applies
       # a signed fixture. Versions are pinned: the fixture has no lockfile.
+      # restored in W3 (see the mingw-w64 step above).
       - name: OWEINTEGRITY/OWE resource links next to a VERSIONINFO (MSVC and GNU)
-        if: runner.os != 'macOS'
+        if: false
         shell: bash
         run: |
           set -euo pipefail
