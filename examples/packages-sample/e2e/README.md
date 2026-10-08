@@ -28,6 +28,10 @@ node e2e/compare.mjs e2e/out/tauri-1 e2e/out/electron-1   # writes compare.md in
 # Idle run: start every slot of one Ads Tester layout, leave the ads running
 # for 5 minutes, then close the app (memory, queues and leaks over time).
 node e2e/run.mjs --host tauri --run-id idle-1 --no-build --idle-ms 300000 --idle-layout tower-right
+
+# The same, reloading every <owadview> each minute (element.reload(); the ad
+# SDK reloads on its own about every 20 minutes): memory across reloads.
+node e2e/run.mjs --host tauri --run-id reload-1 --no-build --idle-ms 600000 --idle-layout tower-right --idle-reload-ms 60000
 ```
 
 Output goes to `e2e/out/<run-id>/` (git-ignored): `e2e.jsonl` (one record

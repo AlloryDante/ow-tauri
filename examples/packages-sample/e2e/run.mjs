@@ -5,7 +5,8 @@
 //   node e2e/run.mjs [--host tauri|electron] [--run-id ID] [--no-build]
 //                    [--upstream-dir DIR] [--identity FILE] [--timeout S]
 //                    [--ad-wait MS] [--build-only]
-//                    [--idle-ms MS [--idle-sample-ms MS] [--idle-layout L]]
+//                    [--idle-ms MS [--idle-sample-ms MS] [--idle-layout L]
+//                     [--idle-reload-ms MS]]
 //                    [--sample-ms MS]
 //
 // --host tauri (default): builds the ported sample (webpack, plus the main
@@ -23,6 +24,7 @@
 //
 // --idle-ms: instead of the full pass, start every slot of one Ads Tester
 //   layout and leave the ads running that long (the idle run, steps.js).
+//   --idle-reload-ms also reloads every <owadview> that often.
 // --sample-ms (default 10000): how often the memory of the app and of every
 //   process it owns (WebKit's XPC services included; RSS and physical
 //   footprint) goes to proc-samples.jsonl. After the app quits, none of them may be left.
@@ -65,6 +67,7 @@ const { values: opts } = parseArgs({
     'idle-ms': { type: 'string' },
     'idle-sample-ms': { type: 'string' },
     'idle-layout': { type: 'string' },
+    'idle-reload-ms': { type: 'string' },
     'sample-ms': { type: 'string', default: '10000' },
   },
 });
@@ -374,6 +377,7 @@ async function main() {
     config.idleMs = Number(opts['idle-ms']);
     if (opts['idle-sample-ms']) config.idleSampleMs = Number(opts['idle-sample-ms']);
     if (opts['idle-layout']) config.idleLayout = opts['idle-layout'];
+    if (opts['idle-reload-ms']) config.idleReloadMs = Number(opts['idle-reload-ms']);
   }
   env.OW_SAMPLE_E2E_CONFIG = JSON.stringify(config);
   const meta = { runId, host: opts.host, startedAt: new Date().toISOString(), feedUrl };
