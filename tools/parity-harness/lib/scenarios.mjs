@@ -75,6 +75,25 @@ const muteAll = (at, muted) => ({
   code: `document.querySelectorAll('owadview').forEach((el) => el.setAudioMuted(${muted})); 'ok'`,
 });
 
+/**
+ * The in-view sweep: moves the `inview-sweep` container's `side` (`top` or
+ * `left`) so that `lo` % up to `hi` % of the slot is inside the viewport, in
+ * steps of `pct` % every 1.5 s, then back down to `lo` %. `from` is the
+ * offset in px with 0 % in view and `px` the offset of 1 %. Each step's label
+ * is the planned share; the page reads the real share back after the move.
+ */
+const inviewSweep = (start, side, from, px, { lo = 0, hi = 100, pct = 5 } = {}) => {
+  const up = [];
+  for (let k = lo; k <= hi; k += pct) up.push(k);
+  const shares = [...up, ...up.slice(0, -1).reverse()];
+  return shares.map((k, i) => ({
+    at: start + i * 1500,
+    do: 'page-eval',
+    label: `sweep ${side} ${k} %`,
+    code: `(() => { const box = document.getElementById('inview-sweep'); box.style.${side} = '${from + k * px}px'; const r = box.getBoundingClientRect(); const w = Math.max(0, Math.min(r.right, innerWidth) - Math.max(r.left, 0)); const h = Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0)); return { share: Math.round((w * h * 1000) / (r.width * r.height)) / 1000, at: performance.now() }; })()`,
+  }));
+};
+
 /** Feature-flag stand-in responses for `--features <preset>` (cmp-required scenario). */
 export const FEATURE_PRESETS = {
   empty: [{ status: 200, body: '{"params":[]}' }],
@@ -1016,6 +1035,71 @@ export const SCENARIOS = {
       actions: [
         { at: 15000, do: 'probe-guests', label: 'hi+15s' },
         { at: 60000, do: 'probe-guests', label: 'hi+60s' },
+      ],
+    },
+  },
+
+  'inview-probe': {
+    describe:
+      'In-view rule: 300x250 slots fixed 25 %, 50 % and 75 % inside the viewport at the bottom edge (vertical) and at the right edge (horizontal), one fully inside, and one sweep slot moved across the top edge (0 % to 100 % and back, 5 % steps every 1.5 s), then across the left edge. Which share in view makes the embedder report the guest visible, and which static slots fill.',
+    defaults: { mode: 'test', present: 'transparent', layout: 'none', duration: 150 },
+    config: {
+      window: { width: 1400, height: 900 },
+      elementSpec: [
+        ...[
+          ['v25', 'left:60px;top:calc(100vh - 62.5px)'],
+          ['v50', 'left:380px;top:calc(100vh - 125px)'],
+          ['v75', 'left:700px;top:calc(100vh - 187.5px)'],
+          ['h25', 'top:40px;left:calc(100vw - 75px)'],
+          ['h50', 'top:300px;left:calc(100vw - 150px)'],
+          ['h75', 'top:560px;left:calc(100vw - 225px)'],
+          ['full', 'left:500px;top:300px'],
+          ['sweep', 'left:100px;top:-250px'],
+        ].map(([id, place]) => ({
+          layout: '300x250',
+          cid: `parity_inview_${id}`,
+          slotId: `inview-${id}`,
+          slotStyle: `position:fixed;margin:0;${place}`,
+        })),
+      ],
+      actions: [
+        ...inviewSweep(6000, 'top', -250, 2.5),
+        {
+          at: 69000,
+          do: 'page-eval',
+          label: 'sweep: to the left edge, 0 % in view',
+          code: `(() => { const s = document.getElementById('inview-sweep').style; s.top = '300px'; s.left = '-300px'; return 'ok'; })()`,
+        },
+        ...inviewSweep(72000, 'left', -300, 3),
+        { at: 30000, do: 'probe-guests', label: 'inview+30s' },
+        { at: 140000, do: 'probe-guests', label: 'inview+140s' },
+      ],
+    },
+  },
+
+  'inview-fine': {
+    describe:
+      'In-view rule, fine: one 300x250 sweep slot moved across the top edge from 44 % to 52 % in view and back in 1 % steps every 1.5 s, then across the left edge the same way. The share at which the embedder reports the guest visible, and hidden again.',
+    defaults: { mode: 'test', present: 'transparent', layout: 'none', duration: 70 },
+    config: {
+      window: { width: 1400, height: 900 },
+      elementSpec: [
+        {
+          layout: '300x250',
+          cid: 'parity_inview_sweep',
+          slotId: 'inview-sweep',
+          slotStyle: 'position:fixed;margin:0;left:100px;top:-140px',
+        },
+      ],
+      actions: [
+        ...inviewSweep(5000, 'top', -250, 2.5, { lo: 44, hi: 52, pct: 1 }),
+        {
+          at: 31000,
+          do: 'page-eval',
+          label: 'sweep: to the left edge, 44 % in view',
+          code: `(() => { const s = document.getElementById('inview-sweep').style; s.top = '300px'; s.left = '-168px'; return 'ok'; })()`,
+        },
+        ...inviewSweep(34000, 'left', -300, 3, { lo: 44, hi: 52, pct: 1 }),
       ],
     },
   },

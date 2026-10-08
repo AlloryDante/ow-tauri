@@ -82,7 +82,14 @@ export const PERFORMANCE_OVERLAY_STYLE =
 export const SHADOW_STYLE =
   ':host { position: relative; } iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: transparent; pointer-events: none; }';
 
-/** Intersection ratio from which an element counts as visible (B.3.4) [DEC]. */
+/**
+ * Intersection ratio from which an element counts as visible (B.3.4): at
+ * least half of its box inside the viewport. ow-electron reports a guest
+ * visible at exactly 50 % and hidden again at 49 %, on the vertical and the
+ * horizontal axis alike, with no hysteresis [OBS: harness `inview-probe`,
+ * `inview-fine`]. The observer's thresholds include it, so a crossing is
+ * reported the moment it happens.
+ */
 export const VISIBLE_RATIO = 0.5;
 
 /** How often `checkVisibility()` is polled while guests are mounted (B.3.4). */

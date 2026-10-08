@@ -176,7 +176,8 @@
   /**
    * Creates one <owadview> the way the docs and the official sample do.
    * spec: {layout?: 'WxH', parent?: 'slot'|'body'|'#id', attrs?: {}, cid?: string|null}
-   * - parent 'slot' (default): a sized div, as for standard sizes;
+   * - parent 'slot' (default): a sized div, as for standard sizes
+   *   (`slotId`, `slotStyle` and `containerBackground` apply to that div);
    * - parent 'body': appended to <body> unsized, as the performance-ad docs do;
    * - parent '#id': appended to that existing element.
    */
@@ -192,6 +193,11 @@
       parent.style.height = `${height}px`;
       // Lab checks: the app's own placeholder behind the slot (L1).
       if (spec.containerBackground) parent.style.background = spec.containerBackground;
+      // In-view checks: a container placed partly outside the viewport
+      // (`slotStyle`, e.g. fixed at the bottom edge), and an id that later
+      // page-eval actions move it by (`slotId`).
+      if (spec.slotId) parent.id = spec.slotId;
+      if (spec.slotStyle) parent.style.cssText += `;${spec.slotStyle}`;
       document.body.appendChild(parent);
     } else if (spec.parent === 'body') {
       parent = document.body;

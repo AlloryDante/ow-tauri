@@ -353,7 +353,10 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
   screen plays no part. After `hidden` the ad page stops and asks the host to
   reload it (3 to 5 s), then waits until it is visible again. ow-tauri keeps
   its element-level model (window shown, intersection, hidden ancestors) and
-  passes the result to the guest the same way (CONTRACT B.3.4, D.5).
+  passes the result to the guest the same way (CONTRACT B.3.4, D.5). The
+  intersection line is measured: ow-electron reports a guest visible from
+  half of it in view (49 % is hidden) on both axes, and ow-tauri matches it
+  (harness `inview-probe`, `inview-fine`).
 - **Source.** Observed;
   https://dev.overwolf.com/ow-electron/monetization/advertising/overview
   (containers stay visible; `display: none` pauses ads).

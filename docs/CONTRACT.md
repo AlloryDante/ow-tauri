@@ -1399,7 +1399,8 @@ window fills, even at opacity 0 [OBS]. Overwolf documents that containers
 should stay visible, that `display: none` pauses ads, and that ads should not
 move or be made transparent [DOC]. ow-tauri reports the guest visible only
 when all hold: the embedder window is shown and not minimized;
-`IntersectionObserver` ratio at least 0.5;
+`IntersectionObserver` ratio at least 0.5 (half of the box inside the
+viewport, on either axis; the measured ow-electron boundary, below);
 `el.checkVisibility({ opacityProperty: true, visibilityProperty: true })`
 (polled every 500 ms, because ancestor style changes do not fire observers);
 `document.visibilityState === 'visible'`. A hidden guest is hidden, not
@@ -1443,8 +1444,13 @@ dropped. With the alignment and the `visibilitychange` events of D.5 a 2 s
 hide keeps the ad, and a minimized window's performance ad shuts down with
 the same messages as in ow-electron, where `performance_ad_dismiss` before
 the `shutdown` comes in some runs and not in others, on both hosts [OBS: lab,
-reward-optin and perf-minimize]. The intersection threshold for a partly
-visible element was not measured; the 0.5 ratio above is [DEC]. The guests of
+reward-optin and perf-minimize]. ow-electron signals a 300x250 guest
+`visible` from exactly half of it inside the viewport and `hidden` again at
+49 %, scrolled off the top or the left edge alike, with no hysteresis and
+within a few milliseconds of the move; a slot 25 % in view never fills, 50 %,
+75 % and fully in view all fill [OBS: lab, harness `inview-probe` and
+`inview-fine`, TEST mode]. ow-tauri's 0.5 ratio gives the same boundary on
+both axes [OBS: same scenarios on ow-tauri]. The guests of
 a minimized embedder stay hidden until the restore (R3-1, OQ-27).
 
 Native child webviews always paint above the page. Any HTML that must cover an

@@ -13,6 +13,7 @@ import {
   PERFORMANCE_OVERLAY_STYLE,
   SHADOW_STYLE,
   VISIBILITY_POLL_MS,
+  VISIBLE_RATIO,
   adviewRuntimeOf,
   browserEnvironment,
   type AdviewEnvironment,
@@ -794,6 +795,53 @@ describe('lifecycle (B.3.2, B.3.4)', () => {
       { elementId: id, visible: true },
       { elementId: id, visible: false },
     ]);
+  });
+
+  it('counts an element visible from exactly half in view, on both axes [OBS]', async () => {
+    // ow-electron: visible at 50 %, hidden again at 49 %, no hysteresis
+    // (harness inview-probe / inview-fine).
+    await startRuntime();
+    const el = createAd();
+    document.body.append(el);
+    await tick();
+    const io = FakeIntersectionObserver.instances[0];
+    expect(io?.options.threshold).toContain(VISIBLE_RATIO);
+    for (const ratio of [0.49, 0.5, 0.49, 0.5, 1, 0.5, 0.49]) {
+      io?.fire(el, ratio);
+      await tick();
+    }
+    expect(callsOf('adview_update').map((u) => u['visible'])).toEqual([
+      false,
+      true,
+      false,
+      true,
+      false,
+    ]);
+  });
+
+  it('applies the half-in-view rule before the observer reports, from the box', async () => {
+    await startRuntime({ IntersectionObserver: undefined });
+    const half = window.innerWidth - 150;
+    // 147 px of 300 inside the right edge: 49 %.
+    const el = createAd({}, { x: half + 3, y: 0, width: 300, height: 100 });
+    document.body.append(el);
+    await tick();
+    expect(callsOf('adview_mount')[0]?.['visible']).toBe(false);
+    el.box.x = half;
+    runtime.flush();
+    await tick();
+    // 125 of 250 px inside the bottom edge: 50 %.
+    el.box = { x: 0, y: window.innerHeight - 125, width: 300, height: 250 };
+    runtime.flush();
+    await tick();
+    el.box = { x: 0, y: window.innerHeight - 122, width: 300, height: 250 };
+    runtime.flush();
+    await tick();
+    expect(
+      callsOf('adview_update')
+        .map((u) => u['visible'])
+        .filter((v) => v !== undefined),
+    ).toEqual([true, false]);
   });
 
   it('computes visibility itself without observers or checkVisibility()', async () => {

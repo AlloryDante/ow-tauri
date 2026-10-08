@@ -81,7 +81,9 @@ ad.addEventListener('display_ad_loaded', () => console.log('filled'));
   reloads itself when it comes back (the ad page decides this; a 2 s hide
   keeps the ad).
 - A slot loads only while it is in view: in a shown window, at least half of
-  it inside the viewport, and not hidden by CSS. A window that is never
+  it inside the viewport (measured on ow-electron: 50 % loads, 49 % waits,
+  vertically and horizontally; ow-tauri draws the same line), and not hidden
+  by CSS. A window that is never
   shown never fills, even in test mode.
 - Changing `cid`, `slotsize`, `adstyle`, `performance` or `unit` on a live
   element replaces its ad. `pageurl` applies at the next load.
@@ -145,8 +147,11 @@ refreshes about every 30 s. `impression` arrives with the bid details
 container's own background shows through, so a fallback image or colour
 behind the slot works as on ow-electron.
 
-Test mode: all seven sizes fill, 970x90 included (its test creative is often
-blank). A slot below the fold waits until it is scrolled into view.
+Test mode: all seven sizes fill, 970x90 included. Its test creative is often
+blank: `display_ad_loaded` fires and the guest paints nothing, on ow-electron
+(its in-process capture of the guest is fully transparent) as on ow-tauri, so
+an empty 970x90 in test mode is the creative, not the host [OBS: showcase
+lab, both hosts]. A slot below the fold waits until it is scrolled into view.
 
 ## Standard video
 
