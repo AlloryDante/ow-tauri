@@ -1149,7 +1149,7 @@ Constructor options:
 | `icon` | P | app asset path only |
 | `webPreferences.preload` | S | app-asset path of a bundled preload script; injected as an initialization script |
 | `webPreferences.devTools` | S | |
-| `webPreferences.contextIsolation` | P | preload and page share one JavaScript world in Tauri; `contextBridge.exposeInMainWorld` defines frozen globals, so code written for isolation works; `false` changes nothing |
+| `webPreferences.contextIsolation` | P | preload and page share one JavaScript world in Tauri; `contextBridge.exposeInMainWorld` passes values as ow-electron's bridge does (B.2.4), so code written for isolation works; `false` changes nothing |
 | `webPreferences.nodeIntegration` | P | ignored with a warning; renderer `require('electron')` works only through the bundler alias, other Node modules are unavailable |
 | `webPreferences.sandbox`, `webSecurity`, `partition`, `session`, `offscreen`, `webviewTag`, `zoomFactor`, `backgroundThrottling` | P | ignored with a warning, except `zoomFactor` (applied) |
 | `titleBarStyle`, `trafficLightPosition`, `vibrancy`, `visualEffectState`, `roundedCorners`, `thickFrame`, `type`, `tabbingIdentifier`, `kiosk`, `simpleFullscreen` | U | |
@@ -1224,8 +1224,35 @@ Instance members:
 
 | Member | Status | Notes |
 |---|---|---|
-| `exposeInMainWorld(apiKey, api)` | S | defines a non-writable, non-configurable `window[apiKey]`; objects are deep-frozen; functions are called directly (no cloning) |
+| `exposeInMainWorld(apiKey, api)` | S | defines a non-writable, non-configurable `window[apiKey]`; enumerable, holding a deep-frozen copy of `api` passed as below; an empty `apiKey` is accepted; an existing key throws `Cannot bind an API on top of an existing property on the window object` |
 | `exposeInIsolatedWorld`, `executeInMainWorld` | U | |
+
+Preload and page share one JavaScript world in Tauri, so the bridge passes
+values the way ow-electron's passes them between its two worlds. The rules
+come from a hidden ow-electron window probed through its bridge
+(`contextIsolation` on) [OBS]:
+
+- **Data is copied.** Own enumerable string and symbol keys are copied;
+  getters are read once and become values; non-enumerable properties, array
+  properties other than indices, and prototypes are dropped (a class
+  instance arrives as a plain object without its methods); array holes become
+  `undefined`. Cycles and shared objects stay so within one
+  pass. Dates, regular expressions, maps, sets and binary data are cloned.
+  Primitives, symbols and bigints pass as they are; DOM nodes keep their
+  identity.
+- **Errors become plain `Error`s** with the same `message`; the name, class
+  and other properties stay behind. An exception that is not an `Error` (a
+  string, an object) arrives as `Error('An unknown exception occurred in the
+  isolated context, an error occurred but a valid exception was not
+  thrown.')`; a rejection that is not an `Error` is passed as data.
+- **Functions are proxied.** The proxy is an anonymous function (`name` `''`,
+  `length` `0`, no own properties); it copies its arguments in, calls the
+  original with the object it was exposed on as `this` (even when called
+  detached), and copies the result, rejection or exception out. A function
+  passed there and back arrives as the original. Promises, nested ones
+  included, become new promises whose result is passed.
+- **Only the exposed API is frozen**, deep: objects, arrays, functions,
+  dates and maps. Arguments and results passed later are copies, not frozen.
 
 #### B.2.5 Other modules
 

@@ -32,7 +32,7 @@ import { completeDisplay } from './screen.js';
 import { parseColor, windowHooks } from './browser-window.js';
 import { normalizeAccelerator } from './shell-dialog.js';
 import { toAssetPath } from './runtime.js';
-import { copyForBridge, deepFreeze } from './context-bridge.js';
+import { UNKNOWN_EXCEPTION_MESSAGE, deepFreeze, passValue } from './context-bridge.js';
 
 let host: MockHost;
 
@@ -1253,6 +1253,9 @@ describe('other modules (B.2.5)', () => {
 });
 
 describe('contextBridge (B.2.4)', () => {
+  type Api = Record<string, unknown>;
+  const exposed = (key: string): Api => (globalThis as unknown as Record<string, Api>)[key]!;
+
   it('exposes a frozen read-only API in UI windows', async () => {
     await start({ label: 'bw-1' });
     const send = vi.fn();
@@ -1261,25 +1264,31 @@ describe('contextBridge (B.2.4)', () => {
       nested: { list: [1, { deep: true }] },
       when: new Date(0),
     });
-    const exposed = (
-      globalThis as unknown as Record<
-        string,
-        { send: () => void; nested: { list: unknown[] }; when: Date }
-      >
-    )['bridgeTest']!;
-    exposed.send();
+    const api = exposed('bridgeTest') as {
+      send: () => void;
+      nested: { list: unknown[] };
+      when: Date;
+    };
+    api.send();
     expect(send).toHaveBeenCalled();
-    expect(Object.isFrozen(exposed)).toBe(true);
-    expect(Object.isFrozen(exposed.nested.list[1])).toBe(true);
-    expect(Object.isFrozen(exposed.when)).toBe(false);
+    expect(Object.isFrozen(api)).toBe(true);
+    expect(Object.isFrozen(api.nested.list[1])).toBe(true);
+    // Electron freezes the dates, maps and functions of the API too [OBS].
+    expect(Object.isFrozen(api.when)).toBe(true);
+    expect(api.when.getTime()).toBe(0);
+    expect(Object.isFrozen(api.send)).toBe(true);
     const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'bridgeTest');
     expect(descriptor?.writable).toBe(false);
     expect(descriptor?.configurable).toBe(false);
+    expect(descriptor?.enumerable).toBe(true);
     expect(() => {
       contextBridge.exposeInMainWorld('bridgeTest', {});
     }).toThrow('Cannot bind an API on top of an existing property on the window object');
+    // An empty key is accepted, as in Electron [OBS].
+    contextBridge.exposeInMainWorld('', { empty: true });
+    expect(exposed('')).toEqual({ empty: true });
     expect(() => {
-      contextBridge.exposeInMainWorld('', {});
+      contextBridge.exposeInMainWorld(3 as unknown as string, {});
     }).toThrow(OwTauriError);
     expect(() => {
       (contextBridge as unknown as { exposeInIsolatedWorld(): void }).exposeInIsolatedWorld();
@@ -1296,19 +1305,213 @@ describe('contextBridge (B.2.4)', () => {
     contextBridge.exposeInMainWorld('bridgeCopy', { config });
     config.level = 2;
     config.list.push(2);
-    const exposed = (globalThis as unknown as Record<string, { config: typeof config }>)[
-      'bridgeCopy'
-    ]!;
-    expect(exposed.config).toEqual({ level: 1, list: [1] });
-    expect(Object.isFrozen(exposed.config)).toBe(true);
+    const api = exposed('bridgeCopy') as { config: typeof config };
+    expect(api.config).toEqual({ level: 1, list: [1] });
+    expect(Object.isFrozen(api.config)).toBe(true);
+    // Primitives and functions can be the API itself [OBS].
+    contextBridge.exposeInMainWorld('bridgePrim', 5);
+    expect(exposed('bridgePrim')).toBe(5);
+    contextBridge.exposeInMainWorld('bridgeFn', (x: number) => x * 2);
+    expect((exposed('bridgeFn') as unknown as (x: number) => number)(3)).toBe(6);
+  });
+
+  // The vectors are what a hidden ow-electron 42.11.4 window saw through
+  // its bridge (contextIsolation on) [OBS].
+  it('copies data as Electron does', () => {
+    class Thing {
+      a = 1;
+      method(): number {
+        return 2;
+      }
+    }
+    const hidden = { vis: 1 };
+    Object.defineProperty(hidden, 'hid', { value: 1, enumerable: false });
+    // eslint-disable-next-line no-sparse-arrays -- a hole is the vector
+    const arr: unknown[] & { extra?: string } = [1, , 3];
+    arr.extra = 'x';
+    let reads = 0;
     const shared = { n: 1 };
-    const bare: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-    bare['a'] = shared;
-    bare['b'] = shared;
-    const copied = copyForBridge(bare);
-    expect(copied['a']).toBe(copied['b']);
-    expect(copied['a']).not.toBe(shared);
-    expect(Object.getPrototypeOf(copied)).toBeNull();
+    const cyc: Record<string, unknown> = {};
+    cyc['self'] = cyc;
+    const key = Symbol('k');
+    const error = Object.assign(new TypeError('exposed'), { custom: 1 });
+    const fnProps = Object.assign(
+      function named(a: unknown, b: unknown): unknown {
+        return [a, b];
+      },
+      { prop: 1 },
+    );
+    const source = {
+      thing: new Thing(),
+      hidden,
+      arr,
+      get getter() {
+        reads += 1;
+        return reads;
+      },
+      shareA: shared,
+      shareB: shared,
+      cyc,
+      [key]: 1,
+      sym: Symbol('s'),
+      big: 10n,
+      und: undefined,
+      date: new Date(5),
+      re: /a/g,
+      map: new Map([[1, 2]]),
+      set: new Set([1]),
+      buf: new Uint8Array([1, 2]),
+      error,
+      promise: Promise.resolve(1),
+      nested: { p: Promise.resolve(1) },
+      fnProps,
+    };
+    const out = passValue(source) as Record<PropertyKey, unknown> & typeof source;
+    expect(out).not.toBe(source);
+    expect(Object.getPrototypeOf(out.thing)).toBe(Object.prototype);
+    expect(out.thing).toEqual({ a: 1 });
+    expect((out.thing as unknown as { method?: unknown }).method).toBeUndefined();
+    expect(Object.getOwnPropertyNames(out.hidden)).toEqual(['vis']);
+    expect(out.arr.length).toBe(3);
+    expect(1 in out.arr).toBe(true);
+    expect(out.arr.extra).toBeUndefined();
+    expect(Object.getOwnPropertyDescriptor(out, 'getter')).toHaveProperty('value', 1);
+    expect(out.getter).toBe(1);
+    expect(out.shareA).toBe(out.shareB);
+    expect(out.shareA).not.toBe(shared);
+    expect(out.cyc['self']).toBe(out.cyc);
+    expect(out[key]).toBe(1);
+    expect(out.sym).toBe(source.sym);
+    expect(out.big).toBe(10n);
+    expect('und' in out).toBe(true);
+    expect(out.date).toBeInstanceOf(Date);
+    expect(out.date).not.toBe(source.date);
+    expect(out.date.getTime()).toBe(5);
+    expect(String(out.re)).toBe('/a/g');
+    expect(out.map.get(1)).toBe(2);
+    expect(out.set.has(1)).toBe(true);
+    expect(Object.prototype.toString.call(out.buf)).toBe('[object Uint8Array]');
+    expect(out.error).toBeInstanceOf(Error);
+    expect(out.error.constructor).toBe(Error);
+    expect(out.error.name).toBe('Error');
+    expect(out.error.message).toBe('exposed');
+    expect((out.error as unknown as { custom?: unknown }).custom).toBeUndefined();
+    expect(out.promise).toBeInstanceOf(Promise);
+    expect(out.promise).not.toBe(source.promise);
+    // Electron's documentation says nested promises are dropped; they are
+    // kept [OBS].
+    expect(out.nested.p).toBeInstanceOf(Promise);
+    const fn = out.fnProps as unknown as (...args: unknown[]) => unknown;
+    expect(fn.name).toBe('');
+    expect(fn.length).toBe(0);
+    expect((fn as unknown as { prop?: unknown }).prop).toBeUndefined();
+    expect('prototype' in fn).toBe(true);
+    expect(Object.isFrozen(out)).toBe(false);
+  });
+
+  it('proxies functions as Electron does', async () => {
+    class Thing {
+      a = 1;
+    }
+    let received: unknown[] = [];
+    let seenThis: unknown;
+    const api = {
+      echo(...args: unknown[]): unknown {
+        received = args;
+        return args[0];
+      },
+      mutate(x: Record<string, unknown>): unknown {
+        x['added'] = 1;
+        return x;
+      },
+      self(): void {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias -- the vector
+        seenThis = this;
+      },
+      retThing: () => new Thing(),
+      retPromise: () => Promise.resolve({ v: { w: 1 } }),
+      rejectError: () => Promise.reject(Object.assign(new TypeError('bad'), { custom: 1 })),
+      rejectString: () => Promise.reject(new Error('x').message),
+      throwError: () => {
+        throw Object.assign(new TypeError('boom'), { custom: 1 });
+      },
+      throwString: () => {
+        throw 'str';
+      },
+      callBack: (cb: (...args: unknown[]) => unknown) =>
+        cb(Object.assign(new TypeError('cbErr'), { custom: 1 }), { o: { p: 1 } }, new Thing()),
+      catchBack: (cb: () => unknown) => {
+        try {
+          cb();
+          return 'no throw';
+        } catch (e) {
+          return { isError: e instanceof Error, name: (e as Error).name };
+        }
+      },
+    };
+    const out = passValue(api) as typeof api;
+    // Arguments are copied in, results copied out; neither is frozen.
+    const arg = { k: { j: 1 } };
+    const echoed = out.echo(arg, new Date(1), document.body, 1n, Symbol.iterator) as object;
+    expect(received[0]).not.toBe(arg);
+    expect(received[0]).toEqual(arg);
+    expect(received[1]).toBeInstanceOf(Date);
+    expect(received[2]).toBe(document.body);
+    expect(received[3]).toBe(1n);
+    expect(received[4]).toBe(Symbol.iterator);
+    expect(echoed).not.toBe(arg);
+    expect(echoed).toEqual(arg);
+    expect(Object.isFrozen(echoed)).toBe(false);
+    const original = { a: 1 };
+    const mutated = out.mutate(original) as Record<string, unknown>;
+    expect(original).toEqual({ a: 1 });
+    expect(mutated).toEqual({ a: 1, added: 1 });
+    // A page function passed in and back is the same function; an element
+    // keeps its identity.
+    const pageFn = (): number => 1;
+    expect(out.echo(pageFn)).toBe(pageFn);
+    expect(out.echo(document.body)).toBe(document.body);
+    // `this` is the object the method was exposed on, even detached.
+    const { self } = out;
+    self();
+    expect(seenThis).toBe(api);
+    expect(Object.getPrototypeOf(out.retThing())).toBe(Object.prototype);
+    const value = (await out.retPromise()) as { v: object };
+    expect(value).toEqual({ v: { w: 1 } });
+    expect(Object.isFrozen(value)).toBe(false);
+    const rejected = await out.rejectError().catch((e: unknown) => e);
+    expect(rejected).toBeInstanceOf(Error);
+    expect((rejected as Error).name).toBe('Error');
+    expect((rejected as Error).message).toBe('bad');
+    expect((rejected as { custom?: unknown }).custom).toBeUndefined();
+    expect(JSON.stringify(rejected)).toBe('{}');
+    await expect(out.rejectString()).rejects.toBe('x');
+    let thrown: unknown;
+    try {
+      out.throwError();
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).constructor).toBe(Error);
+    expect(JSON.stringify(thrown)).toBe('{"message":"boom"}');
+    expect(() => out.throwString()).toThrow(UNKNOWN_EXCEPTION_MESSAGE);
+    // The sample's case: an error handed to a page callback arrives as a
+    // plain Error (e2e: it kept its TypeError name).
+    let got: unknown[] = [];
+    out.callBack((...args) => {
+      got = args;
+    });
+    expect((got[0] as Error).name).toBe('Error');
+    expect((got[0] as Error).message).toBe('cbErr');
+    expect((got[0] as { custom?: unknown }).custom).toBeUndefined();
+    expect(got[1]).toEqual({ o: { p: 1 } });
+    expect(Object.getPrototypeOf(got[2])).toBe(Object.prototype);
+    expect(
+      out.catchBack(() => {
+        throw new SyntaxError('pageErr');
+      }),
+    ).toEqual({ isError: true, name: 'Error' });
   });
 
   it('deep-freezes cycles once', () => {

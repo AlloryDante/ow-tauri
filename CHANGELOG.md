@@ -175,6 +175,12 @@ the npm package share one version number.
   waiting up to 3 s for the clearing page to close. When consent is
   required, the guests waiting for the startup consent window navigate as
   it closes, as in ow-electron, not at the next 250 ms timer step.
+- `contextBridge.exposeInMainWorld` passes values as ow-electron's bridge
+  does (CONTRACT B.2.4): data is copied (class instances become plain
+  objects, getters are read once), errors become plain `Error`s, functions
+  are proxied with their arguments and results copied, and the whole API,
+  dates and functions included, is frozen. An empty key is accepted. It used
+  to expose the preload's own objects and functions.
 - Invisible lab (feature `lab`, `OW_TAURI_LAB_INVISIBLE=1`, macOS): the app
   is never activated for the whole run. App activation is a no-op and
   `makeKeyAndOrderFront:` orders the window front without making it key, so
