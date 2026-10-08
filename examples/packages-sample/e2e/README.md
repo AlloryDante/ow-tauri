@@ -80,8 +80,9 @@ trace (`host-requests.jsonl`, `ipc.jsonl`, `windows.jsonl`, ...), including
    (`CGWindowListCopyWindowInfo` through `tools/parity-harness/lib/window-monitor.swift`;
    no screen capture): the app is killed the moment one of its windows is
    visible, and `summary.json` records `everVisible`. The runner also
-   checks every second that the app is never the frontmost app (it would
-   take the keyboard from the app the user is typing in; `everFront`).
+   checks every 200 ms that the app is never the frontmost app (it would
+   take the keyboard from the app the user is typing in; `everFront`), and
+   kills it at once if it is (verdict `safety-kill`).
 5. **Clean up**: the app's whole process group is killed on every exit
    path (done, timeout, safety kill, Ctrl-C). WebKit's web content,
    networking and GPU processes are XPC services outside that group: the
@@ -117,8 +118,11 @@ the repository.
 ([overwolf/ow-electron-packages-sample](https://github.com/overwolf/ow-electron-packages-sample),
 the first commit of this example) built with its webpack configs and with
 `electron-updater` 5.3.0 in its `node_modules`. The runner makes a
-throwaway app folder whose main entry is `electron-main.cjs`: it hides the
-Dock icon, keeps every window at opacity 0, click-through and unfocusable
-(as `tools/parity-harness` does), answers dialogs as dismissed, keeps the
-file manager closed, then loads the upstream main bundle unchanged and runs
-`steps.js`.
+throwaway app folder whose main entry is `electron-main.cjs`: it makes the
+app an accessory app (no Dock icon), keeps every window at opacity 0,
+click-through and unfocusable (as `tools/parity-harness` does), answers
+dialogs as dismissed, keeps the file manager closed, then loads the upstream
+main bundle unchanged and runs `steps.js`. The upstream main window is built
+with `show: true`, and Electron's constructor then activates the app on
+macOS, so the bundle's `require('electron')` gets a `BrowserWindow` that is
+built hidden and then shown inactive.

@@ -27,9 +27,19 @@ const blocked = (kind, detail) => {
 
 // --- No Dock icon, no visible window ----------------------------------------
 if (process.platform === 'darwin' && app.dock) app.dock.hide();
+// An accessory app has no Dock icon and is not activated by launching it.
+if (process.platform === 'darwin' && typeof app.setActivationPolicy === 'function') {
+  app.setActivationPolicy('accessory');
+  app.whenReady().then(() => app.setActivationPolicy('accessory'));
+}
+for (const method of ['focus', 'show']) {
+  if (typeof app[method] !== 'function') continue;
+  app[method] = (...args) => blocked(`app.${method}`, args);
+}
 
 const proto = BrowserWindow.prototype;
 const original = {
+  BrowserWindow,
   showInactive: proto.showInactive,
   setOpacity: proto.setOpacity,
   setIgnoreMouseEvents: proto.setIgnoreMouseEvents,
@@ -76,6 +86,33 @@ app.on('browser-window-created', (_e, win) => {
   makeInvisible(win);
   win.on('show', () => makeInvisible(win));
 });
+
+// A window built with show:true is shown by the constructor itself, and on
+// macOS Electron then activates the app: the invisible app became the
+// frontmost app and took the keyboard. The upstream bundle (and anything it
+// loads) gets an `electron` module whose BrowserWindow is built hidden and
+// not full screen, then shown inactive through the patched showInactive.
+// The subclass keeps the name BrowserWindow: Electron's
+// BrowserWindow.getAllWindows() keeps windows by their constructor's name.
+const InvisibleBrowserWindow = class BrowserWindow extends original.BrowserWindow {
+  constructor(options = {}) {
+    const show = options.show !== false;
+    if (options.fullscreen) blocked('BrowserWindow fullscreen option', { fullscreen: true });
+    super({ ...options, show: false, fullscreen: false });
+    if (show) this.showInactive();
+  }
+};
+{
+  const electron = require('electron');
+  const patched = new Proxy(electron, {
+    get: (target, key) => (key === 'BrowserWindow' ? InvisibleBrowserWindow : Reflect.get(target, key)),
+  });
+  const Module = require('node:module');
+  const load = Module._load;
+  Module._load = function loadElectron(request, ...rest) {
+    return request === 'electron' ? patched : load.call(this, request, ...rest);
+  };
+}
 
 // --- Dialogs and the file manager stay closed ---------------------------------
 // As in ow-tauri's lab mode: answered as if dismissed at once.

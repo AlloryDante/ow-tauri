@@ -409,14 +409,18 @@ async function main() {
   };
   const sampler = setInterval(sample, Number(opts['sample-ms']));
   // The invisible app must never be the frontmost app: it would take the
-  // keyboard from the app the user is typing in.
+  // keyboard from the app the user is typing in. It is killed at once if it
+  // does (verdict safety-kill), as for a visible window.
   let everFront = false;
+  let frontKill = null;
   const frontWatch = setInterval(() => {
     if (!everFront && frontPid() === child.pid) {
       everFront = true;
-      log('WARNING: the app became the frontmost app');
+      frontKill = { at: new Date().toISOString(), entry: { kind: 'front', pid: child.pid } };
+      killTree(child, 'SIGKILL');
+      log('SAFETY: the app became the frontmost app; app killed');
     }
-  }, 1000);
+  }, 200);
 
   const e2eFile = join(runDir, 'e2e.jsonl');
   const timeoutMs = Number(opts.timeout) * 1000;
@@ -452,6 +456,7 @@ async function main() {
       }
     }
     if (race) {
+      safetyKill ??= frontKill;
       verdict = safetyKill ? 'safety-kill' : doneAt ? 'done' : 'exited-early';
       break;
     }

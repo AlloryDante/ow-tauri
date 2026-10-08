@@ -282,7 +282,12 @@ async function runSteps(host) {
   const started = Date.now();
   while (!win() && Date.now() - started < 30000) await sleep(200);
   if (!win()) {
-    record({ kind: 'fatal', text: 'the main window never appeared' });
+    record({
+      kind: 'fatal',
+      text: 'the main window never appeared',
+      main: host.takeMain(),
+      windows: await host.windows(),
+    });
     return;
   }
   let ready = false;
