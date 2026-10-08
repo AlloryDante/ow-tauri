@@ -6,7 +6,10 @@
 //! keys; every other key keeps its value (and, with `serde_json`'s
 //! `preserve_order`, its position). Writes are read-modify-write under an
 //! in-process lock, through a temp file renamed over the original. A file
-//! that is not valid JSON is never touched.
+//! that is not a JSON object is moved to `ow-electron.json.corrupt-<ms>` by
+//! the next write, which starts a new file (DESIGN §4.12, D27; the newest
+//! [`super::CORRUPT_KEPT`] copies are kept). Nothing is written before
+//! `RunEvent::Ready`.
 //!
 //! ```
 //! # let dir = std::env::temp_dir().join(format!("owe-doc-{}", std::process::id()));
@@ -63,7 +66,8 @@ pub enum FileStatus {
     Missing,
     /// A JSON object.
     Valid,
-    /// Present but not a JSON object (or unreadable); never written.
+    /// Present but not a JSON object (or unreadable); the next write moves
+    /// a file that is not a JSON object aside and starts a new one.
     Invalid,
 }
 
@@ -79,12 +83,23 @@ pub struct ReadOutcome {
 /// Why a write did not happen.
 #[derive(Debug, thiserror::Error)]
 pub enum WriteError {
-    /// The existing file is not valid JSON; it was left untouched.
+    /// The existing file is not valid JSON and could not be moved aside;
+    /// it was left untouched.
     #[error("ow-electron.json is not valid JSON; left untouched")]
     InvalidExisting,
     /// Reading or writing failed.
     #[error("ow-electron.json: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// What the file held.
+#[derive(Debug)]
+enum Loaded {
+    Missing,
+    Valid(Map<String, Value>),
+    /// Not a JSON object.
+    Unparseable,
+    Unreadable(std::io::Error),
 }
 
 /// Access to one `ow-electron.json`.
@@ -111,12 +126,20 @@ impl OwElectronFile {
     }
 
     fn load(&self) -> (FileStatus, Map<String, Value>) {
+        match self.load_raw() {
+            Loaded::Missing => (FileStatus::Missing, Map::new()),
+            Loaded::Valid(map) => (FileStatus::Valid, map),
+            Loaded::Unparseable | Loaded::Unreadable(_) => (FileStatus::Invalid, Map::new()),
+        }
+    }
+
+    fn load_raw(&self) -> Loaded {
         match std::fs::read(&self.path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (FileStatus::Missing, Map::new()),
-            Err(_) => (FileStatus::Invalid, Map::new()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Loaded::Missing,
+            Err(e) => Loaded::Unreadable(e),
             Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
-                Ok(Value::Object(map)) => (FileStatus::Valid, map),
-                _ => (FileStatus::Invalid, Map::new()),
+                Ok(Value::Object(map)) => Loaded::Valid(map),
+                _ => Loaded::Unparseable,
             },
         }
     }
@@ -153,17 +176,34 @@ impl OwElectronFile {
     ///
     /// # Errors
     ///
-    /// [`WriteError::InvalidExisting`] when the file is not a JSON object;
-    /// [`WriteError::Io`] when writing fails.
+    /// [`WriteError::InvalidExisting`] when the file is not a JSON object
+    /// and could not be moved aside; [`WriteError::Io`] when reading or
+    /// writing fails.
     pub fn update(&self, edit: impl FnOnce(&mut Map<String, Value>)) -> Result<(), WriteError> {
         let _guard = self
             .lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (status, mut map) = self.load();
-        if status == FileStatus::Invalid {
-            return Err(WriteError::InvalidExisting);
-        }
+        let mut map = match self.load_raw() {
+            Loaded::Missing => Map::new(),
+            Loaded::Valid(map) => map,
+            Loaded::Unreadable(e) => return Err(WriteError::Io(e)),
+            Loaded::Unparseable => {
+                let moved = super::move_aside(&self.path).ok_or(WriteError::InvalidExisting)?;
+                #[cfg(feature = "plugin")]
+                log::warn!(
+                    target: "tauri_plugin_overwolf",
+                    "ow-electron.json was not valid JSON; moved to {}",
+                    moved
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                );
+                #[cfg(not(feature = "plugin"))]
+                let _ = moved;
+                Map::new()
+            }
+        };
         edit(&mut map);
         // Compact, no trailing newline: ow-electron's exact encoding (F.2).
         let bytes = serde_json::to_vec(&Value::Object(map)).map_err(std::io::Error::other)?;
@@ -213,7 +253,7 @@ impl OwElectronFile {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             self.load()
         };
-        if status != FileStatus::Invalid && !map.contains_key("eHashes") {
+        if status != FileStatus::Valid || !map.contains_key("eHashes") {
             return Ok(());
         }
         self.update(|map| {
@@ -355,8 +395,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// DESIGN §4.12 (D27): the next write moves an invalid file aside and
+    /// starts a new one; reading never changes it.
     #[test]
-    fn invalid_file_is_never_written() {
+    fn invalid_file_is_moved_aside_by_the_next_write() {
         let dir = test_dir("owe-invalid");
         let path = dir.join("ow-electron.json");
         std::fs::write(&path, b"{not json").unwrap();
@@ -364,16 +406,36 @@ mod tests {
         let read = file.read();
         assert_eq!(read.status, FileStatus::Invalid);
         assert_eq!(read.state, SharedState::default());
-        assert!(matches!(
-            file.set_first_launch(),
-            Err(WriteError::InvalidExisting)
-        ));
-        assert_eq!(std::fs::read(&path).unwrap(), b"{not json");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"{not json",
+            "reads write nothing"
+        );
+        file.set_first_launch().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"firstLaunch":true}"#
+        );
+        let copies = |dir: &Path| {
+            let mut c: Vec<PathBuf> = std::fs::read_dir(dir)
+                .unwrap()
+                .filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|p| p.to_string_lossy().contains("ow-electron.json.corrupt-"))
+                .collect();
+            c.sort();
+            c
+        };
+        let first = copies(&dir);
+        assert_eq!(first.len(), 1);
+        assert_eq!(std::fs::read(&first[0]).unwrap(), b"{not json");
         std::fs::write(&path, b"[1,2]").unwrap();
-        assert!(matches!(
-            file.set_first_launch(),
-            Err(WriteError::InvalidExisting)
-        ));
+        file.write_e_hashes("a", "b", "c").unwrap();
+        assert_eq!(copies(&dir).len(), 2);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"eHashes":{"sha1":"a","md5":"b","sha256":"c"}}"#
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

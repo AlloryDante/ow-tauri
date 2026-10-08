@@ -138,17 +138,10 @@ fn known_keys(state: &OwTauriState) -> Vec<String> {
     }
 }
 
-/// Renames an unparseable state file to `<name>.corrupt-<ms since 1970>`
-/// so nothing is lost; returns the new path when the rename worked.
-fn move_aside(path: &Path) -> Option<PathBuf> {
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis());
-    let mut name = path.file_name()?.to_os_string();
-    name.push(format!(".corrupt-{millis}"));
-    let target = path.with_file_name(name);
-    std::fs::rename(path, &target).ok().map(|()| target)
-}
+/// Keys of earlier ow-tauri builds that this one drops on load (DESIGN
+/// §4.12): the crash-recovery browser arguments and crash counter of the
+/// removed Electron-port host.
+pub const DROPPED_KEYS: [&str; 2] = ["pendingBrowserArgs", "mainCrashes"];
 
 impl OwTauriFile {
     /// Loads `path` without writing anything. A missing file starts from
@@ -166,6 +159,10 @@ impl OwTauriFile {
                 None => (OwTauriState::default(), true),
             },
         };
+        let mut state = state;
+        for key in DROPPED_KEYS {
+            state.extra.remove(key);
+        }
         OwTauriFile {
             path,
             state: Mutex::new(state),
@@ -174,8 +171,9 @@ impl OwTauriFile {
     }
 
     /// Moves a file that was not valid JSON at load to
-    /// `ow-tauri.json.corrupt-<ms since 1970>`, so nothing is lost and the
-    /// next write starts clean. Called once at `RunEvent::Ready`, never
+    /// `ow-tauri.json.corrupt-<ms since 1970>` (the newest
+    /// [`super::CORRUPT_KEPT`] are kept), so nothing is lost and the next
+    /// write starts clean. Called once at `RunEvent::Ready`, never
     /// before (DESIGN §4.2). Returns the new path when a file was moved.
     pub fn repair(&self) -> Option<PathBuf> {
         if !self.corrupt_at_load || !self.path.exists() {
@@ -187,7 +185,7 @@ impl OwTauriFile {
         if parse_lenient(&bytes).is_some() {
             return None;
         }
-        move_aside(&self.path)
+        super::move_aside(&self.path)
     }
 
     /// The file path.
@@ -278,6 +276,26 @@ mod tests {
         assert_eq!(v["futureKey"], serde_json::json!({"a":1}));
         assert_eq!(v["adOptimization"], true);
         assert_eq!(v["createdBy"], "ow-tauri 9.0.0");
+        assert_eq!(v["muid"], "M");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn old_crash_keys_are_dropped() {
+        let dir = test_dir("owt-dropped");
+        let path = dir.join("ow-tauri.json");
+        std::fs::write(
+            &path,
+            r#"{"schema":1,"muid":"M","pendingBrowserArgs":["--x"],"mainCrashes":3,"futureKey":1}"#,
+        )
+        .unwrap();
+        let file = OwTauriFile::load(path.clone());
+        assert!(!file.get().extra.contains_key("pendingBrowserArgs"));
+        file.update(|s| s.ad_optimization = Some(false)).unwrap();
+        let v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(v.get("pendingBrowserArgs").is_none());
+        assert!(v.get("mainCrashes").is_none());
+        assert_eq!(v["futureKey"], 1);
         assert_eq!(v["muid"], "M");
         let _ = std::fs::remove_dir_all(&dir);
     }

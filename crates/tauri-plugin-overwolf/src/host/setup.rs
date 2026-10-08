@@ -216,7 +216,7 @@ pub(crate) fn setup<R: Runtime>(
     if shared.status == FileStatus::Invalid {
         log::warn!(
             target: super::LOG_TARGET,
-            "ow-electron.json is not valid JSON; it is left untouched"
+            "ow-electron.json is not valid JSON; the first write moves it aside"
         );
     }
     let launch_consent = shared
