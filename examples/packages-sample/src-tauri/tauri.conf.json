@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Overwolf Electron Official Sample App",
+  "productName": "overwolf-official-sample-app",
   "version": "1.0.0",
   "identifier": "dev.ow-tauri.packages-sample",
   "build": {
