@@ -5,6 +5,8 @@
 #[cfg(feature = "plugin")]
 pub(crate) mod graphics;
 #[cfg(feature = "plugin")]
+pub(crate) mod js_dialogs;
+#[cfg(feature = "plugin")]
 pub(crate) mod machine;
 #[cfg(unix)]
 mod unix;

@@ -312,6 +312,8 @@ CONTRACT with its fallback, and `parity-diff.mjs` classes it
 | guests mounted together report 400025 over their creation time (WebView2 creates them one after another on the main thread); host requests due meanwhile leave up to about 300 ms late | Windows | E.2 |
 | `SameSite=None` cookies read back as no policy; `document.cookie` order follows the WebKit store | macOS | D.6.3 |
 | a new window's frame is measured before it is mapped, when GTK reports none: `width` / `height` size its content until the window manager adds the frame | Linux | B.2.2 |
+| a `beforeunload` handler asking to stay does not keep the page (no public `WKUIDelegate` method) | macOS | B.2.6 |
+| JavaScript dialogs are WebKitGTK's: `prompt()` returns the typed text instead of `null`, and `beforeunload` asks | Linux | B.2.6 |
 
 ## Optimised, same outcome
 

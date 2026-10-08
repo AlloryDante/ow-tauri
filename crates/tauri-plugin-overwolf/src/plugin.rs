@@ -18,6 +18,12 @@ use crate::window::{WebviewClass, classify};
 
 pub use crate::commands::list::COMMANDS;
 
+/// The plugin's own script (`js/native-dialogs.js`, CONTRACT B.2.6): keeps
+/// the page's `alert()`, `confirm()` and `prompt()` in the webviews the
+/// plugin manages. Tauri runs plugin scripts in registration order, so it
+/// runs before `tauri-plugin-dialog`'s, which the plugin registers later.
+const NATIVE_DIALOGS_JS: &str = include_str!(concat!(env!("OUT_DIR"), "/native-dialogs.js"));
+
 /// Configures and builds the plugin.
 ///
 /// ```no_run
@@ -264,6 +270,7 @@ impl Builder {
             .on_event(on_event)
             .on_navigation(on_navigation)
             .on_page_load(on_page_load)
+            .js_init_script(NATIVE_DIALOGS_JS)
             .build()
     }
 }
@@ -555,6 +562,13 @@ mod tests {
     /// `on_event` under that lock). Creating it inline would take the lock
     /// again and deadlock. The probe plugin's `on_webview_ready` hook runs
     /// under the same lock and reports the destruction from there.
+    #[test]
+    fn the_plugin_script_guards_native_dialogs_against_the_dialog_plugin() {
+        // The built guard (B.2.6), not the placeholder of a missing build.
+        assert!(super::NATIVE_DIALOGS_JS.contains("plugin:dialog|"));
+        assert!(super::NATIVE_DIALOGS_JS.contains("__TAURI_INTERNALS__"));
+    }
+
     #[test]
     fn soft_restart_recreates_main_from_a_hook_without_deadlock() {
         let fired = Arc::new(AtomicBool::new(false));

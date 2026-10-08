@@ -181,6 +181,14 @@ the npm package share one version number.
   are proxied with their arguments and results copied, and the whole API,
   dates and functions included, is frozen. An empty key is accepted. It used
   to expose the preload's own objects and functions.
+- JavaScript dialogs (CONTRACT B.2.6): in the webviews the plugin manages,
+  `alert()` and `confirm()` block and show a native message box as in
+  Electron, and `confirm()` returns a boolean. `tauri-plugin-dialog`'s
+  script had replaced them with a message box that did not block and a
+  `confirm()` that returned a promise; on macOS `WebKit` answered both
+  without a dialog, because wry implements no alert or confirm panel. On
+  Windows `prompt()` returns `null` and a `beforeunload` prompt keeps the
+  page without a dialog.
 - Invisible lab (feature `lab`, `OW_TAURI_LAB_INVISIBLE=1`, macOS): the app
   is never activated for the whole run. App activation is a no-op and
   `makeKeyAndOrderFront:` orders the window front without making it key, so

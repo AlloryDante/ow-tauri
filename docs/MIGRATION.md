@@ -246,7 +246,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Nothing else belongs here. The app's logic stays in TypeScript.
+Nothing else belongs here. The app's logic stays in TypeScript. The plugin
+registers the opener, dialog and global-shortcut plugins itself; if the app
+registers `tauri-plugin-dialog` too, register it after ow-tauri, so the
+page's `alert()` and `confirm()` keep working as in Electron (CONTRACT
+B.2.6).
 
 ### 3.4 `tauri.conf.json`
 

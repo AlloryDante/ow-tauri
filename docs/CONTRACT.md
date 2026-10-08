@@ -1275,6 +1275,44 @@ come from a hidden ow-electron window probed through its bridge
 | `Menu`, `MenuItem`, `Tray`, `Notification`, `session`, `protocol`, `net`, `netLog`, `powerMonitor`, `powerSaveBlocker`, `autoUpdater` (Electron's), `clipboard`, `nativeImage`, `systemPreferences`, `desktopCapturer`, `webFrame`, `webFrameMain`, `utilityProcess`, `MessageChannelMain`, `BrowserView`, `WebContentsView`, `BaseWindow`, `TouchBar`, `inAppPurchase`, `pushNotifications`, `safeStorage`, `contentTracing` | U | module objects exist so imports compile; every member throws |
 | `process.platform`, `process.arch`, `process.argv`, `process.env`, `process.versions` | P | the bootstrap installs a `globalThis.process` shim in `ow-main` and every `bw-*` webview before any app script runs (unless the document already has a `process`, from a bundler polyfill), so code that uses the global `process` without importing it works (the sample's `index.ts` and preload); `ow-tauri/electron` also exports it. `platform` and `arch` Node-style (`win32`, `darwin`, `linux`; `x64`, `arm64`), `argv` the process arguments, `versions` has `owTauri`, `tauri`, `chrome` (WebView2 only) and no `electron`. The shim object is frozen, but `env` is an ordinary object that libraries may assign to; it starts with only `OVERWOLF_APP_UID`, a read-only value set before any app script runs, as ow-electron sets it before the main module loads (B.1.1). Electron's `process.type` is `'browser'` in `ow-main` and `'renderer'` in UI windows, and `process.nextTick(cb, ...args)` runs `cb` as a microtask; `process.env.NODE_ENV` is a build-time constant the bundler defines (webpack 5 does it from `mode`; other bundlers: define it explicitly, see MIGRATION.md) |
 
+#### B.2.6 JavaScript dialogs
+
+The page's own dialogs in `ow-main`, `bw-*`, `bwr-*`, ad guests and consent
+windows. Electron shows `alert()` and `confirm()` as native message boxes
+(its `webPreferences.safeDialogs` and `disableDialogs` options govern them)
+and keeps a page whose `beforeunload` handler asks to stay, without a
+dialog, unless the app handles `will-prevent-unload` (typings). The details
+below are not observable without showing a window, which the lab never
+does (OQ-39); they follow Electron's documented model [DEC].
+
+| Call | ow-tauri |
+|---|---|
+| `alert(message)` | blocks until dismissed; a native message box with `message` and "OK" |
+| `confirm(message)` | the same with "OK" and "Cancel"; returns `true` for "OK", `false` otherwise, synchronously |
+| `prompt(message, default)` | returns `null`; no dialog |
+| a `beforeunload` handler asking to stay | the page stays; no dialog (Windows); see the macOS row below |
+
+The message box is attached to the page's window while that window is
+visible (a sheet on macOS, an owned box on Windows) and stands on its own
+when the window is hidden, since a dialog attached to a hidden window could
+not be dismissed. The Windows caption is the app's product name. In the
+invisible lab no dialog is shown: `alert()` returns, `confirm()` returns
+`false`, and the lab records `{"kind":"js-dialog"}` in `blocked.jsonl`.
+
+`tauri-plugin-dialog`, which the plugin registers for `dialog.*` (A.2.3),
+replaces `window.alert` with a message box that does not block and
+`window.confirm` with one that returns a promise. The plugin's own script
+(`js/native-dialogs.js`) runs before it in these webviews and keeps the
+page's functions; an app's own assignment to `window.alert` still applies.
+An app that registers `tauri-plugin-dialog` itself must register it after
+ow-tauri, because Tauri runs plugin scripts in registration order.
+
+| Platform | How |
+|---|---|
+| macOS | the plugin adds the alert and confirm panels to wry's `WKUIDelegate` (wry implements neither, so `WebKit` would return at once). `prompt()` is `WebKit`'s `null`. A `beforeunload` prompt lets the page leave: `WebKit` has no public delegate method for it (PARITY, known platform gaps) |
+| Windows | WebView2's own dialogs are turned off; `ScriptDialogOpening` shows a `MessageBoxW` after the event returns |
+| Linux | WebKitGTK's own dialogs: `prompt()` shows a text field and returns its text, and a `beforeunload` prompt asks (PARITY, known platform gaps) |
+
 ### B.3 `ow-tauri/renderer`
 
 The renderer runtime is part of the bootstrap the plugin injects into every

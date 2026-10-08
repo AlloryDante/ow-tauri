@@ -74,6 +74,7 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 | [OQ-18](#oq-18-updates-and-the-console) | Distribution | updates and the console | High | Answered (feed); open: Overwolf (Tauri installers) | I.1 |
 | [OQ-24](#oq-24-installer-and-utm-parameters) | Distribution | installer and UTM parameters | Medium | Answered | F.2 |
 | [OQ-31](#oq-31-version-delta) | Distribution | version delta since 42.7.1 | Medium | Answered | [PARITY.md](PARITY.md) |
+| [OQ-39](#oq-39-javascript-dialogs) | Electron API | `alert()`, `confirm()`, `prompt()` presentation | Low | Decided; open: pending harness (needs a visible window) | B.2.6 |
 | [OQ-A1](#oq-a1-reward-ads) | Ad formats | reward ads: element, opt-in, grant signal, verification | High | Open: Overwolf | B.3.2, [AD-FORMATS.md](AD-FORMATS.md#reward) |
 | [OQ-A2](#oq-a2-unit) | Ad formats | valid `unit` values; ignored on standard slots | Medium | Open: Overwolf | B.3.2, D.2 |
 | [OQ-A3](#oq-a3-does-every-performance-ad-end-with-shutdown) | Ad formats | does every performance ad end with `shutdown` | Medium | Answered (no fill, error); open: Overwolf (dismiss, click) | B.3.4 |
@@ -691,6 +692,25 @@ ow-electron behaves where packages are unavailable (CONTRACT H).
   ([PARITY.md](PARITY.md#re-running-the-harness)).
 - **Source.** Observed;
   https://dev.overwolf.com/ow-electron/getting-started/changelog/ow-changelog.
+
+## Electron API
+
+### OQ-39: JavaScript dialogs
+
+- **Question.** How does ow-electron present a page's `alert()`, `confirm()`
+  and `prompt()`: message box title or caption, sheet or separate window,
+  and what does `prompt()` return?
+- **Status.** Decided. **Open: pending harness.**
+- **Answer.** ow-tauri shows `alert()` and `confirm()` as native message
+  boxes with "OK" (and "Cancel"), attached to a visible window, and returns
+  `null` from `prompt()` without a dialog (CONTRACT B.2.6). A
+  `beforeunload` prompt keeps the page without a dialog, as the typings
+  describe for `will-prevent-unload`.
+- **Source.** Typings (`safeDialogs`, `disableDialogs`,
+  `will-prevent-unload`); lead decision for the rest.
+- **Why still open.** Observing the dialogs needs a visible window, which
+  the invisible lab never opens. A lab on a dedicated machine can observe
+  them and settle the caption and `prompt()`.
 
 ## Ad formats
 

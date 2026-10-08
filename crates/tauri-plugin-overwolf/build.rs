@@ -9,7 +9,12 @@ include!("src/commands/list.rs");
 /// Scripts the plugin embeds with `include_str!`. They are built from
 /// `packages/ow-tauri` into `js/` by `npm run build:injected --workspace
 /// ow-tauri`.
-const SCRIPTS: &[&str] = &["bootstrap.js", "adview-host.js", "cmp.js"];
+const SCRIPTS: &[&str] = &[
+    "bootstrap.js",
+    "adview-host.js",
+    "cmp.js",
+    "native-dialogs.js",
+];
 
 /// Whether a missing script fails the build. A release build without the
 /// runtime would ship an app with no `ow-main` runtime and no IPC, so it

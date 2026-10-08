@@ -4,6 +4,7 @@
 //   src/bootstrap/index.ts  -> js/bootstrap.js    (every app webview)
 //   src/guest/adview-host.ts -> js/adview-host.js (ad guest webviews)
 //   src/guest/cmp.ts        -> js/cmp.js          (the consent window)
+//   src/bootstrap/native-dialogs.ts -> js/native-dialogs.js (plugin script)
 //
 // `js/` is crates/tauri-plugin-overwolf/js; OW_TAURI_INJECTED_OUT_DIR
 // overrides it (the drift check builds into a temporary directory). An
@@ -29,6 +30,7 @@ export const INJECTED = [
     token: '__OW_TAURI_ADVIEW_CONFIG__',
   },
   { input: 'src/guest/cmp.ts', file: 'cmp.js', token: '__OW_TAURI_CMP_CONFIG__' },
+  { input: 'src/bootstrap/native-dialogs.ts', file: 'native-dialogs.js' },
 ];
 
 // The guest entries read their configuration from a free identifier, which

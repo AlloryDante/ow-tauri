@@ -641,7 +641,7 @@ crates/tauri-plugin-overwolf/
               window/, state/ (ow-electron.json, ow-tauri.json, log),
               ads/, consent/, analytics/, packages/, updater/,
               platform/{windows,unix}.rs, build.rs
-  js/         bootstrap.js, adview-host.js, cmp.js: built from
+  js/         bootstrap.js, adview-host.js, cmp.js, native-dialogs.js: built from
               packages/ow-tauri/src/{bootstrap,guest}, committed, embedded
               with include_str!, checked for drift in CI
   permissions/ default.toml (empty) + set definitions

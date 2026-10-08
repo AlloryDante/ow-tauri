@@ -384,7 +384,8 @@ pub(crate) fn wire_record(
 /// Installs the per-guest platform hooks: on Windows the request shaping
 /// handler (D.8.3), `ProcessFailed` and `NavigationCompleted`; on Linux
 /// `web-process-terminated` and `load-failed`. macOS reports crashes through
-/// the app's `on_web_content_process_terminate` hook instead (A.5).
+/// the app's `on_web_content_process_terminate` hook instead (A.5). On macOS
+/// and Windows also the page's JavaScript dialogs (B.2.6).
 pub(crate) fn install_guest_hooks<R: Runtime>(
     webview: &Webview<R>,
     shaping: Option<Shaping>,
@@ -397,7 +398,8 @@ pub(crate) fn install_guest_hooks<R: Runtime>(
 /// webviews (A.6 crash signals, A.3 `did-fail-load` and
 /// `render-process-gone`): Windows `ProcessFailed` and
 /// `NavigationCompleted`, Linux `web-process-terminated` and `load-failed`.
-/// macOS has no plugin-level hook (A.5).
+/// macOS has no plugin-level crash hook (A.5). On macOS and Windows also the
+/// page's JavaScript dialogs (B.2.6).
 pub(crate) fn install_app_hooks<R: Runtime>(
     webview: &Webview<R>,
     reports: Arc<dyn GuestReports>,
@@ -412,9 +414,23 @@ fn install_hooks<R: Runtime>(
     reports: Arc<dyn GuestReports>,
 ) -> tauri::Result<()> {
     let label = webview.label().to_owned();
+    #[cfg(windows)]
+    let (app_name, post) = {
+        use tauri::Manager as _;
+        let app = webview.app_handle().clone();
+        let post: super::js_dialogs::Post = Arc::new(move |task| {
+            let _ = app.run_on_main_thread(task);
+        });
+        (webview.app_handle().package_info().name.clone(), post)
+    };
     webview.with_webview(move |pw| {
+        #[cfg(target_os = "macos")]
+        {
+            super::js_dialogs::install(pw.inner());
+        }
         #[cfg(windows)]
         {
+            super::js_dialogs::install(&pw.controller(), &app_name, post);
             windows_impl::install(&pw.controller(), target, shaping, label, reports);
         }
         #[cfg(target_os = "linux")]
