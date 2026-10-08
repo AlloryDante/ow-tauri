@@ -198,12 +198,19 @@ fn add_guest(
         .focused(false);
     #[cfg(windows)]
     {
-        builder = builder.additional_browser_args(
-            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
-             --disable-background-timer-throttling --disable-renderer-backgrounding \
-             --disable-backgrounding-occluded-windows --disable-web-security \
-             --allow-running-insecure-content",
-        );
+        // A distinct WebView2 user-data folder for the ads environment: the
+        // guest's browser args differ from the app's, and WebView2 refuses two
+        // environments that share a data folder with different args
+        // (0x8007139F), exactly as the plugin gives guests their own
+        // data_directory (§4.4.1).
+        builder = builder
+            .additional_browser_args(
+                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
+                 --disable-background-timer-throttling --disable-renderer-backgrounding \
+                 --disable-backgrounding-occluded-windows --disable-web-security \
+                 --allow-running-insecure-content",
+            )
+            .data_directory(std::env::temp_dir().join("win-mechanics-ads"));
     }
     let win_handle = window.as_ref().window();
     let guest = spike_miniplugin::add_guest(
