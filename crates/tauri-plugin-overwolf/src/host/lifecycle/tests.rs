@@ -58,7 +58,11 @@ fn app_with(dir: &Path, transport: Arc<dyn Transport>) -> App<MockRuntime> {
             "author": "Example Studio",
             "name": "Example App",
             "state": { "appDataDir": dir },
-            "analytics": { "muidStrategy": "per-install" }
+            "analytics": { "muidStrategy": "per-install" },
+            // The startup consent window would keep the mock app alive for
+            // the default 30 s (§4.7.2). The mock runtime handles one window
+            // message per second, so these tests still take a few seconds.
+            "consent": { "readyTimeoutMs": READY_TIMEOUT_MS }
         }),
     );
     let mut builder = crate::Builder::new();
@@ -75,6 +79,16 @@ fn app_with(dir: &Path, transport: Arc<dyn Transport>) -> App<MockRuntime> {
         .build()
         .unwrap();
     app
+}
+
+/// A short consent bound so the startup window gives up quickly.
+const READY_TIMEOUT_MS: u64 = 300;
+
+/// The counter name a request reports (`None` for other requests).
+fn counter_name(url: &str) -> Option<&str> {
+    let query = url.strip_prefix(crate::analytics::COUNTER_URL)?;
+    let name = query.split('&').find_map(|p| p.strip_prefix("?Name="))?;
+    Some(name)
 }
 
 fn core(app: &App<MockRuntime>) -> Arc<Core<MockRuntime>> {
@@ -122,12 +136,54 @@ fn setup_writes_nothing_and_the_burst_starts_at_ready() {
         "the burst was queued at Ready"
     );
     let urls = capture.urls();
-    assert_eq!(urls.len(), 5, "first launch burst: {urls:?}");
+    // `cmp-eu-only` runs in parallel with the burst (CONTRACT E.2 #2), so
+    // its place in the capture is free; it is sent once.
+    let eu_only = urls
+        .iter()
+        .filter(|u| u.as_str() == crate::analytics::CMP_EU_ONLY_URL)
+        .count();
+    assert_eq!(eu_only, 1, "one cmp-eu-only request: {urls:?}");
+    let analytics: Vec<&String> = urls
+        .iter()
+        .filter(|u| u.as_str() != crate::analytics::CMP_EU_ONLY_URL)
+        .collect();
     assert!(
-        urls.iter()
+        analytics
+            .iter()
             .all(|u| u.starts_with(crate::analytics::COUNTER_URL)
-                || u.starts_with(crate::analytics::INSERT_STATS_URL))
+                || u.starts_with(crate::analytics::INSERT_STATS_URL)),
+        "only analytics requests: {urls:?}"
     );
+    // The first-launch burst comes first, in order (§4.8): first launch,
+    // start, the hidden heartbeat, then its two InsertStats.
+    assert!(analytics.len() >= 5, "first launch burst: {urls:?}");
+    let burst: Vec<Option<&str>> = analytics[..5].iter().map(|u| counter_name(u)).collect();
+    assert_eq!(
+        burst,
+        [
+            Some("tauri_app_first_launch"),
+            Some("tauri_app_start"),
+            Some("tauri_app_heartbeat"),
+            None,
+            None
+        ],
+        "first launch burst: {urls:?}"
+    );
+    assert!(analytics[2].contains("%22hasVisibleWindow%22%3Afalse"));
+    assert!(
+        analytics[3..5]
+            .iter()
+            .all(|u| u.starts_with(crate::analytics::INSERT_STATS_URL))
+    );
+    // After the burst: the window analytics of W2 (§4.3), nothing else.
+    for url in &analytics[5..] {
+        let name = counter_name(url);
+        assert!(
+            url.starts_with(crate::analytics::INSERT_STATS_URL)
+                || matches!(name, Some("tauri_app_heartbeat" | "tauri_window_closed")),
+            "unexpected request after the burst: {url}"
+        );
+    }
     // The first writes happened at Ready.
     assert!(core.identity.state_dir.ow_tauri_json().is_file());
     // Exit, then the sentinel at cleanup: one drain.
