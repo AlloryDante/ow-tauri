@@ -1881,6 +1881,18 @@ in D.4 and D.7 are what bounds them, not the shim.
 - Configuration is spliced in by replacing the token
   `/*__OW_TAURI_ADVIEW_CONFIG__*/null` (ads) or `/*__OW_TAURI_CMP_CONFIG__*/null`
   (consent) with JSON in which `<`, U+2028 and U+2029 are escaped.
+
+**Ad guest configuration.** Rust builds one object per guest (`guest_config`
+in `ads/mod.rs`, completed in `host/ads.rs`). The shim reads it once at
+document start; the page never sees the object itself.
+
+| Key | Type | Use |
+|---|---|---|
+| `muid` ... `customTracking` | as D.2 | the D.2 data keys, in D.2 order (`customTracking` only when the attribute holds a JSON object) |
+| `slotId` | string | the guest label `owad-<embedderLabel>-<n>`, sent back as `slotId` in every `adview_event` (D.4) |
+| `visibilityState` | `'visible' \| 'hidden'` | the guest's visibility at document start (B.3.4); later changes arrive through `setVisibility` (D.5) |
+| `hostKey` | string | the name of the window property that holds the shim's host API (D.5): `_` followed by 32 random hex digits (`uuid` v4, simple form), new for every guest (`host_key` in `host/ads.rs`). The property is non-enumerable, non-writable and non-configurable, so the page cannot find it by a fixed name. The shim also keys the next load's `pageurl` in `sessionStorage` with it (B.3.3). Without a valid key (only in unit tests) the shim falls back to `__owTauriHost` |
+| `documentReferrer` | string | Windows only: the referrer the shim answers for `document.referrer` (D.8.2); absent elsewhere |
 - The guest's own transport is `window.__TAURI_INTERNALS__.invoke`, kept in a
   closure at startup so page scripts cannot redirect it later. Messages are
   queued (at most 200, retried every 250 ms) until it is available.
@@ -1961,7 +1973,7 @@ policy covers this data ("device type, operating system, graphics card")
 | `reload()` | `adview_event '__host:reload'`; Rust reloads the guest, as ow-electron's host does about 70 ms after the request [OBS]. The ad page calls it itself after a `hidden` signal (B.3.4) |
 | `getSystemInformation()` | a copy of `systemInfo` [OBS] |
 | `getCustomTracking()` | a copy of the current `customTracking` [OBS] |
-| `hasWindowFocus()` | the embedder window's current focus, as a boolean [OBS]; Rust keeps the shim's copy current with `__owTauriHost.setEmbedderFocus(<bool>)` (D.5), which never reaches `onmessage` handlers |
+| `hasWindowFocus()` | the embedder window's current focus, as a boolean [OBS]; Rust keeps the shim's copy current with the host API's `setEmbedderFocus(<bool>)` (D.5), which never reaches `onmessage` handlers |
 | `onmessage(handler)` | registers `handler` (at most 16); host messages (D.5) are passed to every handler as a fresh copy; handler exceptions are swallowed |
 
 `window.gc` is defined as a no-op function when the page has none; it is a
@@ -1987,7 +1999,8 @@ Internal names (handled by Rust, never dispatched on the element):
 
 | Name | Data | Effect |
 |---|---|---|
-| `__host:ready` | `{ href, testAd, visibilityState }` | guest initialised |
+| `__host:ready` | `{ href, testAd, visibilityState, pageUrl }` | guest initialised; `pageUrl` is the `pageUrl` of this load (D.2), so Rust can tell whether a `setPageUrl()` made before a reload still has to be stored for the next one (B.3.3) |
+| `__host:domReady` | none | the guest document's `DOMContentLoaded` (sent at once when the shim runs after it). Rust dispatches the element's `dom-ready`, then a `did-finish-load` the platform reported earlier and held for it, so the two keep ow-electron's order (B.3.5) |
 | `__host:gesture` | `{ kind: 'pointerdown' \| 'keydown' \| 'iframe-focus' }` | user gesture reported by the shim (debounced 100 ms); opens the navigation window (D.7). Page scripts can forge it, so it grants at most one external open (D.7) |
 | `__host:focus` | `{ focused }` | guest focus changes |
 | `__host:setMute`, `__host:applySetting`, `__host:crash`, `__host:reload` | see D.3 | |
@@ -1997,12 +2010,16 @@ Every other name is forwarded to the embedder as an `adview-event` host message
 
 ### D.5 Host to guest
 
-Rust calls `webview.eval("window.__owTauriHost && window.__owTauriHost.deliver(<json>)")`;
+The shim's host API sits on the guest's random window property `hostKey`
+(D.1). Rust calls it with `webview.eval` and a script of the form
+`(function(h){h&&h.deliver(<json>)})(window["<hostKey>"])`
+(`host_call_script` / `deliver_script` in `ads/mod.rs`); a page that has
+not run the shim yet, or a document of another origin, ignores it.
 `deliver` validates `{ type: string, data? }` and passes it to the
 `onmessage` handlers. Shim-internal state (the embedder focus behind
-`hasWindowFocus()`, the guest's visibility) is updated with
-`window.__owTauriHost.setEmbedderFocus(<bool>)` and
-`window.__owTauriHost.setVisibility(<state>)` instead, so the page's
+`hasWindowFocus()`, the guest's visibility, the next load's `pageUrl`) is
+updated with the host API's `setEmbedderFocus(<bool>)`,
+`setVisibility(<state>)` and `setNextPageUrl(<url>)` instead, so the page's
 handlers never see a message ow-electron does not send.
 
 ow-electron passes the page exactly these messages [OBS] (OQ-13), and
@@ -2030,7 +2047,7 @@ page's own `postMessage` traffic (`owCustomTracking`, `owPageUrl`, `oam-*`,
 guest, signals its visibility (`visible` or `hidden`, B.3.4) and its focus
 (`false`), and later signals focus `true` / `false` when the embedder window
 gains or loses focus. ow-tauri reproduces them inside the shim, never through
-`onmessage`: visibility through `__owTauriHost.setVisibility(<'visible'|'hidden'>)`,
+`onmessage`: visibility through the host API's `setVisibility(<'visible'|'hidden'>)`,
 which overrides `document.visibilityState` and `document.hidden` and fires
 `visibilitychange` (in ow-electron the guest's `document.visibilityState`
 reads `hidden` while its window is hidden [OBS]). An ow-electron guest
