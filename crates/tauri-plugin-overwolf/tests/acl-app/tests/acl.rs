@@ -1267,18 +1267,7 @@ fn consent_sequencing() {
     // RunEvent::Ready: the cmp-eu-only request (refused in test builds, so
     // as after a failed request) and then the startup window (D.6.1).
     ow.test_start_consent();
-    let start = Instant::now();
-    while !ow
-        .test_hidden_consent_windows()
-        .contains(&"ow-cmp-startup".to_owned())
-    {
-        assert!(
-            start.elapsed() < Duration::from_secs(5),
-            "no startup window"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let window = app.get_webview_window("ow-cmp-startup").unwrap();
+    let window = startup_window(&app);
     assert!(window.url().unwrap().as_str().starts_with(CMP_PAGE));
     // isCMPRequired() waits for the startup page's load.
     let handle = app.handle().clone();
@@ -1429,23 +1418,12 @@ fn consent_not_required_loads_the_clearing_page() {
     ow.test_ads_tick(ow.test_now());
     assert_eq!(ow.test_guest(&guest).unwrap()["navigated"], false);
     ow.test_start_consent();
-    let start = Instant::now();
-    while !ow
-        .test_hidden_consent_windows()
-        .contains(&"ow-cmp-startup".to_owned())
-    {
-        assert!(
-            start.elapsed() < Duration::from_secs(5),
-            "no startup window"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    let window = startup_window(&app);
     // Regression (Windows lab): the guest waited 3 s for the clearing page
     // to close; ow-electron's guests load at once when consent is not
     // required (D.6.5) [OBS: macOS and Windows labs].
     assert!(ow.test_consent_gate_open());
     assert_eq!(ow.test_guest(&guest).unwrap()["navigated"], true);
-    let window = app.get_webview_window("ow-cmp-startup").unwrap();
     let url = window.url().unwrap();
     assert_eq!(
         url.as_str(),
@@ -1653,12 +1631,24 @@ fn the_consent_request_leaves_with_the_startup_analytics() {
 /// consent window's creation.
 fn main_ready_and_consent(app: &App<MockRuntime>) {
     invoke(app, "ow-main", "main_ready", json!({})).unwrap();
+    startup_window(app);
+}
+
+/// Waits for the startup consent window (D.6.1) and returns it. The host
+/// records the window before it builds it, so a test waits for both: on a
+/// slow runner (Windows CI) the record can be seen while the build has not
+/// finished yet, and `get_webview_window` would still be `None`.
+fn startup_window(app: &App<MockRuntime>) -> tauri::WebviewWindow<MockRuntime> {
     let ow = app.overwolf();
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !ow
-        .test_hidden_consent_windows()
-        .contains(&"ow-cmp-startup".to_owned())
-    {
+    loop {
+        if ow
+            .test_hidden_consent_windows()
+            .contains(&"ow-cmp-startup".to_owned())
+            && let Some(window) = app.get_webview_window("ow-cmp-startup")
+        {
+            return window;
+        }
         assert!(Instant::now() < deadline, "no startup window");
         std::thread::sleep(Duration::from_millis(10));
     }
