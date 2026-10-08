@@ -21,6 +21,8 @@ use webview2_com::{
 use windows::core::{Interface, HSTRING, PWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 
+use tauri::Manager;
+
 use crate::Events;
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
