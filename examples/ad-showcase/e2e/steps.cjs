@@ -391,14 +391,10 @@ async function runSteps(host) {
     await sleep(1000);
     await step('consent');
     await still('p8-consent');
-    // --no-privacy-window (both hosts) skips the one button whose window
-    // makes the invisible ow-tauri lab app frontmost (open core bug).
-    if (cfg.privacyWindow === false) {
-      record({ kind: 'skipped', action: 'consent-open-privacy', reason: 'no-privacy-window' });
-    } else {
-      await act('consent', 'consent-open-privacy', () => press('consent-open-privacy'));
-      await sleep(6000);
-    }
+    // The ad privacy settings window opens like every other lab window:
+    // invisible, and the app stays in the background on both hosts.
+    await act('consent', 'consent-open-privacy', () => press('consent-open-privacy'));
+    await sleep(6000);
     await step('consent-privacy', { windows: host.windows ? await host.windows() : null });
 
     // Page 9: parity.

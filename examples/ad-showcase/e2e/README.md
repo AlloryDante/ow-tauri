@@ -21,10 +21,11 @@ node e2e/run.mjs --host tauri --mode live --steps live-layout     # LIVE, budget
 - `--steps tour`: then every page in order, waiting for each format's events
   instead of fixed times: the size groups and the below-the-fold box
   (scrolled by the page's own scroll box), all eight layouts, the high-impact
-  takeover and restore, the interstitial (pass-through probe while it loads,
-  modal after its first `display_ad_loaded`, a second one dropped, the
-  900x500 error path, the red-dim and blur variants, removal by the app, an
-  unknown `unit`), the reward flow (ready, Watch, play, hide during play,
+  takeover and restore, the interstitial (pass-through probe while it loads;
+  modal probe 800 ms after its first `display_ad_loaded`, once
+  `performance_ad_loaded` has ended the pass-through; a second one dropped;
+  the 900x500 error path, the red-dim and blur variants, removal by the app,
+  an unknown `unit`), the reward flow (ready, Watch, play, hide during play,
   complete, granted once, the next preload), house, every control, consent
   and identity, parity, and finally **Export JSON**. Restart is never pressed
   and no ad is ever clicked.
@@ -45,9 +46,6 @@ node e2e/run.mjs --host tauri --mode live --steps live-layout     # LIVE, budget
   screen, so no screen-recording permission is involved. With
   `OW_SHOWCASE_STILL_PARTS=1` each webview's own snapshot is kept too
   (`<name>.<label>.png`).
-- `--no-privacy-window` (both hosts) skips the **Open ad privacy settings**
-  button: on ow-tauri that window makes the invisible lab app frontmost
-  (an open core bug), which a lab run must never do.
 - The ow-electron wrapper records what the ad guests log to
   `guest-console.jsonl` (`<owadview> is not visible. waiting...`, `not
 valid slot size`), as the ow-tauri trace does for its guests.
@@ -80,11 +78,18 @@ per step, with `window.__showcase.snapshot()` and the new timeline rows),
   Dock icon, no app switcher entry) and is never activated; every window is
   built hidden, then gets alpha 0, click-through and an on-screen position
   (an ad must be on screen to fill). Dialogs and the file manager do not
-  open.
+  open. The showcase's main process runs unchanged, `show()` included: for
+  the whole run the plugin's lab turns every app activation into a no-op
+  and orders a window front without making it key (`orderFrontRegardless`),
+  so neither `BrowserWindow.show()` / `focus()` nor the ad privacy settings
+  window brings the app to the front (`activation-suppressed` and
+  `key-front-redirected` in the trace's `wc-events.jsonl`).
 - **ow-electron**: [electron-main.cjs](electron-main.cjs) is the main entry
   of a throwaway app folder around `.stage/electron`. It hides the Dock icon,
-  pins every window at opacity 0, click-through and not focusable, drops
-  focus calls, and answers dialogs as dismissed. Then it loads the
+  pins every window at opacity 0, click-through and not focusable, turns
+  `show()` into `showInactive()`, drops focus calls, and answers dialogs as
+  dismissed (ow-electron itself cannot be changed, so its lab works from
+  the outside). Then it loads the
   showcase's main process unchanged.
 - Both: an isolated home (`HOME`, `CFFIXED_USER_HOME`), the window monitor
   (`tools/parity-harness/lib/window-monitor.swift`; the app is killed the
@@ -100,8 +105,7 @@ no fatal error and (test mode) a `display_ad_loaded` arrived.
 ## Configuration
 
 - `OW_SHOWCASE_E2E_CONFIG`: the driver's configuration (`runDir`, `steps`,
-  `mode`, `adWaitMs`, `dwellMs`, `liveObserveMs`, `stillsDir`,
-  `privacyWindow`). Without it
+  `mode`, `adWaitMs`, `dwellMs`, `liveObserveMs`, `stillsDir`). Without it
   the driver stays inert.
 - `OW_TAURI_LAB_DIR`, `OW_TAURI_LAB_PACKAGE_JSON` (ow-tauri): the trace
   folder and the manifest to run with (`.stage/package.json`, so the staged

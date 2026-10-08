@@ -13,16 +13,9 @@ import { runSteps } from './steps.cjs';
 
 const invoke = (cmd, args) => globalThis.__TAURI_INTERNALS__.invoke(cmd, args);
 
-// A show becomes an inactive show, as e2e/electron-main.cjs does on
-// ow-electron: the invisible lab app must never become the frontmost app.
-// The facade's show() also focuses the window, which activates the app on
-// macOS even in the invisible lab (core bug CB-2, open); this bundle only
-// exists in lab builds, so the normal build keeps the plain show().
-const plainShow = BrowserWindow.prototype.show;
-BrowserWindow.prototype.show = function labShow() {
-  if (typeof this.showInactive === 'function') return this.showInactive();
-  return plainShow.call(this);
-};
+// The showcase's show() runs unchanged: in the invisible lab the plugin
+// itself keeps the app in the background (no activation, the window
+// ordered front without becoming key; tauri-plugin-overwolf `lab`).
 
 const isShowcase = (w) => /renderer\/index\.html/.test(w.webContents.getURL() || '');
 

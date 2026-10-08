@@ -279,6 +279,11 @@ fn setup<R: Runtime>(
     api: &PluginApi<R, Option<Config>>,
     options: SetupOptions,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // The invisible lab app stays in the background from the start, before
+    // any window or webview exists (feature `lab`).
+    if crate::lab::invisible() {
+        crate::platform::webview::hold_lab_app_back();
+    }
     let config = api.config().clone().unwrap_or_default();
     let host = crate::host::build_host(app, config, options)?;
     app.manage(Overwolf(Arc::clone(&host)));

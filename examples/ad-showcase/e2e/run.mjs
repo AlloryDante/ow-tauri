@@ -5,7 +5,6 @@
 //                    [--mode test|live] [--run-id ID] [--no-build]
 //                    [--identity FILE] [--timeout S] [--ad-wait MS]
 //                    [--dwell MS] [--stills DIR] [--live-cap N]
-//                    [--no-privacy-window]
 //
 // --mode test (default): test ads (--test-ad), smoke or tour.
 // --mode live: real ads, only with a live-* scenario (live-layout,
@@ -69,7 +68,6 @@ const { values: opts } = parseArgs({
     stills: { type: 'string' },
     'live-cap': { type: 'string', default: '10' },
     'live-observe': { type: 'string', default: '90000' },
-    'no-privacy-window': { type: 'boolean', default: false },
   },
 });
 
@@ -289,7 +287,6 @@ async function main() {
     adWaitMs: Number(opts['ad-wait']),
     dwellMs: Number(opts.dwell),
     liveObserveMs: Number(opts['live-observe']),
-    privacyWindow: !opts['no-privacy-window'],
     ...(opts.stills ? { stillsDir: resolve(opts.stills) } : {}),
   };
   env.OW_SHOWCASE_E2E_CONFIG = JSON.stringify(config);

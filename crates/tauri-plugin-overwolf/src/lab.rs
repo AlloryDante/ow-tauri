@@ -34,7 +34,13 @@
 //!   invisible before it can appear: built hidden, not focusable and off the
 //!   taskbar; then, on macOS, alpha 0 and click-through; then shown when the
 //!   app asked for a visible window. The plugin never focuses a window and
-//!   never builds a full-screen one in this mode. On other platforms the
+//!   never builds a full-screen one in this mode. On macOS the app is also
+//!   never activated, for the whole run and whoever asks: `NSApplication`
+//!   activation does nothing and `makeKeyAndOrderFront:` orders the window
+//!   front without making it key (`orderFrontRegardless`), so a later
+//!   `BrowserWindow.show()` or `focus()` (the core window commands) and the
+//!   ad privacy window keep the app in the background (`activation-suppressed`
+//!   and `key-front-redirected` in `wc-events.jsonl`). On other platforms the
 //!   windows stay hidden. Native dialogs, the file manager
 //!   (`shell.openPath`, `showItemInFolder`) and the system browser do not
 //!   open either: the command answers as if the user dismissed the dialog at

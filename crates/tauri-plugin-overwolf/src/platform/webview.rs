@@ -588,6 +588,26 @@ pub(crate) fn without_app_activation<T>(create: impl FnOnce() -> T) -> T {
     }
 }
 
+/// Keeps the invisible lab app in the background for the rest of the
+/// process (feature `lab`, `OW_TAURI_LAB_INVISIBLE=1`; the caller checks).
+/// On macOS `activate` and `activateIgnoringOtherApps:` of `NSApplication`
+/// then always do nothing, whoever calls them (wry while it creates any
+/// webview, including the ad privacy window's; tao's `set_focus`, which the
+/// core `show` / `set_focus` window commands and `BrowserWindow.show()` /
+/// `focus()` reach), and `-[NSWindow makeKeyAndOrderFront:]` orders the
+/// window front with `orderFrontRegardless` instead: on screen, at the
+/// alpha 0 the lab gave it, without becoming key and without activating the
+/// app (lab trace: `activation-suppressed` and `key-front-redirected` in
+/// `wc-events.jsonl`). Other platforms do nothing here: their lab windows
+/// stay hidden.
+pub(crate) fn hold_lab_app_back() {
+    #[cfg(target_os = "macos")]
+    {
+        macos::install_activation_guard();
+        macos::install_key_front_guard();
+    }
+}
+
 /// A stage of a window's minimize, as the OS reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(
@@ -682,6 +702,12 @@ mod macos {
     /// `-[NSApplication activateIgnoringOtherApps:]`.
     type ActivateIgnoring = unsafe extern "C-unwind" fn(&AnyObject, Sel, Bool);
 
+    /// The `NSWindow` implementation [`install_key_front_guard`] replaced.
+    static KEY_FRONT_ORIGINAL: OnceLock<usize> = OnceLock::new();
+
+    /// `-[NSWindow makeKeyAndOrderFront:]`.
+    type KeyFront = unsafe extern "C-unwind" fn(&AnyObject, Sel, *mut AnyObject);
+
     /// Holds activation off while it lives.
     pub(super) struct ActivationGuard;
 
@@ -698,8 +724,17 @@ mod macos {
         }
     }
 
+    /// Whether activation is held off: while an [`ActivationGuard`] lives,
+    /// and always in the invisible lab (`lab_invisible`).
+    pub(super) fn activation_held(guards: usize, lab_invisible: bool) -> bool {
+        guards > 0 || lab_invisible
+    }
+
     fn suppressed(selector: &str) -> bool {
-        if SUPPRESS_ACTIVATION.load(Ordering::SeqCst) == 0 {
+        if !activation_held(
+            SUPPRESS_ACTIVATION.load(Ordering::SeqCst),
+            crate::lab::invisible(),
+        ) {
             return false;
         }
         crate::lab::record(
@@ -730,34 +765,89 @@ mod macos {
         }
     }
 
+    extern "C-unwind" fn guarded_make_key_and_order_front(
+        this: &AnyObject,
+        cmd: Sel,
+        sender: *mut AnyObject,
+    ) {
+        if crate::lab::invisible() {
+            crate::lab::record(
+                "wc-events.jsonl",
+                || serde_json::json!({ "kind": "key-front-redirected" }),
+            );
+            // SAFETY: `this` is the NSWindow the message was sent to, on
+            // the main thread (AppKit's rule for this method); a public
+            // NSWindow method without arguments.
+            let () = unsafe { msg_send![this, orderFrontRegardless] };
+            return;
+        }
+        if let Some(imp) = KEY_FRONT_ORIGINAL.get() {
+            // SAFETY: the original `makeKeyAndOrderFront:` of NSWindow,
+            // stored by `install_key_front_guard`, called with its own
+            // arguments.
+            unsafe { std::mem::transmute::<usize, KeyFront>(*imp)(this, cmd, sender) };
+        }
+    }
+
+    /// Replaces the instance method `selector` of `class` with `imp`, after
+    /// storing the original implementation in `slot`. A class without the
+    /// method is left as it is.
+    fn replace_method(
+        class: &AnyClass,
+        selector: Sel,
+        slot: &OnceLock<usize>,
+        imp: objc2::runtime::Imp,
+    ) {
+        let Some(method) = class.instance_method(selector) else {
+            return;
+        };
+        // The original is stored before the replacement can run.
+        let _ = slot.set(method.implementation() as usize);
+        // SAFETY: a method of a registered class; its encoding outlives the
+        // call.
+        let types = unsafe { objc2::ffi::method_getTypeEncoding(method) };
+        // SAFETY: `imp` has the selector's signature, as `types` says; the
+        // runtime keeps it for the class's lifetime.
+        unsafe {
+            objc2::ffi::class_replaceMethod(
+                std::ptr::from_ref(class).cast_mut(),
+                selector,
+                imp,
+                types,
+            );
+        }
+    }
+
+    /// Replaces `-[NSWindow makeKeyAndOrderFront:]`, once, with a version
+    /// that orders the window front with `orderFrontRegardless` in the
+    /// invisible lab and otherwise calls the original. Window classes that
+    /// do not override the method (tao's does not) inherit the replacement.
+    /// Installed only by [`super::hold_lab_app_back`].
+    pub(super) fn install_key_front_guard() {
+        static INSTALL: Once = Once::new();
+        INSTALL.call_once(|| {
+            let key_front: KeyFront = guarded_make_key_and_order_front;
+            // SAFETY: a function pointer cast to the runtime's `Imp` type.
+            let key_front =
+                unsafe { std::mem::transmute::<KeyFront, objc2::runtime::Imp>(key_front) };
+            replace_method(
+                class!(NSWindow),
+                sel!(makeKeyAndOrderFront:),
+                &KEY_FRONT_ORIGINAL,
+                key_front,
+            );
+        });
+    }
+
     /// Replaces `activate` and `activateIgnoringOtherApps:` of
-    /// `NSApplication`, once, with versions that do nothing while an
-    /// [`ActivationGuard`] lives and otherwise call the original. Every
-    /// other caller (the app itself, tao at launch) is unaffected.
+    /// `NSApplication`, once, with versions that do nothing while
+    /// activation is held ([`activation_held`]) and otherwise call the
+    /// original. Outside the invisible lab every other caller (the app
+    /// itself, tao at launch) is unaffected.
     pub(super) fn install_activation_guard() {
         static INSTALL: Once = Once::new();
         INSTALL.call_once(|| {
             let class = class!(NSApplication);
-            let replace = |selector: Sel, slot: &OnceLock<usize>, imp: objc2::runtime::Imp| {
-                let Some(method) = class.instance_method(selector) else {
-                    return;
-                };
-                // The original is stored before the replacement can run.
-                let _ = slot.set(method.implementation() as usize);
-                // SAFETY: a method of a registered class; its encoding
-                // outlives the call.
-                let types = unsafe { objc2::ffi::method_getTypeEncoding(method) };
-                // SAFETY: `imp` has the selector's signature, as `types`
-                // says; the runtime keeps it for the class's lifetime.
-                unsafe {
-                    objc2::ffi::class_replaceMethod(
-                        std::ptr::from_ref(class).cast_mut(),
-                        selector,
-                        imp,
-                        types,
-                    );
-                }
-            };
             let activate: Activate = guarded_activate;
             let ignoring: ActivateIgnoring = guarded_activate_ignoring;
             // SAFETY: function pointers cast to the runtime's `Imp` type.
@@ -767,8 +857,9 @@ mod macos {
                     std::mem::transmute::<ActivateIgnoring, objc2::runtime::Imp>(ignoring),
                 )
             };
-            replace(sel!(activate), &ACTIVATE_ORIGINAL, activate);
-            replace(
+            replace_method(class, sel!(activate), &ACTIVATE_ORIGINAL, activate);
+            replace_method(
+                class,
                 sel!(activateIgnoringOtherApps:),
                 &ACTIVATE_IGNORING_ORIGINAL,
                 ignoring,
@@ -1293,6 +1384,36 @@ mod macos {
                 "activate"
             )));
             assert!(!suppressed("activate"));
+        }
+
+        #[test]
+        fn the_invisible_lab_holds_activation_for_the_whole_run() {
+            // Outside the lab only a live guard holds activation off.
+            assert!(!activation_held(0, false));
+            assert!(activation_held(1, false));
+            assert!(activation_held(2, false));
+            // In the invisible lab it is held with no guard at all: a
+            // later show / focus of a window, or the ad privacy window's
+            // webview, never activates the app.
+            assert!(activation_held(0, true));
+            assert!(activation_held(1, true));
+        }
+
+        #[test]
+        fn make_key_and_order_front_is_replaced_once() {
+            install_key_front_guard();
+            install_key_front_guard(); // once
+            let key_front: KeyFront = guarded_make_key_and_order_front;
+            let current = class!(NSWindow)
+                .instance_method(sel!(makeKeyAndOrderFront:))
+                .map(|m| m.implementation() as usize);
+            assert_eq!(current, Some(key_front as usize));
+            let original = KEY_FRONT_ORIGINAL.get().copied();
+            assert!(original.is_some());
+            assert_ne!(original, Some(key_front as usize));
+            // The test process is not an invisible lab: the replacement
+            // calls the original there.
+            assert!(!crate::lab::invisible());
         }
     }
 }
