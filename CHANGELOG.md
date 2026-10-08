@@ -128,6 +128,11 @@ the npm package share one version number.
 - Packages sample e2e (ow-electron baseline): the upstream main window,
   built with `show: true`, no longer activates the app (it became the
   frontmost app on macOS); the runner kills an app that becomes frontmost.
+- Packages sample e2e: memory samples carry the physical footprint next to
+  RSS, and `--idle-reload-ms` reloads every `<owadview>` during an idle run.
+  PARITY and CONTRACT D.8.1 record a measured macOS gap: an ad guest's
+  WebKit content process keeps the memory of replaced ad pages until memory
+  pressure, where ow-electron's guest renderer stays flat across reloads.
 - CI: the macOS job requires that the Safari version is read from Safari's
   `Info.plist` (`OW_TAURI_EXPECT_SAFARI`) and logs which plist it read.
   Dependabot ignores React majors, which only `examples/packages-sample`

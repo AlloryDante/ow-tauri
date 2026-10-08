@@ -310,7 +310,8 @@ CONTRACT with its fallback, and `parity-diff.mjs` classes it
 | guests are packed into a `GtkBox` and never overlap: no ad rectangles, z-order or pass-through | Linux | B.3.4 |
 | `<owadview>` gets no shadow root (engines refuse `attachShadow` on it) | all | B.3.4 |
 | Electron's `<webview>` events `did-frame-*`, `media-*` and the like | all | B.3.5 |
-| guests mounted together report 400025 over their creation time (WebView2 creates them one after another on the main thread); host requests due meanwhile leave up to about 300 ms late | Windows | E.2 |
+| guests mounted together report 400025 over their creation time (WebView2 creates them one after another on the main thread); the requests themselves leave on a thread of their own, as soon as they are queued [OBS: Windows lab `sizes`, seven guests: each batch of 400025 starts 4 to 19 ms after the batch's last guest is created; before, two of the first four waited about 460 ms more] | Windows | E.2 |
+| an ad guest's content process keeps the memory of replaced ad pages until the system is short of memory, where ow-electron's guest renderer does not grow across reloads: the footprint grows by about 50 to 90 MB per guest reload and stays [OBS: macOS packages-sample idle runs, `tower-right`, test ads: 30 min with the ad library's own reload at about 20 min, guests 122 to 313 MB and 79 to 219 MB against ow-electron's 79 to 97 MB and 71 to 74 MB; 10 min with a reload every minute, the larger guest 118 to 574 MB against ow-electron's guests staying between 60 and 104 MB. The growth is WebKit's own heap (`WebKit malloc`, 285 of 325 MB), not the plugin: the app process (about 49 MB) and the plugin's queues stay flat, and turning off the back/forward cache or clearing the memory cache at each reload changed nothing. WebKit's low-memory signal, sent on memory pressure, freed it: within 20 s the larger guest went from 328 to 202 MB and the other from 107 to 49 MB] | macOS (WebKit) | D.8.1 |
 | `SameSite=None` cookies read back as no policy; `document.cookie` order follows the WebKit store | macOS | D.6.3 |
 | a new window's frame is measured before it is mapped, when GTK reports none: `width` / `height` size its content until the window manager adds the frame | Linux | B.2.2 |
 | a `beforeunload` handler asking to stay does not keep the page (no public `WKUIDelegate` method) | macOS | B.2.6 |
@@ -414,9 +415,10 @@ ow-electron and on ow-tauri one after the other on the same runner (Windows
 Server 2025, display 1920 x 1080), diff the pair and evaluate the Windows
 checks. Test ads only, with the harness's neutral identity.
 
-Last full run on `caa7065`: 27 scenarios (the round-2 base runs `A`, `cmp`
-and `messages`, and every ad-format scenario), 0 `BUG`, and L1-W, L2, L3-W
-and L5 true. Request shaping matched on the wire: the ad library request
+Last full run on `a333efb`: 27 scenarios (the round-2 base runs `A`, `cmp`
+and `messages`, and every ad-format scenario), 0 `BUG`, and L1-W, L2, L3-W,
+L5, G1 and G2 true. Request shaping, last read on `caa7065`, matched on the
+wire: the ad library request
 carries the same `x-ow-uid`, `x-ow-phase` and `x-ow-window` headers and
 `Referer` as ow-electron's, the ad document the same `Referer` and `Origin`,
 and subresources the forced `Origin` (176 of 178; the 2 others are later

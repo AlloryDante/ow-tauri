@@ -2383,6 +2383,7 @@ existing guest (D.5) [OBS], and does not recreate guests.
 | `window.gc` | a function | D.3 |
 | IPC to the app | none | none: exactly one command, `adview_event` |
 | audio | muted at start | muted at start |
+| memory after a reload | the guest renderer does not grow across reloads [OBS] | macOS: WebKit keeps it in the guest's content process until memory pressure, with no public API to release it; a known gap (PARITY Known platform gaps) |
 
 Web security is off only in the ads environment, whose webviews run no app
 code and hold no capability beyond their one command
