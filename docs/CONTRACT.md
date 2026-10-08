@@ -1440,9 +1440,10 @@ while hidden until 2.5 s after `hidden`, or until the guest is visible again
 if that comes first [DEC]. A page that asked has given up its ad and plays
 nothing more until it reloads [OBS: lab, 2 s hide], so the request is never
 dropped. With the alignment and the `visibilitychange` events of D.5 a 2 s
-hide keeps the ad, and a minimized window's performance ad dismisses itself
-before it shuts down, as in ow-electron [OBS: lab, reward-optin and
-perf-minimize]. The intersection threshold for a partly
+hide keeps the ad, and a minimized window's performance ad shuts down with
+the same messages as in ow-electron, where `performance_ad_dismiss` before
+the `shutdown` comes in some runs and not in others, on both hosts [OBS: lab,
+reward-optin and perf-minimize]. The intersection threshold for a partly
 visible element was not measured; the 0.5 ratio above is [DEC]. The guests of
 a minimized embedder stay hidden until the restore (R3-1, OQ-27).
 
@@ -2000,7 +2001,7 @@ ow-tauri sends the same:
 | `consent` | string | a consent page saves (D.6.6): **twice**, first the TCF string (`saveConsent`), then the stored, URL-encoded unified string `cmp%3D...` (`saveUnifiedConsent`). Sent to every existing guest, including one that has not finished loading; **not** resent after a guest reloads [OBS] |
 | `customTracking` | object or `null` | the element's `customTracking` changed, and again after every later reload of that guest [OBS]; Overwolf documents that updates reach the running ad page [DOC] |
 | `eHashes` | `{ sha1, md5, sha256 }` | `setUserEmailHashes()` or `generateUserEmailHashes()` was called (A.2.2); sent to every existing guest; not resent after a reload [OBS] |
-| `window-minimized` | none | the embedder window was minimized, when the minimize ends, before `window-hidden`; the guest document turns `hidden` after both [OBS]. A running performance ad then dismisses itself (`performance_ad_dismiss`) and shuts down about 1 s later [OBS] (ow-tauri: with the hidden-page timer alignment of B.3.4) |
+| `window-minimized` | none | the embedder window was minimized, when the minimize ends, before `window-hidden`; the guest document turns `hidden` after both [OBS]. A running performance ad then shuts down about 1 s later, in some runs after dismissing itself (`performance_ad_dismiss`) and in others without it, on both hosts [OBS] (ow-tauri: with the hidden-page timer alignment of B.3.4) |
 | `window-hidden` | none | the embedder window was hidden or minimized (not again when a hidden window is minimized; on Windows a minimize sends `window-minimized` only, B.3.4); nothing is sent when it is shown or restored again [OBS] |
 | `sendCommand` | array: the arguments of `element.sendCommand(...args)`, as JSON (B.3.3) | the app called `sendCommand()` on the attached element [OBS] |
 | `setPageUrl` | array: `[url]` | the app called `setPageUrl(url)` on the attached element; the URL is also the `pageUrl` of the guest's next load (D.2) [OBS] |

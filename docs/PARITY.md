@@ -243,7 +243,7 @@ Status values:
 
 The developer view of each format is [AD-FORMATS.md](AD-FORMATS.md).
 Results are from the macOS ad-format lab (24 scenarios, test mode) and the
-Windows lab (28 scenarios), both against ow-electron 42.11.4.
+Windows lab (27 scenarios), both against ow-electron 42.11.4.
 
 | Behaviour | ow-electron (observed) | ow-tauri target | CONTRACT | Status |
 |---|---|---|---|---|
@@ -407,7 +407,7 @@ ow-electron and on ow-tauri one after the other on the same runner (Windows
 Server 2025, display 1920 x 1080), diff the pair and evaluate the Windows
 checks. Test ads only, with the harness's neutral identity.
 
-Last full run on `caa7065`: 28 scenarios (the round-2 base runs `A`, `cmp`
+Last full run on `caa7065`: 27 scenarios (the round-2 base runs `A`, `cmp`
 and `messages`, and every ad-format scenario), 0 `BUG`, and L1-W, L2, L3-W
 and L5 true. Request shaping matched on the wire: the ad library request
 carries the same `x-ow-uid`, `x-ow-phase` and `x-ow-window` headers and

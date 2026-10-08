@@ -10,9 +10,10 @@
 //         is remounted (lab-layers).
 //   L3-W  pass-through: while the interstitial loads its container has an
 //         empty window region and a click at the app control reaches the
-//         app (one SendInput click, test mode); after its first
-//         display_ad_loaded the region is gone (NULL) and the click is
-//         refused because it would reach the ad (lab-layers).
+//         app (one SendInput click, test mode); once the modal has loaded
+//         (performance_ad_loaded; the probe at 16 s) the region is gone
+//         (NULL) and the click is refused because it would reach the ad
+//         (lab-layers).
 //   L5    mute: each guest's mute state read back natively (WebView2
 //         IsMuted) equals ow-electron's isAudioMuted() at the same moments
 //         (audio).
@@ -129,7 +130,7 @@ export function labLayersChecks(electronDir, tauriDir) {
   }
 
   // L3-W: empty region and a delivered click while loading; no region and
-  // a refused click after the first display_ad_loaded.
+  // a refused click once the modal has loaded (performance_ad_loaded).
   const region = (label) =>
     perf.map((g) => t[label]?.native?.webviews?.[g]?.region?.kind ?? null).find(Boolean) ?? null;
   const loading = t['perf-loading'];
