@@ -1,0 +1,18 @@
+{
+  "productName": "Parity Harness",
+  "version": "1.0.0",
+  "identifier": "com.example.parity",
+  "bundle": {
+    "active": true,
+    "targets": "all"
+  },
+  "plugins": {
+    "overwolf": {
+      "author": "Overwolf Ltd.",
+      "name": "Base Name",
+      "ads": {
+        "testAd": true
+      }
+    }
+  }
+}

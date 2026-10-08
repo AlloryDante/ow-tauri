@@ -1,0 +1,4 @@
+{
+  "description": "tauri.conf.json alone (no overlay for the target); <PN> from productName (CONTRACT G.2 vector 2)",
+  "target": "macos"
+}

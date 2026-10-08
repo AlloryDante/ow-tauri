@@ -1,0 +1,4 @@
+{
+  "description": "version names a JSON file (relative to the Tauri folder) whose version is the app version; plugins.overwolf.name pins <PN> (vector 2)",
+  "target": "linux"
+}

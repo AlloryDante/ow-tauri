@@ -16,7 +16,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { isObject } from './package-json.js';
+import { isObject } from './json.js';
 
 async function readText(path: string): Promise<string | null> {
   try {

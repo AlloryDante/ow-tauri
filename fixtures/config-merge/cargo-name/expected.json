@@ -1,0 +1,18 @@
+{
+  "config": {
+    "version": "1.0.0",
+    "identifier": "com.example.parity",
+    "plugins": {
+      "overwolf": {
+        "author": "Example Studio"
+      }
+    }
+  },
+  "identity": {
+    "uid": "binaioonkjpolnojeenpbmjmbfkbmffcekndbmdk",
+    "cuid": "binaioonkjpolnojeenpbmjmbfkbmffcekndbmdk",
+    "name": "parity-harness",
+    "author": "Example Studio",
+    "version": "1.0.0"
+  }
+}

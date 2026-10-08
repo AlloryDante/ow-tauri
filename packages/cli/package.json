@@ -1,0 +1,45 @@
+{
+  "name": "tauri-plugin-overwolf-cli",
+  "version": "0.1.0",
+  "description": "The ow-tauri command line of tauri-plugin-overwolf: init, migrate from ow-electron, doctor, and Overwolf signing for Tauri 2 apps.",
+  "license": "MIT OR Apache-2.0",
+  "author": "ow-tauri contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AlloryDante/ow-tauri.git",
+    "directory": "packages/cli"
+  },
+  "keywords": [
+    "tauri",
+    "overwolf",
+    "cli",
+    "signing",
+    "ow-electron"
+  ],
+  "type": "module",
+  "bin": {
+    "ow-tauri": "dist/index.js"
+  },
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "check:package": "npm run build && publint --strict && attw --pack . --profile esm-only --entrypoints package.json",
+    "prepack": "npm run build"
+  }
+}

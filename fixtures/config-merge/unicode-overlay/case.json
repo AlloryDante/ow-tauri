@@ -1,0 +1,4 @@
+{
+  "description": "the macOS overlay changes productName; non-ASCII is hashed as UTF-8 (vector 10)",
+  "target": "macos"
+}

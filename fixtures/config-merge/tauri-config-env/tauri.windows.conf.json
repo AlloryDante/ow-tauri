@@ -1,0 +1,10 @@
+{
+  "plugins": {
+    "overwolf": {
+      "name": "Middle Name",
+      "ads": {
+        "testAd": true
+      }
+    }
+  }
+}

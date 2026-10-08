@@ -1,0 +1,4 @@
+{
+  "description": "plugins.overwolf.uid wins after trimming; cuid stays the formula of author + name (vectors 13 and 1)",
+  "target": "windows"
+}

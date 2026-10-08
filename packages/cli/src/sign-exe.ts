@@ -18,6 +18,9 @@
  * `tauri.conf.json` next to the working folder, the names `ow-tauri sign`
  * recorded, and the signed `package.json`. `--app-exe` overrides them.
  *
+ * Use it from `bundle.windows.signCommand` as
+ * `npm exec --no -- ow-tauri sign-exe %1` (DESIGN §2.7).
+ *
  * @packageDocumentation
  */
 
@@ -27,11 +30,10 @@ import { readFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 
 import { findAppExeNames } from './app-exe.js';
-
 import { download, postFile } from './http.js';
-import { isObject } from './package-json.js';
+import { isObject, writeAtomic } from './json.js';
 import type { Logger, SignResult } from './sign.js';
-import { RESULT_FILE, SIGNED_DIR, apiUrl, credentials, writeAtomic } from './sign.js';
+import { RESULT_FILE, SIGNED_DIR, apiUrl, credentials } from './sign.js';
 import { readZipEntries } from './zip.js';
 
 /** `ow-tauri sign-exe` options. */
@@ -44,14 +46,14 @@ export interface SignExeOptions {
    * `productName`), `sign-result.json` and the signed `package.json`.
    */
   readonly appExe?: string | undefined;
-  /** The `ow-tauri sign` output folder; default `./ow-tauri-signed`, else `../ow-tauri-signed`. */
+  /** The `ow-tauri sign` output folder; default `./signed`, else `../signed` (Tauri runs the command in `src-tauri`). */
   readonly signedDir?: string | undefined;
   /** A command for every other file; `%1` is replaced by the file path. */
   readonly fallback?: string | undefined;
   /** The working directory. */
   readonly cwd: string;
   /** The environment. */
-  readonly env: Record<string, string | undefined>;
+  readonly env: Readonly<Record<string, string | undefined>>;
   /** Messages. */
   readonly log: Logger;
 }
@@ -216,7 +218,7 @@ export async function signExe(options: SignExeOptions): Promise<SignExeOutcome> 
 
 async function signWithOverwolfCertificate(
   file: string,
-  env: Record<string, string | undefined>,
+  env: Readonly<Record<string, string | undefined>>,
   log: Logger,
 ): Promise<SignExeOutcome> {
   const creds = credentials(env, log);

@@ -1,0 +1,22 @@
+{
+  "config": {
+    "productName": "Parity Harness",
+    "version": "1.0.0",
+    "identifier": "com.example.parity",
+    "plugins": {
+      "overwolf": {
+        "author": "Example Studio",
+        "ads": {
+          "testAd": true
+        }
+      }
+    }
+  },
+  "identity": {
+    "uid": "bijigndkghcikkfmhgkmicdkjpdehpjafgpmdhcc",
+    "cuid": "bijigndkghcikkfmhgkmicdkjpdehpjafgpmdhcc",
+    "name": "Parity Harness",
+    "author": "Example Studio",
+    "version": "1.0.0"
+  }
+}

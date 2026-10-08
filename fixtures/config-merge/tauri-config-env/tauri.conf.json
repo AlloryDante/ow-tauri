@@ -1,0 +1,14 @@
+{
+  "productName": "Something Else",
+  "version": "1.0.0",
+  "identifier": "com.example.parity",
+  "bundle": {
+    "active": true
+  },
+  "plugins": {
+    "overwolf": {
+      "author": "Overwolf Ltd.",
+      "name": "Old Name"
+    }
+  }
+}

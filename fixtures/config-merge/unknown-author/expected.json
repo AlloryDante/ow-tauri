@@ -1,0 +1,17 @@
+{
+  "config": {
+    "productName": "Parity Harness",
+    "identifier": "com.example.parity.linux",
+    "app": {},
+    "plugins": {
+      "overwolf": {}
+    }
+  },
+  "identity": {
+    "uid": "fifpcfmoobnjlimjhefehejankadpajlfgbmpheo",
+    "cuid": "fifpcfmoobnjlimjhefehejankadpajlfgbmpheo",
+    "name": "Parity Harness",
+    "author": "unknown",
+    "version": "0.9.0"
+  }
+}

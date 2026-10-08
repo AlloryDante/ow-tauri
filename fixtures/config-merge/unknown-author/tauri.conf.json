@@ -1,0 +1,10 @@
+{
+  "productName": "Parity Harness",
+  "identifier": "com.example.parity",
+  "app": {
+    "withGlobalTauri": true
+  },
+  "plugins": {
+    "overwolf": {}
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "bundle": {
+    "targets": ["nsis"],
+    "windows": {
+      "nsis": {
+        "installerHooks": "./gen/overwolf/installer-hooks.nsh"
+      }
+    }
+  },
+  "plugins": {
+    "overwolf": {
+      "name": null
+    }
+  }
+}

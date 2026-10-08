@@ -1,0 +1,24 @@
+{
+  "config": {
+    "productName": "Something Else",
+    "version": "1.2.0",
+    "identifier": "com.example.parity",
+    "bundle": {},
+    "plugins": {
+      "overwolf": {
+        "author": "Overwolf Ltd.",
+        "name": "parity-harness",
+        "ads": {
+          "testAd": false
+        }
+      }
+    }
+  },
+  "identity": {
+    "uid": "djaoacjhpjaenfddlfmkeoiklmccgcgcgeknhmgj",
+    "cuid": "djaoacjhpjaenfddlfmkeoiklmccgcgcgeknhmgj",
+    "name": "parity-harness",
+    "author": "Overwolf Ltd.",
+    "version": "1.2.0"
+  }
+}

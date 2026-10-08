@@ -1,0 +1,4 @@
+{
+  "description": "no author: the uid uses \"unknown\" (debug builds only); no version: the Cargo package version (vector 9)",
+  "target": "linux"
+}

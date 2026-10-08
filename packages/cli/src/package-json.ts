@@ -1,16 +1,13 @@
 /**
- * The packaged form of `package.json` that the signing service receives
- * (`docs/CONTRACT.md` G.3, G.4 step a), and the builder's gating flags.
- *
- * It reproduces what Overwolf's published builder sends: `build.extraMetadata`
- * deep-merged into `package.json`, then the build-only keys removed. Unlike
- * the builder, no `electronVersion` is added.
+ * An ow-electron app's `package.json` as Overwolf's builder ships it
+ * (`docs/CONTRACT.md` G.3): `build.extraMetadata` deep-merged in, then the
+ * build-only keys removed. `ow-tauri migrate` reads the app identity from this
+ * packaged form, and the builder's environment switches gate signing.
  *
  * @packageDocumentation
  */
 
-/** A JSON object. */
-export type JsonObject = Record<string, unknown>;
+import { isObject, type JsonObject } from './json.js';
 
 /** Keys the builder never ships. */
 const IGNORED_KEYS = new Set([
@@ -26,16 +23,6 @@ const IGNORED_KEYS = new Set([
   'bundleDependencies',
   'tags',
 ]);
-
-/**
- * Whether `value` is a plain JSON object (not an array, not null).
- *
- * @param value - any value
- * @returns `true` for an object
- */
-export function isObject(value: unknown): value is JsonObject {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 /**
  * Merges `source` into `target` the way the builder's `deepAssign` does:
@@ -128,29 +115,34 @@ export function envOn(value: string | undefined): boolean {
 }
 
 /**
- * `isOwSigningRequired`: signing is required unless
- * `build.overwolf.requireSigning` is `false`, or always when
- * `OW_REQUIRE_SIGNING` is on. The builder applies it to Windows builds only.
+ * `isOwSigningRequired`: signing is required unless the flag
+ * (`plugins.overwolf.signing.requireSigning`, ow-electron's
+ * `build.overwolf.requireSigning`) is `false`, or always when
+ * `OW_REQUIRE_SIGNING` is on. It applies to Windows builds only.
  *
- * @param flag - `build.overwolf.requireSigning`
+ * @param flag - `requireSigning`
  * @param env - the environment
  * @returns whether a failed signing fails the build
  */
-export function isSigningRequired(flag: unknown, env: Record<string, string | undefined>): boolean {
+export function isSigningRequired(
+  flag: unknown,
+  env: Readonly<Record<string, string | undefined>>,
+): boolean {
   return flag !== false || envOn(env['OW_REQUIRE_SIGNING']);
 }
 
 /**
- * `isOwCertSigningEnabled`: `build.overwolf.enableOWCertSigning === true`
- * or `OW_ENABLE_CERT_SIGNING` on.
+ * `isOwCertSigningEnabled`: the flag (`plugins.overwolf.signing.owCertSigning`,
+ * ow-electron's `build.overwolf.enableOWCertSigning`) is `true`, or
+ * `OW_ENABLE_CERT_SIGNING` is on.
  *
- * @param flag - `build.overwolf.enableOWCertSigning`
+ * @param flag - `owCertSigning`
  * @param env - the environment
  * @returns whether Overwolf certificate signing is asked for
  */
 export function isCertSigningEnabled(
   flag: unknown,
-  env: Record<string, string | undefined>,
+  env: Readonly<Record<string, string | undefined>>,
 ): boolean {
   return flag === true || envOn(env['OW_ENABLE_CERT_SIGNING']);
 }

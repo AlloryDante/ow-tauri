@@ -1,0 +1,4 @@
+{
+  "description": "author and name are hashed exactly as written, spaces included (vector 12)",
+  "target": "windows"
+}

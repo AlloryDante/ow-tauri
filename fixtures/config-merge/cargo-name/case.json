@@ -1,0 +1,4 @@
+{
+  "description": "neither plugins.overwolf.name nor productName: <PN> is the Cargo package name, as Tauri falls back to it (vector 1)",
+  "target": "windows"
+}

@@ -1,0 +1,10 @@
+{
+  "productName": " Parity Harness ",
+  "version": "1.0.0",
+  "identifier": "com.example.parity",
+  "plugins": {
+    "overwolf": {
+      "author": " Example Studio "
+    }
+  }
+}

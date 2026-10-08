@@ -1,0 +1,31 @@
+{
+  "config": {
+    "productName": "Parity Harness",
+    "version": "1.0.0",
+    "identifier": "com.example.parity",
+    "bundle": {
+      "active": true,
+      "targets": ["nsis"],
+      "windows": {
+        "nsis": {
+          "installerHooks": "./gen/overwolf/installer-hooks.nsh"
+        }
+      }
+    },
+    "plugins": {
+      "overwolf": {
+        "author": "Overwolf Ltd.",
+        "ads": {
+          "testAd": true
+        }
+      }
+    }
+  },
+  "identity": {
+    "uid": "aejkligdodglhcjinbhdcnlohocenfkpdihjacdg",
+    "cuid": "aejkligdodglhcjinbhdcnlohocenfkpdihjacdg",
+    "name": "Parity Harness",
+    "author": "Overwolf Ltd.",
+    "version": "1.0.0"
+  }
+}

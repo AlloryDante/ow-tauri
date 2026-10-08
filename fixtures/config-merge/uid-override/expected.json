@@ -1,0 +1,21 @@
+{
+  "config": {
+    "productName": "Display Name",
+    "version": "1.0.0",
+    "identifier": "com.example.parity",
+    "plugins": {
+      "overwolf": {
+        "author": "Example Studio",
+        "name": "parity-harness",
+        "uid": " aaaabbbbccccddddeeeeffffgggghhhhiiiijjjj "
+      }
+    }
+  },
+  "identity": {
+    "uid": "aaaabbbbccccddddeeeeffffgggghhhhiiiijjjj",
+    "cuid": "binaioonkjpolnojeenpbmjmbfkbmffcekndbmdk",
+    "name": "parity-harness",
+    "author": "Example Studio",
+    "version": "1.0.0"
+  }
+}

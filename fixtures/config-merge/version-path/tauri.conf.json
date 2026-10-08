@@ -1,0 +1,11 @@
+{
+  "productName": "Parity Harness",
+  "version": "./app-version.json",
+  "identifier": "com.example.parity",
+  "plugins": {
+    "overwolf": {
+      "author": "Example Studio",
+      "name": "Parity Harness"
+    }
+  }
+}

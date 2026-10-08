@@ -1,0 +1,4 @@
+{
+  "description": "the Windows overlay is merged as an RFC 7396 patch (null removes plugins.overwolf.name, so <PN> falls back to productName); the macOS overlay is ignored (vector 4)",
+  "target": "windows"
+}

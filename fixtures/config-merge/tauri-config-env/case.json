@@ -1,0 +1,5 @@
+{
+  "description": "base + Windows overlay + TAURI_CONFIG (what tauri build --config passes), each an RFC 7396 merge patch in that order (vector 3)",
+  "target": "windows",
+  "tauriConfig": "{\"version\":\"1.2.0\",\"bundle\":{\"active\":null},\"plugins\":{\"overwolf\":{\"name\":\"parity-harness\",\"ads\":{\"testAd\":false}}}}"
+}

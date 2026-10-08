@@ -1,0 +1,19 @@
+{
+  "config": {
+    "productName": "Pârity Ünicode",
+    "version": "1.0.0",
+    "identifier": "com.example.parity",
+    "plugins": {
+      "overwolf": {
+        "author": "Exämple"
+      }
+    }
+  },
+  "identity": {
+    "uid": "mmfoflmmchoacblhjlimpanaijdnhgoalaloihjd",
+    "cuid": "mmfoflmmchoacblhjlimpanaijdnhgoalaloihjd",
+    "name": "Pârity Ünicode",
+    "author": "Exämple",
+    "version": "1.0.0"
+  }
+}
