@@ -179,9 +179,11 @@ against ow-electron tour `B2-E-tour-4`)
 | Controls (7)                              | tracking, mute, display, scroll, hide, minimize: a new ad after each | same                   |                                                                                                                                                                 |
 | Consent and identity (8)                  | CMP required, three hashes, uid masked                               | same                   | the privacy settings window opens at alpha 0 in later lab tours, app kept in the background                                                                     |
 
-Step by step, 240 of 305 compare rows are the same and 19 differ only in
+Step by step, 255 of 301 compare rows are the same and 21 differ only in
 guest lifecycle (ow-electron reports a `did-fail-load` per guest). The
-remaining rows are timing: a video's `play` lands one step earlier or later.
+other 25 are timing: a video's `play` lands one step earlier or later, a
+reward slot's status is one step apart, and at the restore step the
+high-impact slot already reports a new load on ow-tauri only.
 
 **LIVE mode** (9 ad loads in total, never clicked)
 
