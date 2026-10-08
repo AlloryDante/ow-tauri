@@ -10,6 +10,7 @@ import {
   durationOf,
   LAB_SCENARIOS,
   resetDir,
+  resetState,
   shard,
   stateDirs,
 } from './ci/windows-lab.mjs';
@@ -411,6 +412,18 @@ test('a snapshot skips files that vanish or are locked while it reads them', () 
     assert.equal(isTransientFsError(Object.assign(new Error(code), { code })), true);
   assert.equal(isTransientFsError(Object.assign(new Error('EACCES'), { code: 'EACCES' })), false);
   assert.equal(isTransientFsError(null), false);
+});
+
+test('a state reset ends leftover WebView2 before removing any folder', () => {
+  // Windows lab (4510781): a WebView2 process left by the previous run held
+  // up the next run's WebView2 start by 45 s.
+  const order = [];
+  resetState({
+    dirs: ['a', 'b'],
+    kill: () => order.push('kill'),
+    reset: (dir) => order.push(dir),
+  });
+  assert.deepEqual(order, ['kill', 'a', 'b']);
 });
 
 test('a state folder WebView2 still holds is removed after ending WebView2', () => {

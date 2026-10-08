@@ -10,7 +10,8 @@
 // app's userData (ads data store included) and the Tauri app's WebView2
 // folder are removed before every launch, which stands in for the fresh
 // per-run home of the macOS lab (Windows reads those folders from the
-// shell, not from the environment). The app identity is the harness's
+// shell, not from the environment); WebView2 processes a run left behind
+// are ended first. The app identity is the harness's
 // neutral default (formula uid); a local identity file is refused.
 //
 // Writes <out>/summary.json and <out>/summary.md, and appends the table to
@@ -138,8 +139,19 @@ export function resetDir(dir, { rm = rmSync, kill = killWebViews } = {}) {
   return 'removed after ending WebView2';
 }
 
-function resetState() {
-  for (const dir of stateDirs()) resetDir(dir);
+/**
+ * Clean state for the next launch: ends any WebView2 process a finished
+ * run left behind, then removes every state folder. A leftover process
+ * keeps writing into `EBWebView` while it is removed (`ENOTEMPTY`) and
+ * holds up the next app's WebView2 environment for the same folder [OBS:
+ * Windows lab, 4510781: the `sizes` run's main webview started loading
+ * 45 s after its navigation, against 1 to 5 s in every other run, and its
+ * consent window never loaded].
+ * @param {{dirs?: string[], kill?: () => void, reset?: (dir: string) => unknown}} [deps]
+ */
+export function resetState({ dirs = stateDirs(), kill = killWebViews, reset = resetDir } = {}) {
+  kill();
+  for (const dir of dirs) reset(dir);
 }
 
 function runArgs(name, host, runId) {
