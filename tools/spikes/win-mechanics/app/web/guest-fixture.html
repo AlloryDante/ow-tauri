@@ -1,0 +1,86 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>loopback guest fixture (NOT an ad)</title>
+  </head>
+  <body>
+    <button id="btn">click target</button>
+    <script>
+      // A loopback fixture page that stands in for an ad guest: it is served
+      // from http://127.0.0.1:<port>/ (an http origin, web security off in
+      // the Windows ads environment), NEVER from an ad server. It exercises
+      // the SEC-B1 attack and the gesture/new-window paths so the Rust COM
+      // hooks can observe them. No real ad is ever loaded.
+      window.__log = [];
+      const log = (m) => window.__log.push(m);
+
+      // B5 (SEC-B1): from inside the guest, try to reach the app's privileged
+      // IPC via a local-origin (tauri.localhost) iframe, and try to read the
+      // asset protocol. Reports what happened; the Rust-side frame guard is
+      // what must stop step 1.
+      window.__secB1 = async () => {
+        const out = { iframeTauri: null, invokeViaFrame: null, assetRead: null, directInvoke: null };
+        // direct invoke from the guest's own http origin (should be refused
+        // by the embedder/caller gate regardless of the frame guard).
+        try {
+          const r = await (window.__TAURI_INTERNALS__
+            ? window.__TAURI_INTERNALS__.invoke('spike_marker')
+            : Promise.reject('no internals on guest top frame'));
+          out.directInvoke = { ok: true, value: r };
+        } catch (e) {
+          out.directInvoke = { ok: false, error: String(e) };
+        }
+        // 1) create a local-origin iframe (the B1 chain step 6).
+        try {
+          const f = document.createElement('iframe');
+          f.src = 'http://tauri.localhost/index.html';
+          const loaded = new Promise((res) => {
+            f.onload = () => res('onload');
+            f.onerror = () => res('onerror');
+            setTimeout(() => res('timeout'), 2500);
+          });
+          document.body.appendChild(f);
+          out.iframeTauri = await loaded;
+          // 2) if it loaded same-process (SOP off), call invoke from it.
+          try {
+            const inv = f.contentWindow.__TAURI_INTERNALS__ &&
+              f.contentWindow.__TAURI_INTERNALS__.invoke;
+            if (inv) {
+              const r = await inv.call(f.contentWindow.__TAURI_INTERNALS__, 'spike_marker');
+              out.invokeViaFrame = { ok: true, value: r };
+            } else {
+              out.invokeViaFrame = { ok: false, error: 'no internals reachable in frame' };
+            }
+          } catch (e) {
+            out.invokeViaFrame = { ok: false, error: String(e) };
+          }
+        } catch (e) {
+          out.iframeTauri = 'exception: ' + String(e);
+        }
+        // 3) asset protocol read with SOP off.
+        try {
+          const r = await fetch('http://asset.localhost/' + encodeURIComponent('C:/Windows/win.ini'));
+          out.assetRead = { status: r.status };
+        } catch (e) {
+          out.assetRead = { error: String(e) };
+        }
+        return out;
+      };
+
+      // B3: on a real click, open a popup and do a script-initiated top
+      // navigation, so the native hooks can read IsUserInitiated for each.
+      document.getElementById('btn').addEventListener('click', () => {
+        log('click');
+        try { window.open('https://example.com/popup-from-click', '_blank'); } catch (e) { log('open: ' + e); }
+        setTimeout(() => {
+          // script-initiated top navigation shortly after the click.
+          try { window.location.href = 'https://example.com/top-from-click'; } catch (e) { log('nav: ' + e); }
+        }, 50);
+      });
+
+      // B4: a liveness beacon the driver reads after a close is posted.
+      window.__alive = () => Date.now();
+    </script>
+  </body>
+</html>

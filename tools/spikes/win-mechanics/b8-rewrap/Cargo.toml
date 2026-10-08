@@ -1,0 +1,31 @@
+# W0c-B8 [R2]: can the plugin carry its OWN webview2-com / windows versions
+# and re-wrap the raw COM pointers it takes out of Tauri's PlatformWebview,
+# instead of naming wry's platform-crate types (so a caret `tauri` range does
+# not break the plugin when a new Tauri minor bumps wry's webview2-com)?
+#
+# This crate holds BOTH the version wry 0.57 uses (webview2-com 0.39.1 /
+# windows 0.62) and a DIFFERENT minor (webview2-com 0.38.2 / windows-core
+# 0.61), and a fn that re-wraps a raw controller pointer with the alternate
+# set and calls a vtable method. Two questions, answered by `cargo build`:
+#   compile: does the alternate type re-wrap type-check? (type coupling)
+#   link:    do two webview2-com-sys versions both bundling the WebView2
+#            loader static link into one binary, or collide? (the real risk)
+[package]
+name = "b8-rewrap"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "b8-rewrap"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+# wry 0.57's set.
+webview2-com = "0.39.1"
+windows-core = "0.62.2"
+# The plugin's own, different minor, reached only through raw pointers.
+webview2-com-alt = { package = "webview2-com", version = "=0.38.2" }
+windows-core-alt = { package = "windows-core", version = "=0.61.2" }

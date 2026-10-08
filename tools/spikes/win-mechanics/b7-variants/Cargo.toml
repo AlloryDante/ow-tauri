@@ -1,0 +1,6 @@
+# W0c-B7 manifest variants for turning on tauri's `unstable` feature only on
+# Windows/macOS from a plugin crate. Resolution/unit-graph checks only
+# (see ../cargo-tree.sh and ../README.md); nothing here is meant to run.
+[workspace]
+members = ["v1-plugin", "v1-app", "v2-plugin", "v2-app"]
+resolver = "3"

@@ -1,0 +1,84 @@
+name: Spike - win mechanics
+
+# W0c spike B (manual only): Windows WebView2 + Cargo mechanics for the
+# Tauri-native Overwolf ads port. Builds tools/spikes/win-mechanics/app on the
+# windows-2025 runner and runs it once; the app stands up an ad-guest child
+# webview over a LOOPBACK fixture page (127.0.0.1, never an ad, never a click
+# on an ad) and probes: B2 UA read + shape, B3 IsUserInitiated for popups and
+# script top-navigations, B4 close timing, B5 SEC-B1 local-origin frame guard
+# (raw vs guarded) and the 403-vs-protocol-handler ordering, B6 ZoomFactor, B8
+# a raw COM controller pointer re-wrapped with a different webview2-com minor.
+# B1 (WebView2 runtime version) and B7 (the renamed unstable dependency) are
+# resolution/version facts captured as text. Windows may show on the runner's
+# own desktop, which is nobody's screen.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  windows:
+    name: Spike on windows-2025
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: tools/spikes/win-mechanics
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Toolchain (from repo rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tools/spikes/win-mechanics -> target
+      - name: WebView2 runtime version on the runner (B1 cross-check)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          $keys = @(
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+            'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          )
+          foreach ($k in $keys) { if (Test-Path $k) { (Get-ItemProperty $k).pv | Out-File -Append out/webview2-runtime.txt } }
+          Get-Content out/webview2-runtime.txt -ErrorAction SilentlyContinue
+      - name: B7 - renamed unstable dependency resolves per target (no build)
+        shell: bash
+        run: |
+          set -o pipefail
+          ./cargo-tree.sh | tee out/b7-cargo-tree.txt || echo "b7 exit $? (expected: v1/v2 alternatives fail; the shipped variant must be all-ok)"
+          echo "--- VERDICT lines:"; grep VERDICT out/b7-cargo-tree.txt
+      - name: Build the spike app
+        shell: pwsh
+        run: |
+          $env:CARGO_TARGET_DIR = "target"
+          cargo build --locked -p win-mechanics-spike 2>&1 | Tee-Object out/build.txt
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Run the probes
+        shell: pwsh
+        run: |
+          $out = (Resolve-Path out).Path
+          $env:SPIKE_OUT = "$out/win-mechanics-result.json"
+          $exe = "target/debug/win-mechanics-spike.exe"
+          $p = Start-Process -FilePath $exe -PassThru -RedirectStandardError "$out/run.err.log" -RedirectStandardOutput "$out/run.out.log"
+          if (-not $p.WaitForExit(180000)) { Stop-Process -Id $p.Id -Force; Write-Host "timeout" }
+          Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          if (Test-Path $env:SPIKE_OUT) { Get-Content $env:SPIKE_OUT -Raw } else { Write-Host "no result"; Get-Content "$out/run.err.log" -ErrorAction SilentlyContinue }
+      - name: Clippy (spike workspace, informational)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $env:CARGO_TARGET_DIR = "target"
+          cargo clippy -p win-mechanics-spike -- -W clippy::all 2>&1 | Tee-Object out/clippy.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: spike-win-mechanics
+          path: tools/spikes/win-mechanics/out/
+          if-no-files-found: warn
+          retention-days: 14

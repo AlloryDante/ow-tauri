@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>win-mechanics spike (app origin)</title>
+  </head>
+  <body>
+    <h1>win-mechanics spike</h1>
+    <input id="field" />
+    <script>
+      // The app-origin main page. The Rust driver reads results through
+      // eval; this page only exposes a couple of helpers and records its own
+      // facts. No ads, no network. (See README.md.)
+      window.__spike = {
+        ua: navigator.userAgent,
+        dpr: window.devicePixelRatio,
+        innerW: window.innerWidth,
+      };
+      // Marker command reachability from the APP origin (control for B5): the
+      // app page is allowed to call it; the guest's local-origin frame must
+      // not be.
+      window.__callMarker = async () => {
+        try {
+          const r = await window.__TAURI_INTERNALS__.invoke('spike_marker');
+          return { ok: true, value: r };
+        } catch (e) {
+          return { ok: false, error: String(e) };
+        }
+      };
+    </script>
+  </body>
+</html>

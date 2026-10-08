@@ -1,0 +1,22 @@
+# Stand-in for the plugin crate's manifest (DESIGN-v2 §4.6, W0c-B7), using
+# variant 3: `ads` pulls in spike-unstable-shim (tauri + `unstable`) only on
+# Windows and macOS.
+[package]
+name = "spike-miniplugin"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+[features]
+default = ["plugin", "ads"]
+plugin = ["dep:tauri"]
+ads = ["plugin", "dep:spike-unstable-shim"]
+build = []
+
+[dependencies]
+tauri = { version = "2.12.1", optional = true, default-features = false, features = ["webview-data-url"] }
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+spike-unstable-shim = { path = "../unstable-shim", optional = true }

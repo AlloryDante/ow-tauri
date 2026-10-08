@@ -1,0 +1,18 @@
+# Variant 2: the same `tauri` name in a target-specific table.
+[package]
+name = "v2-plugin"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[features]
+default = ["plugin", "ads"]
+plugin = ["dep:tauri"]
+ads = ["plugin"]
+build = []
+
+[dependencies]
+tauri = { version = "2.12.1", optional = true, default-features = false, features = ["webview-data-url"] }
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+tauri = { version = "2.12.1", optional = true, default-features = false, features = ["unstable"] }

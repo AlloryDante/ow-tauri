@@ -1,0 +1,5 @@
+# W0c spike B (Windows + Cargo mechanics). Standalone workspace, not part of
+# the root workspace; never published or bundled. See README.md.
+[workspace]
+members = ["app", "miniplugin", "unstable-shim", "b8-rewrap"]
+resolver = "3"

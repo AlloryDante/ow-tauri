@@ -1,0 +1,9 @@
+[package]
+name = "v2-app"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+tauri = { version = "2.12.1", default-features = false }
+v2-plugin = { path = "../v2-plugin" }

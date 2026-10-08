@@ -1,0 +1,15 @@
+# W0c-B7 variant 3: a separate one-line crate whose only job is to depend on
+# tauri with `unstable`. The plugin depends on it from a Windows/macOS target
+# table under its `ads` feature, so `unstable` unifies into the app's tauri on
+# those targets only. (A plugin depending on `tauri` twice under two names is
+# rejected by Cargo; see b7-variants/v1-*.)
+[package]
+name = "spike-unstable-shim"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+[dependencies]
+tauri = { version = "2.12.1", default-features = false, features = ["unstable"] }

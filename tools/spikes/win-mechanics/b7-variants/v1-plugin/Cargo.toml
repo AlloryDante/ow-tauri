@@ -1,0 +1,24 @@
+# Stand-in for the plugin crate's manifest (DESIGN-v2 §4.6, W0c-B7): the
+# `ads` feature turns on Tauri's `unstable` feature only on Windows and macOS,
+# through a second, renamed dependency on the same `tauri` package.
+[package]
+name = "v1-plugin"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+[features]
+default = ["plugin", "ads"]
+plugin = ["dep:tauri"]
+ads = ["plugin", "dep:tauri-unstable"]
+build = []
+
+[dependencies]
+tauri = { version = "2.12.1", optional = true, default-features = false, features = ["webview-data-url"] }
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+# Same package under a second name, so `unstable` unifies into the app's
+# tauri only on these targets.
+tauri-unstable = { package = "tauri", version = "2.12.1", optional = true, default-features = false, features = ["unstable"] }

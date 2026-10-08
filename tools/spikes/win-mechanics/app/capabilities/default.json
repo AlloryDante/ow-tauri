@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Reproduces the DESIGN-v2 §2.4 pattern under test: a capability scoped by WINDOW label (not webview), granting the spike's marker command. SEC-B1 (B5) asks whether a local-origin frame inside the window's ad guest inherits it.",
+  "windows": ["main", "g2"],
+  "permissions": ["allow-spike-marker"]
+}
