@@ -1330,15 +1330,23 @@ fn consent_sequencing() {
         json!({ "name": "close" }),
     )
     .unwrap();
+    // The waiting guest navigates as the gate opens, not at the next timer
+    // step: ow-electron loads its guests within a few milliseconds of the
+    // window's close [OBS] (regression: up to 250 ms later). No snapshot
+    // shows the gate open with a guest still waiting.
     let start = Instant::now();
-    while !ow.test_consent_gate_open() {
+    loop {
+        let (open, waiting) = ow.test_consent_gate_snapshot();
+        if open {
+            assert!(waiting.is_empty(), "gate open, {waiting:?} still waiting");
+            break;
+        }
         assert!(
             start.elapsed() < Duration::from_secs(5),
             "gate never opened"
         );
-        std::thread::sleep(Duration::from_millis(10));
+        std::thread::yield_now();
     }
-    ow.test_ads_tick(ow.test_now());
     assert_eq!(ow.test_guest(&guest).unwrap()["navigated"], true);
     let state: Value =
         serde_json::from_slice(&std::fs::read(ow.state_dir().join("ow-electron.json")).unwrap())
@@ -1412,7 +1420,14 @@ fn consent_not_required_loads_the_clearing_page() {
         .build(context)
         .unwrap();
     main_and_window(&app);
+    subscribe_all(&app, &["bw-1"]);
     let ow = app.overwolf();
+    let guest = invoke(&app, "bw-1", "adview_mount", mount_body("e1")).unwrap()["guestLabel"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ow.test_ads_tick(ow.test_now());
+    assert_eq!(ow.test_guest(&guest).unwrap()["navigated"], false);
     ow.test_start_consent();
     let start = Instant::now();
     while !ow
@@ -1425,6 +1440,11 @@ fn consent_not_required_loads_the_clearing_page() {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+    // Regression (Windows lab): the guest waited 3 s for the clearing page
+    // to close; ow-electron's guests load at once when consent is not
+    // required (D.6.5) [OBS: macOS and Windows labs].
+    assert!(ow.test_consent_gate_open());
+    assert_eq!(ow.test_guest(&guest).unwrap()["navigated"], true);
     let window = app.get_webview_window("ow-cmp-startup").unwrap();
     let url = window.url().unwrap();
     assert_eq!(

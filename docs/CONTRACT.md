@@ -2222,15 +2222,27 @@ every case, so ow-tauri runs it too.
 
 #### D.6.5 Ads and consent sequencing
 
-ow-electron attaches guests immediately; in every observed launch the ad
-document requests went out after the consent cookies existed [OBS]. ow-tauri
-makes that ordering deterministic [DEC]:
+ow-electron attaches guests immediately. When consent is required, a guest
+mounted while the startup consent window is open loads its ad document within
+3 ms of that window's close, about 0.5 to 0.7 s after the page saved
+consent; a guest mounted later loads at once [OBS: macOS lab, ten launches].
+When `cmp-eu-only` answers `no-cmp` (D.6.2), the guests load at once while
+the clearing page stays open for about 10 s [OBS: macOS lab with the answer
+stubbed, Windows lab on a US runner]. ow-tauri does the same, with a bound
+[DEC]:
 
 1. Each guest's first navigation waits until the startup consent window has
    closed, or until 3 s have passed since the guest was mounted, whichever
-   comes first. (The window itself waits for the `cmp-eu-only` response,
+   comes first. The guests waiting navigate as the window closes, not at the
+   next timer step. (The window itself waits for the `cmp-eu-only` response,
    D.6.1, so the 3 s bound is measured from the mount.)
-2. If the startup consent window fails to load, guests navigate at once.
+2. When `cmp-eu-only` says consent is not required, guests navigate as soon
+   as that answer opens the clearing page, without waiting for it to close.
+3. If the startup consent window fails to load, guests navigate at once.
+
+A consent the page saves reaches the guests that exist at that moment as
+`consent` messages (D.5), including guests that have not loaded yet, in both
+hosts; whether a guest exists by then depends on how fast the app mounts it.
 
 `adview_mount` itself never waits and never fails because of consent.
 

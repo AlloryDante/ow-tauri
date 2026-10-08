@@ -439,6 +439,22 @@ impl<R: Runtime> Overwolf<R> {
         self.0.consent_gate_open()
     }
 
+    /// In one snapshot: whether the consent gate is open (D.6.5) and the
+    /// guests still waiting for their first navigation.
+    #[must_use]
+    pub fn test_consent_gate_snapshot(&self) -> (bool, Vec<String>) {
+        self.0.with_core(|c| {
+            let waiting = c
+                .ads
+                .guests
+                .iter()
+                .filter(|(_, g)| !g.navigated)
+                .map(|(l, _)| l.clone())
+                .collect();
+            (c.consent.gate_open, waiting)
+        })
+    }
+
     /// The hidden consent windows that are still open.
     #[must_use]
     pub fn test_hidden_consent_windows(&self) -> Vec<String> {

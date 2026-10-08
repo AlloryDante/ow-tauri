@@ -156,11 +156,15 @@ impl<R: Runtime> Host<R> {
         tauri::async_runtime::spawn(async move {
             let (cacheable, required) = if host.analytics.user_enabled() {
                 let request = host.analytics.reporter().cmp_eu_only();
-                let body = match host.analytics.dispatcher.send(request, false).await {
-                    Ok(r) => Some(r.body),
-                    Err(err) => {
-                        host.log(LogLevel::Debug, &format!("cmp-eu-only failed: {err}"));
-                        None
+                let body = if let Some(stub) = crate::lab::cmp_eu_only_stub() {
+                    Some(stub)
+                } else {
+                    match host.analytics.dispatcher.send(request, false).await {
+                        Ok(r) => Some(r.body),
+                        Err(err) => {
+                            host.log(LogLevel::Debug, &format!("cmp-eu-only failed: {err}"));
+                            None
+                        }
                     }
                 };
                 let outcome = eu_only_outcome(body.as_deref());
@@ -197,6 +201,12 @@ impl<R: Runtime> Host<R> {
     fn open_startup_window(self: &Arc<Self>, round: u32) {
         let label = startup_label(round);
         if self.with_core(|c| c.consent.not_required) {
+            // Consent is not required: ow-electron's guests load at once,
+            // while its clearing page is still open (it closes after about
+            // 10 s) [OBS: macOS and Windows labs, `no-cmp`].
+            if round == 1 {
+                self.open_consent_gate("consent not required");
+            }
             self.open_startup_url(&label, &clear_consent_url(), round);
             return;
         }
@@ -356,14 +366,37 @@ impl<R: Runtime> Host<R> {
     }
 
     fn consent_window_failed(self: &Arc<Self>, label: &str, round: Option<u32>) {
-        let waiters = self.with_core(|c| {
-            if round == Some(1) || label == CMP_STARTUP_LABEL {
-                c.consent.gate_open = true;
-            }
-            round.map(|r| c.consent.resolve(r)).unwrap_or_default()
-        });
+        let waiters = self.with_core(|c| round.map(|r| c.consent.resolve(r)).unwrap_or_default());
         for tx in waiters {
             let _ = tx.send(());
+        }
+        if round == Some(1) || label == CMP_STARTUP_LABEL {
+            self.open_consent_gate("startup window closed");
+        }
+    }
+
+    /// Lets the ad guests make their first navigation (D.6.5), and starts
+    /// those that were waiting at once, as ow-electron loads its guests
+    /// within a few milliseconds of the startup consent window's close
+    /// [OBS]. The guests and the gate change under one lock, so a guest
+    /// never sees the gate open without its navigation started. Lab trace:
+    /// `consent-gate` with `reason`.
+    pub(crate) fn open_consent_gate(self: &Arc<Self>, reason: &str) {
+        let now = self.now();
+        let navigate = self.with_core(|c| {
+            if std::mem::replace(&mut c.consent.gate_open, true) {
+                None
+            } else {
+                Some(c.ads.take_first_navigations(true, now))
+            }
+        });
+        let Some(navigate) = navigate else { return };
+        crate::lab::record(
+            "wc-events.jsonl",
+            || serde_json::json!({ "kind": "consent-gate", "reason": reason, "waiting": navigate }),
+        );
+        for label in navigate {
+            self.navigate_guest(&label);
         }
     }
 

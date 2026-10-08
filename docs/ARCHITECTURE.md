@@ -286,7 +286,7 @@ sequenceDiagram
   P->>G: add child webview at rect (ads environment), init script adview-host.js + config
   P->>R: channel: adview-event {did-attach}
   P->>P: analytics: InsertStats 400025
-  P->>P: first navigation waits for ow-cmp-startup to close (at most 3 s after mount)
+  P->>P: consent required: first navigation waits for ow-cmp-startup to close (at most 3 s after mount)
   P->>G: load adview.html with Referer / Origin (request shaping, D.8)
   G->>P: adview_event {name: impression}
   P->>R: channel: adview-event {elementId, name}
@@ -342,7 +342,7 @@ sequenceDiagram
   C->>P: cmp_event {name: close}
   P->>G: consent message x2 to existing guests (TCF, then unified string)
   P->>K: only if both cookies are missing: write them (hostCookieFallback)
-  P->>G: release first navigations (or 3 s after mount)
+  P->>G: start the waiting first navigations at the close (or 3 s after mount)
   G->>K: ad page reads consent from the cookies
 ```
 

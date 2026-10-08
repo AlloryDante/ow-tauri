@@ -46,6 +46,10 @@
 //!   open either: the command answers as if the user dismissed the dialog at
 //!   once (or as if the OS opened the item) and records the request in
 //!   `blocked.jsonl`.
+//! - `OW_TAURI_LAB_CMP_EU_ONLY=<body>` answers the startup `cmp-eu-only`
+//!   request with HTTP 200 and `<body>` instead of sending it, as the
+//!   ow-electron harness's `--features` stand-in answers ow-electron's; the
+//!   answer is recorded in `host-requests.jsonl` (`stubbed: true`).
 //!
 //! Without the feature every function here is an empty inline function.
 
@@ -94,6 +98,28 @@ pub(crate) fn next_id() -> u64 {
 #[must_use]
 pub(crate) fn invisible() -> bool {
     imp::invisible()
+}
+
+/// The body that answers the startup `cmp-eu-only` request instead of the
+/// network (`OW_TAURI_LAB_CMP_EU_ONLY`, feature `lab`); `None` outside the
+/// lab. Recorded in `host-requests.jsonl` when used.
+#[cfg_attr(
+    not(feature = "plugin"),
+    expect(dead_code, reason = "only the consent host asks")
+)]
+#[must_use]
+pub(crate) fn cmp_eu_only_stub() -> Option<Vec<u8>> {
+    let body = imp::cmp_eu_only_stub()?;
+    record("host-requests.jsonl", || {
+        serde_json::json!({
+            "phase": "stubbed",
+            "url": "https://features.overwolf.com/experiments/cmp-eu-only",
+            "stubbed": true,
+            "status": 200,
+            "responseBody": String::from_utf8_lossy(&body),
+        })
+    });
+    Some(body)
 }
 
 /// Lab windows are invisible, so nothing else may appear either: returns
@@ -265,6 +291,13 @@ mod imp {
             .get_or_init(|| std::env::var("OW_TAURI_LAB_INVISIBLE").is_ok_and(|v| v.trim() == "1"))
     }
 
+    pub(super) fn cmp_eu_only_stub() -> Option<Vec<u8>> {
+        std::env::var("OW_TAURI_LAB_CMP_EU_ONLY")
+            .ok()
+            .filter(|b| !b.is_empty())
+            .map(String::into_bytes)
+    }
+
     #[cfg(test)]
     mod tests {
         use super::safe_name;
@@ -301,6 +334,11 @@ mod imp {
     #[inline]
     pub(super) fn invisible() -> bool {
         false
+    }
+
+    #[inline]
+    pub(super) fn cmp_eu_only_stub() -> Option<Vec<u8>> {
+        None
     }
 }
 

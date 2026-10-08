@@ -143,6 +143,24 @@ impl AdsCore {
             .map(|(l, _)| l.clone())
     }
 
+    /// Starts the first navigation of every guest that may make it at
+    /// `now` (D.6.5): all of them when the consent `gate` is open, else
+    /// those mounted [`CONSENT_WAIT_MS`] ago or more. Returns their labels;
+    /// the caller navigates them.
+    pub(crate) fn take_first_navigations(&mut self, gate: bool, now: u64) -> Vec<String> {
+        self.guests
+            .iter_mut()
+            .filter(|(_, g)| {
+                !g.navigated && (gate || now.saturating_sub(g.mounted_ms) >= CONSENT_WAIT_MS)
+            })
+            .map(|(label, g)| {
+                g.navigated = true;
+                g.begin_load(now);
+                label.clone()
+            })
+            .collect()
+    }
+
     fn labels_of(&self, embedder: &str) -> Vec<String> {
         self.guests
             .iter()
@@ -982,7 +1000,7 @@ impl<R: Runtime> Host<R> {
         }
     }
 
-    fn navigate_guest(self: &Arc<Self>, label: &str) {
+    pub(super) fn navigate_guest(self: &Arc<Self>, label: &str) {
         let Some(webview) = self.app.get_webview(label) else {
             return;
         };
@@ -1017,18 +1035,13 @@ impl<R: Runtime> Host<R> {
         let gate = self.consent_gate_open();
         let retry_ms = self.info.config.ads.load_error_retry_ms;
         let (navigate, reload, failed, finished, logs) = self.with_core(|c| {
-            let mut navigate = Vec::new();
+            let navigate = c.ads.take_first_navigations(gate, now);
             let mut reload = Vec::new();
             let mut failed = Vec::new();
             let mut finished = Vec::new();
             let mut logs = Vec::new();
             for (label, g) in &mut c.ads.guests {
-                if !g.navigated {
-                    if gate || now.saturating_sub(g.mounted_ms) >= CONSENT_WAIT_MS {
-                        g.navigated = true;
-                        g.begin_load(now);
-                        navigate.push(label.clone());
-                    }
+                if !g.navigated || navigate.contains(label) {
                     continue;
                 }
                 if g.finish_pending

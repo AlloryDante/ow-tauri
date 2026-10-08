@@ -170,6 +170,11 @@ the npm package share one version number.
   request that is due: on Windows, four guests mounting at once could
   occupy every runtime worker while WebView2 created them, and requests
   left up to ~300 ms late (CONTRACT E.1).
+- Ads and consent (CONTRACT D.6.5): when `cmp-eu-only` says consent is not
+  required, guests navigate at once, as ow-electron's do, instead of
+  waiting up to 3 s for the clearing page to close. When consent is
+  required, the guests waiting for the startup consent window navigate as
+  it closes, as in ow-electron, not at the next 250 ms timer step.
 - Invisible lab (feature `lab`, `OW_TAURI_LAB_INVISIBLE=1`, macOS): the app
   is never activated for the whole run. App activation is a no-op and
   `makeKeyAndOrderFront:` orders the window front without making it key, so

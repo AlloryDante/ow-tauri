@@ -286,7 +286,7 @@ Known differences from ow-electron, each deliberate:
 | Linux: subresource shaping waits for a web-process extension | not built yet | D.8.3 |
 | no generic Electron `<webview>` methods on `<owadview>`; no `did-frame-*` / `media-*` events | undocumented for `<owadview>`, no platform equivalent, and some would give app code control of remote content | B.3.3, B.3.5 |
 | the host sends `ad-clicked` to the guest and the element | popups and gesture navigations open in the system browser (OQ-17) | D.5, D.7 |
-| first ad navigation waits up to 3 s for the startup consent window | makes ow-electron's observed ordering deterministic | D.6.5 |
+| first ad navigation waits for the startup consent window as ow-electron's does, but at most 3 s from the mount | a consent page that never closes cannot hold the ads back | D.6.5 |
 | crash-report threshold of 10 s | interim until R3-4 | E.2 |
 | consent cookies written by the host if the page could not | only when both cookies are missing (`consent.hostCookieFallback`) | D.6.3 |
 | ow-tauri options (`analytics.userSwitch`, `analytics.muidStrategy: per-install`, a numeric `ads.maxRecoveries`, `logging.enabled`, `ads.transparentGuests: false`) | off by default; documented as non-parity | A.1 |
