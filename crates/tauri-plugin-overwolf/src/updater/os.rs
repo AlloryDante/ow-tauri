@@ -41,10 +41,7 @@ impl UpdateOs for Unsupported {
         String::new()
     }
 
-    fn authenticode(
-        &self,
-        _file: &std::path::Path,
-    ) -> crate::Result<super::verify::Authenticode> {
+    fn authenticode(&self, _file: &std::path::Path) -> crate::Result<super::verify::Authenticode> {
         Err(Self::error())
     }
 
@@ -194,12 +191,9 @@ mod windows {
             let file = dir.join("setup.exe");
             std::fs::write(&file, b"MZ not really a program").unwrap();
             let names = ["Example Studio".to_owned()];
-            let result = authenticode(&file)
-                .and_then(|r| verify::check_publisher(&r, &file, &names));
-            assert_eq!(
-                result.unwrap_err().code(),
-                crate::ErrorCode::Verification
-            );
+            let result =
+                authenticode(&file).and_then(|r| verify::check_publisher(&r, &file, &names));
+            assert_eq!(result.unwrap_err().code(), crate::ErrorCode::Verification);
             let _ = std::fs::remove_dir_all(&dir);
         }
     }

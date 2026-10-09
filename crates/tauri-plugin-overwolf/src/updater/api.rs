@@ -292,7 +292,8 @@ mod tests {
             notes(Some(&serde_json::json!("fixes"))).as_deref(),
             Some("fixes")
         );
-        let list = serde_json::json!([{ "version": "2", "note": "a" }, { "version": "1", "note": "b" }]);
+        let list =
+            serde_json::json!([{ "version": "2", "note": "a" }, { "version": "1", "note": "b" }]);
         assert_eq!(notes(Some(&list)).as_deref(), Some("a\n\nb"));
         assert_eq!(notes(Some(&serde_json::json!([1]))), None);
     }

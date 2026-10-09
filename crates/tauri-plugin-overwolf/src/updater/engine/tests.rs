@@ -152,7 +152,12 @@ fn block<T>(f: impl Future<Output = T>) -> T {
 }
 
 fn check(app: &App<MockRuntime>) -> Result<Option<Update>> {
-    block(async { UpdaterBuilder::new(app.handle().clone()).build()?.check().await })
+    block(async {
+        UpdaterBuilder::new(app.handle().clone())
+            .build()?
+            .check()
+            .await
+    })
 }
 
 fn signed() -> Value {
@@ -164,7 +169,9 @@ fn check_download_install() {
     let feed = start_feed("2.0.0", b"test");
     let os = FakeOs::new(Signer::Subject("CN=Example Studio, C=PT"));
     let (app, dir, shared) = mock("updater-flow", &feed, &signed(), Arc::clone(&os));
-    let update = check(&app).unwrap().expect("2.0.0 is newer than the mock app");
+    let update = check(&app)
+        .unwrap()
+        .expect("2.0.0 is newer than the mock app");
     assert_eq!(update.version, "2.0.0");
     assert!(!update.staged);
     assert_eq!(update.body.as_deref(), Some("fixes"));
@@ -369,7 +376,9 @@ fn publisher_data_is_required() {
     let feed = start_feed("2.0.0", b"test");
     let os = FakeOs::new(Signer::Blocked);
     let (app, dir, _shared) = mock("updater-r5", &feed, &json!({}), Arc::clone(&os));
-    let err = UpdaterBuilder::new(app.handle().clone()).build().unwrap_err();
+    let err = UpdaterBuilder::new(app.handle().clone())
+        .build()
+        .unwrap_err();
     assert_eq!(err.code(), ErrorCode::Config);
     assert!(err.to_string().contains("publisherNames"), "{err}");
     let (app2, dir2, _) = mock(
@@ -427,7 +436,14 @@ fn rust_channel_allows_downgrade() {
     })
     .unwrap();
     assert_eq!(found.unwrap().version, "0.0.1");
-    assert!(feed.server.seen().last().unwrap().line.contains("/feed/beta.yml"));
+    assert!(
+        feed.server
+            .seen()
+            .last()
+            .unwrap()
+            .line
+            .contains("/feed/beta.yml")
+    );
     let none = block(async {
         UpdaterBuilder::new(app.handle().clone())
             .channel("beta")
@@ -492,7 +508,10 @@ fn headers_reach_the_feed_only() {
     let seen = feed.server.seen();
     let feed_req = seen.iter().find(|r| r.path().contains(".yml")).unwrap();
     assert_eq!(feed_req.header("x-token"), Some("secret"));
-    let file_req = seen.iter().find(|r| r.path() == "/files/setup.exe").unwrap();
+    let file_req = seen
+        .iter()
+        .find(|r| r.path() == "/files/setup.exe")
+        .unwrap();
     assert_eq!(file_req.header("x-token"), None);
     assert!(
         UpdaterBuilder::new(app.handle().clone())
@@ -544,7 +563,11 @@ fn settings_resolution() {
     );
     // Ignored in release builds.
     let r = Settings::resolve(&config, "abc", Some(dev), false, &Overrides::default()).unwrap();
-    assert!(r.feed.as_str().starts_with("https://electron-updates.overwolf.com/"));
+    assert!(
+        r.feed
+            .as_str()
+            .starts_with("https://electron-updates.overwolf.com/")
+    );
     let github = "provider: github\nurl: https://x.example/\n";
     assert!(Settings::resolve(&config, "abc", Some(github), true, &Overrides::default()).is_err());
     let o = Overrides {

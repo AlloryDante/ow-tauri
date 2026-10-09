@@ -678,8 +678,7 @@ async fn stream<C: FnMut(usize, Option<u64>)>(
     }
     let total = length.or(target.size);
     let cap = target.size.unwrap_or(MAX_UNSIZED_DOWNLOAD);
-    let mut out =
-        File::create(part).map_err(|e| Error::from_io("Creating the update file", &e))?;
+    let mut out = File::create(part).map_err(|e| Error::from_io("Creating the update file", &e))?;
     let mut hasher = Sha512::new();
     let mut transferred: u64 = 0;
     while let Some(chunk) = next_chunk(&mut response).await? {
@@ -717,7 +716,8 @@ async fn fetch_signature(ctx: &Ctx, file: &Url) -> Result<String> {
     let sig = read_capped(response, MAX_SIGNATURE_BYTES)
         .await
         .map_err(failed)?;
-    String::from_utf8(sig).map_err(|_| Error::verification("The update signature file does not parse."))
+    String::from_utf8(sig)
+        .map_err(|_| Error::verification("The update signature file does not parse."))
 }
 
 /// Verifies the open installer (R5): SHA-512 from the handle, then the
@@ -836,7 +836,9 @@ impl Drop for PendingInstall {
         };
         match launch(&self.ctx, staged, true) {
             Ok(()) => log::info!(target: LOG_TARGET, "the update installer started at exit"),
-            Err(err) => log::error!(target: LOG_TARGET, "the update was not installed at exit: {err}"),
+            Err(err) => {
+                log::error!(target: LOG_TARGET, "the update was not installed at exit: {err}");
+            }
         }
     }
 }

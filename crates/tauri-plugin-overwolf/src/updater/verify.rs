@@ -475,7 +475,10 @@ y/rUw2y8/hOUYjZU71eHp/Wo1KZ40fGy2VJEDl34XMJM+TX48Ss/17u3IvIfbVR1FkZZSNCisQbuQY+b
         let verification = crate::ErrorCode::Verification;
         // No names: nothing is trusted (R5).
         assert_eq!(code(&ok, &[]), verification);
-        assert_eq!(code(&report(0, Some("CN=Other"), &here), &names), verification);
+        assert_eq!(
+            code(&report(0, Some("CN=Other"), &here), &names),
+            verification
+        );
         assert_eq!(code(&report(0, None, &here), &names), verification);
         assert_eq!(
             code(&report(2, Some("CN=Studio Inc"), &here), &names),
@@ -485,7 +488,10 @@ y/rUw2y8/hOUYjZU71eHp/Wo1KZ40fGy2VJEDl34XMJM+TX48Ss/17u3IvIfbVR1FkZZSNCisQbuQY+b
             code(&report(0, Some("CN=Studio Inc"), r"C:\other.exe"), &names),
             verification
         );
-        assert_eq!(code(&report(0, Some("CN=Studio Inc"), ""), &names), verification);
+        assert_eq!(
+            code(&report(0, Some("CN=Studio Inc"), ""), &names),
+            verification
+        );
         assert!(parse_authenticode("{}").is_err());
         assert!(parse_authenticode("").is_err());
         let r = parse_authenticode("\u{feff}{\"Status\":2,\"SignerCertificate\":null}").unwrap();

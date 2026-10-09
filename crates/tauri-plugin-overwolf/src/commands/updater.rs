@@ -365,7 +365,9 @@ mod tests {
             let log = Arc::clone(&events);
             let channel = Channel::new(move |body| {
                 if let InvokeResponseBody::Json(text) = body {
-                    log.lock().unwrap().push(serde_json::from_str(&text).unwrap());
+                    log.lock()
+                        .unwrap()
+                        .push(serde_json::from_str(&text).unwrap());
                 }
                 Ok(())
             });
@@ -379,10 +381,7 @@ mod tests {
             (app, os)
         }
 
-        fn check(
-            app: &App<MockRuntime>,
-            options: Value,
-        ) -> Result<Option<UpdateMetadata>> {
+        fn check(app: &App<MockRuntime>, options: Value) -> Result<Option<UpdateMetadata>> {
             block(updater_check(
                 webview(app, "main"),
                 state(app),
@@ -422,12 +421,21 @@ mod tests {
                     json!({ "event": "Finished" }),
                 ]
             );
-            block(updater_install(webview(&app, "main"), state(&app), meta.rid)).unwrap();
+            block(updater_install(
+                webview(&app, "main"),
+                state(&app),
+                meta.rid,
+            ))
+            .unwrap();
             let launches = os.launches();
             assert_eq!(launches.len(), 1);
             assert!(launches[0].0.args.iter().any(|a| a == "/UPDATE"));
             // The resource is gone after the install.
-            let again = block(updater_install(webview(&app, "main"), state(&app), meta.rid));
+            let again = block(updater_install(
+                webview(&app, "main"),
+                state(&app),
+                meta.rid,
+            ));
             assert_eq!(again.unwrap_err().code(), ErrorCode::NotFound);
         }
 
@@ -441,7 +449,11 @@ mod tests {
             );
             // Install before download, an unknown rid.
             let meta = check(&app, json!({ "timeout": 5000 })).unwrap().unwrap();
-            let early = block(updater_install(webview(&app, "main"), state(&app), meta.rid));
+            let early = block(updater_install(
+                webview(&app, "main"),
+                state(&app),
+                meta.rid,
+            ));
             assert_eq!(early.unwrap_err().code(), ErrorCode::NotFound);
             let (channel, _) = recorder();
             let unknown = block(updater_download(
@@ -485,13 +497,25 @@ mod tests {
             let off = config(json!({}));
             let on = config(json!({ "allowJsDowngrade": true }));
             let rust_on = config(json!({ "allowDowngrade": true }));
-            assert!(!js_downgrade(&off, &options(json!({ "allowDowngrade": true }))));
+            assert!(!js_downgrade(
+                &off,
+                &options(json!({ "allowDowngrade": true }))
+            ));
             assert!(!js_downgrade(&off, &options(json!({ "channel": "beta" }))));
             assert!(js_downgrade(&on, &options(json!({ "channel": "beta" }))));
-            assert!(js_downgrade(&on, &options(json!({ "allowDowngrade": true }))));
-            assert!(!js_downgrade(&on, &options(json!({ "channel": "beta", "allowDowngrade": false }))));
+            assert!(js_downgrade(
+                &on,
+                &options(json!({ "allowDowngrade": true }))
+            ));
+            assert!(!js_downgrade(
+                &on,
+                &options(json!({ "channel": "beta", "allowDowngrade": false }))
+            ));
             assert!(js_downgrade(&rust_on, &options(json!({}))));
-            assert!(!js_downgrade(&rust_on, &options(json!({ "allowDowngrade": false }))));
+            assert!(!js_downgrade(
+                &rust_on,
+                &options(json!({ "allowDowngrade": false }))
+            ));
 
             let feed = start_feed("0.0.1", b"test");
             let (app, _os) = setup(
@@ -499,9 +523,18 @@ mod tests {
                 &feed,
                 &json!({ "publisherNames": ["Example Studio"] }),
             );
-            assert!(check(&app, json!({ "channel": "beta", "allowDowngrade": true })).unwrap().is_none());
             assert!(
-                feed.server.seen().last().unwrap().line.contains("/feed/beta.yml"),
+                check(&app, json!({ "channel": "beta", "allowDowngrade": true }))
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                feed.server
+                    .seen()
+                    .last()
+                    .unwrap()
+                    .line
+                    .contains("/feed/beta.yml"),
                 "the channel still applies"
             );
             let (app, _os) = setup(

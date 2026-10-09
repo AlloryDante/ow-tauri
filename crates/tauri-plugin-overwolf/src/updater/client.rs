@@ -296,7 +296,12 @@ pub(crate) mod tests {
     }
 
     /// Writes a complete response.
-    pub(crate) fn respond(stream: &mut TcpStream, status: &str, headers: &[(&str, &str)], body: &[u8]) {
+    pub(crate) fn respond(
+        stream: &mut TcpStream,
+        status: &str,
+        headers: &[(&str, &str)],
+        body: &[u8],
+    ) {
         let mut head = format!(
             "HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n",
             body.len()
@@ -434,9 +439,8 @@ pub(crate) mod tests {
         let server = Server::start(Arc::new(|s, req| {
             let stall = req.path() == "/stall";
             let total = if stall { MB } else { 50 * MB };
-            let head = format!(
-                "HTTP/1.1 200 OK\r\ncontent-length: {total}\r\nconnection: close\r\n\r\n"
-            );
+            let head =
+                format!("HTTP/1.1 200 OK\r\ncontent-length: {total}\r\nconnection: close\r\n\r\n");
             let _ = s.write_all(head.as_bytes());
             let chunk = vec![7_u8; MB / 2];
             for i in 0..(total / chunk.len()) {
@@ -473,7 +477,10 @@ pub(crate) mod tests {
         })
         .unwrap_err();
         assert_eq!(err.code(), ErrorCode::Network);
-        assert!(err.to_string().contains("in time") || err.to_string().contains("broke off"), "{err}");
+        assert!(
+            err.to_string().contains("in time") || err.to_string().contains("broke off"),
+            "{err}"
+        );
     }
 
     /// SEC-M10: size caps count decompressed bytes.
@@ -506,7 +513,11 @@ pub(crate) mod tests {
         .unwrap();
         assert_eq!(ok.len(), plain.len());
         // The client asked for compressed bodies.
-        assert!(server.seen()[0].header("accept-encoding").is_some_and(|v| v.contains("gzip")));
+        assert!(
+            server.seen()[0]
+                .header("accept-encoding")
+                .is_some_and(|v| v.contains("gzip"))
+        );
     }
 
     /// SEC-M10, §7.4: requests go through the proxy; a refusing proxy is a
@@ -520,19 +531,26 @@ pub(crate) mod tests {
         })
         .unwrap();
         let body = block(async {
-            let r = http.get(&Url::parse("http://localhost:9/feed.yml").unwrap(), &[]).await?;
+            let r = http
+                .get(&Url::parse("http://localhost:9/feed.yml").unwrap(), &[])
+                .await?;
             read_capped(r, 100).await
         })
         .unwrap();
         assert_eq!(body, b"via proxy");
         let seen = proxy.seen();
-        assert!(seen[0].line.starts_with("GET http://localhost:9/feed.yml"), "{:?}", seen[0]);
+        assert!(
+            seen[0].line.starts_with("GET http://localhost:9/feed.yml"),
+            "{:?}",
+            seen[0]
+        );
         let refusing = Http::new(&HttpSettings {
             proxy: ProxyChoice::Fixed("http://127.0.0.1:9".into()),
             ..settings(5_000)
         })
         .unwrap();
-        let err = block(refusing.get(&Url::parse("http://localhost:9/x").unwrap(), &[])).unwrap_err();
+        let err =
+            block(refusing.get(&Url::parse("http://localhost:9/x").unwrap(), &[])).unwrap_err();
         assert_eq!(err.code(), ErrorCode::Network);
     }
 
