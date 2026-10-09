@@ -37,6 +37,18 @@ pub(crate) fn webview<R: Runtime, M: Manager<R>>(manager: &M, label: &str) -> Op
         .map(|w| AsRef::<Webview<R>>::as_ref(&w).clone())
 }
 
+/// The labels of every open window.
+#[cfg(ow_tauri_ads)]
+pub(crate) fn window_labels<R: Runtime, M: Manager<R>>(manager: &M) -> Vec<String> {
+    manager.windows().into_keys().collect()
+}
+
+/// The labels of every open window.
+#[cfg(not(ow_tauri_ads))]
+pub(crate) fn window_labels<R: Runtime, M: Manager<R>>(manager: &M) -> Vec<String> {
+    manager.webview_windows().into_keys().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -50,5 +62,6 @@ mod tests {
         assert_eq!(window(&app, "main").unwrap().label(), "main");
         assert_eq!(webview(&app, "main").unwrap().label(), "main");
         assert!(window(&app, "missing").is_none());
+        assert_eq!(window_labels(&app), ["main"]);
     }
 }

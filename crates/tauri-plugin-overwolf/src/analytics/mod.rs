@@ -11,7 +11,7 @@
 //! - [`window_analytics_name`]: the `name` field of `<label>_window_closed`;
 //! - [`session::Session`]: which events a session sends, and when (E.2, E.3).
 //!
-//! The plugin sends the requests through a [`Transport`] (a `hyper`
+//! The plugin sends the requests through a `Transport` (a `hyper`
 //! client by default; tests capture them).
 //!
 //! ```

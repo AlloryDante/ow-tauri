@@ -236,7 +236,7 @@ impl CmpWindowOptions {
 }
 
 /// `ExternalPaymentUserIdOptions` for
-/// [`Overwolf::set_external_payment_user_id`](crate::Overwolf::set_external_payment_user_id).
+/// `Overwolf::set_external_payment_user_id`.
 ///
 /// ```
 /// use tauri_plugin_overwolf::PaymentUserIdOptions;

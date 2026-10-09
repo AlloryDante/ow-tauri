@@ -29,7 +29,7 @@ tauri::Builder::default()
 //!   `unstable` feature (child webviews) through a helper crate; on Linux
 //!   ads are unsupported and Tauri stays stable.
 //! - `updater`: the update client (Windows; `unsupported` elsewhere).
-//! - `build`: the app's build step ([`build::run`]); use it as a build
+//! - `build`: the app's build step (`build::run`); use it as a build
 //!   dependency with `default-features = false`.
 //! - `test-util`, `lab`: test hooks and the parity lab. Refused in release
 //!   builds; never enable them in a shipped app.

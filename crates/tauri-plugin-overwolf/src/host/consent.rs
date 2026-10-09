@@ -1028,8 +1028,8 @@ pub(crate) fn web_content_terminated<R: Runtime>(core: &Arc<Core<R>>, label: &st
 /// Whether an app window (any window but the plugin's own `ow-cmp*` and
 /// `owad-*`) other than `except` exists.
 fn app_window_left<R: Runtime>(core: &Core<R>, except: Option<&str>) -> bool {
-    tauri::Manager::windows(&core.app)
-        .keys()
+    crate::compat::window_labels(&core.app)
+        .iter()
         .any(|l| Some(l.as_str()) != except && !crate::config::is_reserved_label(l))
 }
 

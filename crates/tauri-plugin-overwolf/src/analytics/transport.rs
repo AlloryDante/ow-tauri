@@ -55,10 +55,16 @@ pub(crate) struct HyperTransport {
     client: Option<HyperClient>,
 }
 
-type HyperClient = hyper_util::client::legacy::Client<
-    hyper_tls::HttpsConnector<ProxyConnector>,
-    http_body_util::Full<bytes::Bytes>,
->;
+type HyperClient =
+    hyper_util::client::legacy::Client<Connector, http_body_util::Full<bytes::Bytes>>;
+
+/// HTTPS over the proxy-aware TCP connector (desktop).
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+type Connector = hyper_tls::HttpsConnector<ProxyConnector>;
+/// Mobile builds send nothing (DESIGN §3.5) and build no TLS stack: the
+/// client is never created there.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+type Connector = ProxyConnector;
 
 impl std::fmt::Debug for HyperTransport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -85,6 +91,7 @@ impl HyperTransport {
     }
 
     /// The transport with `idle` as the pool's idle timeout (`None`: never).
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn with_pool_idle_timeout(idle: Option<Duration>) -> Self {
         let tls = native_tls::TlsConnector::builder()
             .request_alpns(&["h2", "http/1.1"])
@@ -103,6 +110,14 @@ impl HyperTransport {
                 .build(https)
         });
         HyperTransport { client }
+    }
+
+    /// Mobile: no client; every request fails with "HTTP client
+    /// unavailable".
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    fn with_pool_idle_timeout(idle: Option<Duration>) -> Self {
+        let _ = idle;
+        HyperTransport { client: None }
     }
 }
 
@@ -168,18 +183,30 @@ pub(crate) fn allowed_host(url: &str) -> bool {
 /// Decodes a response body by its `content-encoding` (the encodings the
 /// request's `accept-encoding` offers, E.1); others pass through.
 async fn decode_body(encoding: Option<&str>, body: &[u8]) -> Result<Vec<u8>, String> {
-    use async_compression::tokio::bufread::{BrotliDecoder, GzipDecoder, ZlibDecoder, ZstdDecoder};
+    use async_compression::tokio::bufread::{BrotliDecoder, GzipDecoder, ZlibDecoder};
     use tokio::io::AsyncReadExt as _;
     let mut out = Vec::new();
     let read = match encoding.map(|e| e.trim().to_ascii_lowercase()).as_deref() {
         Some("gzip" | "x-gzip") => GzipDecoder::new(body).read_to_end(&mut out).await,
         Some("deflate") => ZlibDecoder::new(body).read_to_end(&mut out).await,
         Some("br") => BrotliDecoder::new(body).read_to_end(&mut out).await,
-        Some("zstd") => ZstdDecoder::new(body).read_to_end(&mut out).await,
+        Some("zstd") => decode_zstd(body, &mut out),
         _ => return Ok(body.to_vec()),
     };
     read.map(|_| out)
         .map_err(|e| format!("decoding the response failed: {e}"))
+}
+
+/// Decodes a whole zstd body (every frame) into `out` with the pure-Rust
+/// decoder.
+fn decode_zstd(mut body: &[u8], out: &mut Vec<u8>) -> std::io::Result<usize> {
+    use std::io::Read as _;
+    while !body.is_empty() {
+        let mut frame = ruzstd::decoding::StreamingDecoder::new(&mut body)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        frame.read_to_end(out)?;
+    }
+    Ok(out.len())
 }
 
 /// Builds the `http` request: the method, the URL, the headers in order,
@@ -736,6 +763,26 @@ mod tests {
             (head, body)
         });
         (url, handle)
+    }
+
+    /// E.1 offers `zstd`: a zstd body (one frame, or several in a row) is
+    /// decoded by the pure-Rust decoder, and a broken one is an error.
+    #[test]
+    fn zstd_bodies_are_decoded() {
+        use ruzstd::encoding::{CompressionLevel, compress_to_vec};
+        let one = compress_to_vec(&br#"{"ok":1}"#[..], CompressionLevel::Fastest);
+        let decoded = tauri::async_runtime::block_on(decode_body(Some(" ZSTD "), &one)).unwrap();
+        assert_eq!(decoded, br#"{"ok":1}"#);
+        let mut two = one.clone();
+        two.extend(compress_to_vec(&b"[2]"[..], CompressionLevel::Fastest));
+        let decoded = tauri::async_runtime::block_on(decode_body(Some("zstd"), &two)).unwrap();
+        assert_eq!(decoded, br#"{"ok":1}[2]"#);
+        let err =
+            tauri::async_runtime::block_on(decode_body(Some("zstd"), b"not zstd")).unwrap_err();
+        assert!(err.starts_with("decoding the response failed"), "{err}");
+        // Unknown encodings pass through.
+        let raw = tauri::async_runtime::block_on(decode_body(Some("identity"), b"x")).unwrap();
+        assert_eq!(raw, b"x");
     }
 
     /// Regression (lab diff): the wire carried `accept: */*` (added by the

@@ -53,6 +53,7 @@ plugin = [
   "dep:bytes",
   "dep:tower-service",
   "dep:async-compression",
+  "dep:ruzstd",
   "dep:objc2",
   "dep:objc2-foundation",
   "dep:block2",
@@ -100,25 +101,36 @@ embed-resource = { version = "3.0.12", optional = true }
 tauri = { workspace = true, optional = true, features = ["webview-data-url"] }
 tauri-plugin-opener = { workspace = true, optional = true }
 # The update client (CONTRACT I).
-reqwest = { workspace = true, optional = true, features = ["gzip", "deflate", "brotli", "zstd"] }
+# No `zstd`: its C library (zstd-sys) does not cross-compile where docs.rs
+# builds the Windows and macOS docs. The update feed is the app's own server;
+# its requests offer gzip, deflate and brotli.
+reqwest = { workspace = true, optional = true, features = ["gzip", "deflate", "brotli"] }
 # Host analytics and the consent request (CONTRACT E.1): a plain hyper client,
 # because reqwest always adds `accept: */*`, which ow-electron does not send.
 # Every crate below is already in the tree through Tauri at these versions;
-# TLS is the native-tls stack with ALPN (HTTP/2), proxies come from the
-# system matcher reqwest also uses.
+# TLS is the native-tls stack with ALPN (HTTP/2; desktop only, see below),
+# proxies come from the system matcher reqwest also uses.
 hyper = { version = "1.11.1", optional = true, features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1.21", optional = true, features = ["client-legacy", "client-proxy", "client-proxy-system", "http1", "http2", "tokio"] }
-hyper-tls = { version = "0.6.0", optional = true, features = ["alpn"] }
-native-tls = { version = "0.2.18", optional = true, features = ["alpn"] }
 http = { version = "1.5.0", optional = true }
 http-body-util = { version = "0.1.5", optional = true }
 bytes = { version = "1.12.1", optional = true }
 tower-service = { version = "0.3.3", optional = true }
-async-compression = { version = "0.4.48", optional = true, features = ["tokio", "gzip", "zlib", "brotli", "zstd"] }
+async-compression = { version = "0.4.48", optional = true, features = ["tokio", "gzip", "zlib", "brotli"] }
+# zstd response bodies of host requests (E.1 offers `zstd`, as ow-electron
+# does): a pure-Rust decoder, so no C library is built for any target.
+ruzstd = { version = "0.9.0", optional = true, default-features = false, features = ["std", "hash"] }
 tokio = { workspace = true, optional = true, features = ["io-util", "rt-multi-thread"] }
 uuid = { workspace = true, optional = true }
 sys-locale = { workspace = true, optional = true }
 log = { workspace = true, optional = true }
+
+# TLS for host requests on desktop. Mobile builds answer `unsupported` and send
+# nothing (DESIGN §3.5), so they build no TLS stack (native-tls is OpenSSL on
+# Android).
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+hyper-tls = { version = "0.6.0", optional = true, features = ["alpn"] }
+native-tls = { version = "0.2.18", optional = true, features = ["alpn"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

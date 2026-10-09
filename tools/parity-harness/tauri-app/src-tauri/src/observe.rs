@@ -454,7 +454,9 @@ fn check_cookies(app: &AppHandle<Wry>) {
                         "httpOnly": c.http_only().unwrap_or(false),
                         "session": c.expires().is_none_or(|e| e.is_session()),
                         "sameSite": c.same_site().map(|s| s.to_string().to_lowercase()),
-                        "expirationDate": c.expires_datetime().map(|d| d.unix_timestamp()),
+                        "expirationDate": c
+                            .expires_datetime()
+                            .map(tauri::webview::cookie::time::OffsetDateTime::unix_timestamp),
                     })
                 })
                 .collect(),
