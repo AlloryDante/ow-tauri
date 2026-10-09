@@ -941,6 +941,8 @@ function safeUrl(wc) {
 let liveLoads = 0;
 let liveStopped = false;
 let mainWindow = null;
+// Set when the run quits: the app's close handler lets the window close.
+let quitting = false;
 let firstGuestAt = null;
 
 /**
@@ -1108,6 +1110,12 @@ async function startWindowAndActions() {
     focusable: false,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
+  // title-set-in-setup (DESIGN §5.2 #2): the app retitles its window right
+  // after creating it, before its page loads.
+  if (config.setupTitle) mainWindow.setTitle(config.setupTitle);
+  // custom-ua (§5.2 #3): the app gives its window its own user agent.
+  if (config.windowUserAgent) mainWindow.webContents.setUserAgent(config.windowUserAgent);
+  if (config.closeHandler) installCloseHandler(mainWindow, config.closeHandler);
   if (typeof config.closeMainWindowAtMs === 'number') {
     // last-window-during-consent: the app's only window closes this long
     // after it was created, whatever the consent window is doing.
@@ -1162,6 +1170,31 @@ async function startWindowAndActions() {
   setTimeout(quitFlow, config.durationMs);
 }
 
+/**
+ * DESIGN §5.2 #6, #7: the app's own handler of a close request on its
+ * window, as a tray app writes it (`close` + `preventDefault`), off while
+ * the run quits. `tray` / `tray-js`: hide; `delay-destroy`: destroy 500 ms
+ * later; `confirm-5s`: show the window again (inactive, invisible) 5 s later.
+ */
+function installCloseHandler(win, handler) {
+  win.on('close', (event) => {
+    if (quitting) return;
+    event.preventDefault();
+    record('events.jsonl', { kind: 'close-handled', handler });
+    if (handler === 'delay-destroy') {
+      setTimeout(() => win.isDestroyed() || win.destroy(), 500);
+    } else if (handler === 'confirm-5s') {
+      setTimeout(() => {
+        if (win.isDestroyed()) return;
+        makeInvisible(win);
+        BrowserWindow.prototype.showInactive.call(win);
+      }, 5000);
+    } else {
+      win.hide();
+    }
+  });
+}
+
 async function quitFlow() {
   record('events.jsonl', { kind: 'quit-flow-start' });
   snapshotOverwolf('before-quit');
@@ -1171,9 +1204,15 @@ async function quitFlow() {
       await probeGuest(wc, 'end');
     }
   }
-  if (config.quitStyle === 'quit') {
-    // Quit with the window still open, as a tray app's "Exit" menu would.
+  quitting = true;
+  if (config.quitStyle === 'quit' || config.quitStyle === 'terminate') {
+    // Quit with the window still open, as a tray app's "Exit" menu would
+    // (on macOS app.quit() is the app menu's Quit, [NSApp terminate:]).
     app.quit();
+    return;
+  }
+  if (config.quitStyle === 'exit') {
+    app.exit(0);
     return;
   }
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();

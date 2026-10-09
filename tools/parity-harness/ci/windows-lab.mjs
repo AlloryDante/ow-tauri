@@ -66,6 +66,8 @@ export const LAB_SCENARIOS = [
   'standard-remove',
   'owadtestad',
   'introspect',
+  // DESIGN §5.2 #22, the Windows half (http://tauri.localhost frames).
+  'local-frame',
 ];
 
 /** Run options of the R2 base run `A` (the README's T-A run). */

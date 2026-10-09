@@ -77,6 +77,13 @@ fn harness_reply(id: u64, reply: Value) {
     harness::get().answer(id, reply);
 }
 
+/// Whether the run is quitting: the page's close handler (`closeHandler:
+/// "tray-js"`) lets the window close then.
+#[tauri::command]
+fn harness_quitting() -> bool {
+    driver::quitting()
+}
+
 /// What the harness page reports about itself once loaded (user agent,
 /// the JavaScript API's functions).
 #[tauri::command]
@@ -86,7 +93,9 @@ fn harness_page_info(info: Value) {
 
 /// The identity under test: the app's name and version (`package_info`,
 /// what `getInfo()` and the analytics report), the configuration's
-/// `productName` and `version`, and `plugins.overwolf.{name, author, uid}`.
+/// `productName` and `version`, and `plugins.overwolf.{name, author, uid}`,
+/// plus the scenario's `overwolfConfig` (merged one level deep into
+/// `plugins.overwolf`, e.g. `{ads: {recreateOnReload: false}}`).
 fn configure(context: &mut tauri::Context<Wry>) -> Result<(), String> {
     let id = harness::identity()?;
     let info = context.package_info_mut();
@@ -104,6 +113,18 @@ fn configure(context: &mut tauri::Context<Wry>) -> Result<(), String> {
     }
     if let Some(uid) = id.uid {
         overwolf.insert("uid".into(), json!(uid));
+    }
+    if let Some(Value::Object(extra)) = harness::get().config.get("overwolfConfig") {
+        for (key, value) in extra {
+            match (overwolf.get_mut(key), value) {
+                (Some(Value::Object(section)), Value::Object(fields)) => {
+                    section.extend(fields.clone());
+                }
+                _ => {
+                    overwolf.insert(key.clone(), value.clone());
+                }
+            }
+        }
     }
     config
         .plugins
@@ -134,6 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             harness_page_event,
             harness_reply,
             harness_page_info,
+            harness_quitting,
         ])
         .setup(|app| {
             driver::setup(app.handle());
@@ -143,12 +165,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The invisible lab app never comes to the front: activated at launch,
     // it would take the keyboard from the app the user is typing in.
     #[cfg(target_os = "macos")]
-    let builder = builder
-        .activate_ignoring_other_apps(!tauri_plugin_overwolf::lab_invisible())
-        // macOS reports a crashed web content process only through this hook.
-        .on_web_content_process_terminate(
+    let builder = builder.activate_ignoring_other_apps(!tauri_plugin_overwolf::lab_invisible());
+    // macOS reports a crashed web content process only through this hook;
+    // `crashHook: false` (crash-fallback) leaves it unwired, as an app that
+    // forgot it.
+    #[cfg(target_os = "macos")]
+    let builder = if h.config.get("crashHook") == Some(&Value::Bool(false)) {
+        builder
+    } else {
+        builder.on_web_content_process_terminate(
             tauri_plugin_overwolf::web_content_process_terminate_hook(),
-        );
+        )
+    };
 
     #[allow(unused_mut, reason = "mutated on macOS only")]
     let mut app = builder.build(context)?;

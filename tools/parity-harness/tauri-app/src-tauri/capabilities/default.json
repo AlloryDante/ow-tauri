@@ -1,10 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The ad window's webview (the harness page): core events, Overwolf ads, consent, identity, machine ids, email hashes and the analytics switches the scenarios call. Matched by webview label, so the ad guests in the window get nothing.",
+  "description": "The ad window's webview (the harness page): core events, Overwolf ads, consent, identity, machine ids, email hashes and the analytics switches the scenarios call, and hiding or closing its own window (closeHandler: tray-js). Matched by webview label, so the ad guests in the window get nothing.",
   "webviews": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-hide",
+    "core:window:allow-destroy",
     "overwolf:default",
     "overwolf:machine-id",
     "overwolf:email-hashes",

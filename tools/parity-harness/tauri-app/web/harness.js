@@ -8,11 +8,14 @@
 //   ow-electron scenario through the JavaScript API
 //   (tauri-plugin-overwolf-api); each answer goes back through the
 //   `harness_reply` command;
-// - reports the page's user agent and the API's functions once.
+// - reports the page's user agent and the API's functions once;
+// - `closeHandler: "tray-js"`: handles its window's close request as a
+//   Tauri app's page does (`onCloseRequested`, `preventDefault`, `hide`).
 
 import 'tauri-plugin-overwolf-api/adview';
 import * as api from 'tauri-plugin-overwolf-api';
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 /** JSON-safe copy of an arbitrary value (functions and cycles described). */
 function safe(value, depth = 0, seen = new WeakSet()) {
@@ -77,3 +80,18 @@ invoke('harness_page_info', {
       .sort(),
   },
 }).catch(() => {});
+
+invoke('harness_config')
+  .then((config) => {
+    if (config.closeHandler !== 'tray-js') return;
+    const win = getCurrentWindow();
+    return win.onCloseRequested(async (event) => {
+      if (await invoke('harness_quitting')) return;
+      event.preventDefault();
+      invoke('harness_page_event', {
+        payload: { kind: 'close-handled', handler: 'tray-js' },
+      }).catch(() => {});
+      await win.hide();
+    });
+  })
+  .catch(() => {});

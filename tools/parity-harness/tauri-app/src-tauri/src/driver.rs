@@ -247,6 +247,82 @@ fn probe_only(app: &AppHandle<Wry>) {
     app.exit(0);
 }
 
+/// What the app does to its window right after building it: its Overwolf
+/// window name (`windowName`), a new title (`setupTitle`,
+/// title-set-in-setup), its close handler (`closeHandler`) and a timed
+/// close (`closeMainWindowAtMs`).
+fn set_up_main_window(app: &AppHandle<Wry>, window: &tauri::Window<Wry>) {
+    let h = harness::get();
+    if let Some(name) = h.str_opt("windowName")
+        && let Err(error) = app.overwolf().set_window_name(windows::MAIN, name)
+    {
+        h.record(
+            "events.jsonl",
+            json!({ "kind": "set-window-name-failed", "error": error.to_string() }),
+        );
+    }
+    if let Some(title) = h.str_opt("setupTitle") {
+        let _ = window.set_title(title);
+    }
+    if let Some(handler) = h.str_opt("closeHandler") {
+        install_close_handler(window, handler);
+    }
+    if let Some(after) = h.num("closeMainWindowAtMs") {
+        schedule_main_close(app, after);
+    }
+}
+
+/// Whether the run is quitting.
+pub fn quitting() -> bool {
+    QUITTING.load(Ordering::SeqCst)
+}
+
+/// `closeHandler`: the app's own handler of a close request on its window,
+/// as a tray app writes it (§5.2 #6, #7). Off while the run quits.
+///
+/// - `tray`: prevent, then hide;
+/// - `delay-destroy`: prevent, then destroy 500 ms later;
+/// - `confirm-5s`: prevent, then show the window again 5 s later;
+/// - `tray-js`: the harness page's `onCloseRequested` does it (`harness.js`).
+fn install_close_handler(window: &tauri::Window<Wry>, handler: &str) {
+    if handler == "tray-js" {
+        return;
+    }
+    let handler = handler.to_owned();
+    let target = window.clone();
+    window.on_window_event(move |event| {
+        let tauri::WindowEvent::CloseRequested { api, .. } = event else {
+            return;
+        };
+        if quitting() {
+            return;
+        }
+        api.prevent_close();
+        harness::get().record(
+            "events.jsonl",
+            json!({ "kind": "close-handled", "handler": handler }),
+        );
+        let target = target.clone();
+        match handler.as_str() {
+            "delay-destroy" => {
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(500));
+                    let _ = target.destroy();
+                });
+            }
+            "confirm-5s" => {
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(5));
+                    windows::show_inactive(&target);
+                });
+            }
+            _ => {
+                let _ = target.hide();
+            }
+        }
+    });
+}
+
 fn full_run(app: &AppHandle<Wry>) {
     let h = harness::get();
     snapshot(app, "ready");
@@ -378,6 +454,7 @@ fn start_window_and_actions(app: &AppHandle<Wry>) {
         label: windows::MAIN,
         url,
         title: h.str_opt("windowTitle"),
+        user_agent: h.str_opt("windowUserAgent"),
         size,
         position: (x, y),
     };
@@ -404,17 +481,7 @@ fn start_window_and_actions(app: &AppHandle<Wry>) {
             );
         }
     });
-    if let Some(name) = h.str_opt("windowName")
-        && let Err(error) = app.overwolf().set_window_name(windows::MAIN, name)
-    {
-        h.record(
-            "events.jsonl",
-            json!({ "kind": "set-window-name-failed", "error": error.to_string() }),
-        );
-    }
-    if let Some(after) = h.num("closeMainWindowAtMs") {
-        schedule_main_close(app, after);
-    }
+    set_up_main_window(app, &window);
     if h.str_opt("present") == Some("transparent") {
         windows::show_inactive(&window);
         if let Some((x, y)) = position() {
@@ -483,10 +550,19 @@ fn quit_flow(app: &AppHandle<Wry>) {
     observe::probe_all(app, "end");
     std::thread::sleep(Duration::from_millis(500));
     QUITTING.store(true, Ordering::SeqCst);
-    if h.str_opt("quitStyle") == Some("quit") {
-        // Quit with the window still open, as a tray app's "Exit" would.
-        app.exit(0);
-        return;
+    match h.str_opt("quitStyle") {
+        Some("quit" | "exit") => {
+            // Quit with the window still open, as a tray app's "Exit" would.
+            app.exit(0);
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        Some("terminate") => {
+            // The app menu's Quit: `[NSApp terminate:]`.
+            let _ = app.run_on_main_thread(crate::macos_lab::terminate);
+            return;
+        }
+        _ => {}
     }
     if let Some(window) = windows::get(app, windows::MAIN) {
         let _ = window.close();
@@ -597,6 +673,10 @@ fn act(app: &AppHandle<Wry>, action: &Value) -> Result<(), String> {
         "guest-fixture" | "gesture-case" => unsupported(
             action,
             "the plugin bounces a guest's top-level navigation off Overwolf back to the ad page, so the loopback fixture cannot replace the ad page (plugin lab hook needed)",
+        ),
+        "heartbeat-pause" => unsupported(
+            action,
+            "pausing the guest shim's heartbeat needs a plugin lab hook",
         ),
         other => return Err(format!("unknown action {other}")),
     }
@@ -921,6 +1001,7 @@ fn open_window(app: &AppHandle<Wry>, action: &Value) {
         label: &label,
         url,
         title: options.get("title").and_then(Value::as_str),
+        user_agent: None,
         size: (
             opt("width").unwrap_or(400.0),
             opt("height").unwrap_or(300.0),

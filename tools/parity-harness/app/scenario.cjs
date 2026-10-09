@@ -768,6 +768,11 @@ module.exports = function install(ctx) {
         state: describeWindow(win),
       });
     },
+    async 'heartbeat-pause'({ ms }) {
+      // heartbeat-silence (§5.2 #11): ow-electron has no guest heartbeat to
+      // pause; its run is the control.
+      record('events.jsonl', { kind: 'heartbeat-pause', ms, control: true });
+    },
     async 'crash-guests'({ which = 'all' }) {
       const list = guests();
       for (const wc of which === 'first' ? list.slice(0, 1) : list) {

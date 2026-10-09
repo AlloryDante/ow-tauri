@@ -111,6 +111,8 @@ export const FEATURE_PRESETS = {
   invalid: [{ status: 200, body: 'not json' }],
   drop: [{ status: 'drop' }],
   hang: [{ status: 200, body: '{"params":[]}', delayMs: 45000 }],
+  // §5.2 #13: past ow-tauri's 60 s consent timeout.
+  'hang-long': [{ status: 200, body: '{"params":[]}', delayMs: 70000 }],
   // First answer empty, later answers non-empty: shows whether later calls refetch.
   'changes-later': [
     { status: 200, body: '{"params":[]}' },
@@ -1258,6 +1260,339 @@ export const SCENARIOS = {
     },
   },
 
+  // --- DESIGN §5.2 (the W3/W4 checks; SECTION_5_2 below indexes them) -----
+
+  'title-default': {
+    describe:
+      '§5.2 #2, PAR-minor-2: the ad window has no configured title; its title, the window name the guests get and the analytics labels follow the app name.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 30 },
+    config: {
+      actions: [
+        { at: 2000, do: 'window', method: 'getTitle' },
+        { at: 4000, do: 'probe-guests', label: 'title' },
+      ],
+    },
+  },
+
+  'title-set-in-setup': {
+    describe:
+      '§5.2 #2, PAR-minor-2: the ad window has a configured title and the app retitles it right after creating it (setupTitle), before its page loads; which title wins.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 30 },
+    config: {
+      windowTitle: 'Configured Title',
+      setupTitle: 'Set In Setup',
+      actions: [
+        { at: 2000, do: 'window', method: 'getTitle' },
+        { at: 4000, do: 'probe-guests', label: 'title' },
+      ],
+    },
+  },
+
+  'custom-ua': {
+    describe:
+      '§5.2 #3, PAR-M3: the ad window has its own user agent (Custom/1.0). The host requests, the guest document requests and the consent window keep the host-shaped user agent.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 40 },
+    config: {
+      windowUserAgent: 'Custom/1.0',
+      actions: [
+        { at: 1000, do: 'page-eval', label: 'page user agent', code: 'navigator.userAgent' },
+        { at: 3000, do: 'cmp-open', fn: 'openAdPrivacySettingsWindow', label: 'consent window' },
+        { at: 12000, do: 'cmp-close', label: 'consent window' },
+        { at: 15000, do: 'probe-guests', label: 'ua' },
+      ],
+    },
+  },
+
+  'ready-burst': {
+    describe:
+      '§5.2 #4: a plain launch to time the launch burst: cmp-eu-only inside the 250 ms burst window, burst start at most 100 ms after Ready (compareHostRequests).',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 25 },
+    config: { actions: [] },
+  },
+
+  'exit-last-window': {
+    describe:
+      '§5.2 #5: the app quits when its last window closes (15 s after creation, after consent): window_closed sent once, the process exits without a forced exit.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 40 },
+    config: { quitOnAllClosed: true, closeMainWindowAtMs: 15000, actions: [] },
+  },
+
+  'exit-app-exit': {
+    describe:
+      '§5.2 #5: the run ends with app.exit(0) while the ad window is open (Tauri AppHandle::exit, ow-electron app.exit).',
+    defaults: {
+      mode: 'test',
+      present: 'transparent',
+      layout: '300x250',
+      duration: 30,
+      quitStyle: 'exit',
+    },
+    config: { actions: [] },
+  },
+
+  'exit-terminate': {
+    describe:
+      '§5.2 #5 (macOS): the run ends with the app menu Quit, [NSApp terminate:], while the ad window is open (ow-electron: app.quit(), the same call).',
+    defaults: {
+      mode: 'test',
+      present: 'transparent',
+      layout: '300x250',
+      duration: 30,
+      quitStyle: 'terminate',
+    },
+    config: { actions: [] },
+  },
+
+  'exit-tray-alive': {
+    describe:
+      '§5.2 #5, V2: the app keeps running with no window, as a tray app (the last window closes at 10 s, the app prevents the exit) until the timed quit.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 40 },
+    config: {
+      closeMainWindowAtMs: 10000,
+      actions: [{ at: 25000, do: 'snapshot', label: 'no-window+15s' }],
+    },
+  },
+
+  'close-to-tray': {
+    describe:
+      '§5.2 #6, PAR-B1: the app handles a close of its window by hiding it (Rust prevent_close + hide; ow-electron close + preventDefault + hide), then shows it again (inactive). window-hidden count and position, visibility spans and the guest requests.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 50 },
+    config: {
+      closeHandler: 'tray',
+      actions: [
+        { at: 12000, do: 'window', method: 'close' },
+        { at: 24000, do: 'window', method: 'showInactive' },
+        { at: 40000, do: 'probe-guests', label: 'after-show' },
+      ],
+    },
+  },
+
+  'close-to-tray-js': {
+    describe:
+      "§5.2 #6, PAR-B1: as close-to-tray, with the close handled by the window's page (Tauri onCloseRequested + preventDefault + hide; ow-electron: the same handler in its main process).",
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 50 },
+    config: {
+      closeHandler: 'tray-js',
+      actions: [
+        { at: 12000, do: 'window', method: 'close' },
+        { at: 24000, do: 'window', method: 'showInactive' },
+        { at: 40000, do: 'probe-guests', label: 'after-show' },
+      ],
+    },
+  },
+
+  'close-js-delayed': {
+    describe:
+      '§5.2 #7, PAR-M2: the close handler waits 500 ms, then destroys the window (visibility, messages, the guest requests around the close).',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 40 },
+    config: {
+      closeHandler: 'delay-destroy',
+      actions: [{ at: 12000, do: 'window', method: 'close' }],
+    },
+  },
+
+  'close-confirm-5s': {
+    describe:
+      '§5.2 #7, PAR-M2: the close handler keeps the window (a confirm the user cancels) and shows it again 5 s later.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 40 },
+    config: {
+      closeHandler: 'confirm-5s',
+      actions: [
+        { at: 12000, do: 'window', method: 'close' },
+        { at: 30000, do: 'probe-guests', label: 'after-confirm' },
+      ],
+    },
+  },
+
+  'destroy-direct': {
+    describe: '§5.2 #7, PAR-M2: the app destroys its window without a close request.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 40 },
+    config: { actions: [{ at: 12000, do: 'window', method: 'destroy' }] },
+  },
+
+  'heartbeat-silence': {
+    describe:
+      "§5.2 #11, R4, PAR-M5: the guest shim's heartbeat paused for 120 s on a live guest must recreate nothing; the request stream equals the control. Needs a plugin lab hook (heartbeat-pause); ow-electron has no shim heartbeat and runs as the control.",
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 180 },
+    config: {
+      actions: [
+        { at: 15000, do: 'probe-guests', label: 'before-pause' },
+        { at: 20000, do: 'heartbeat-pause', ms: 120000 },
+        { at: 150000, do: 'probe-guests', label: 'after-pause' },
+      ],
+    },
+  },
+
+  'cmpreq-hang-long': {
+    describe:
+      '§5.2 #13: the cmp-eu-only feature request hangs 70 s: ow-tauri resolves isCMPRequired() true at 60 s (a listed deviation); up to 45 s both hosts match R2-cmpreq-hang. The ow-tauri run needs the loopback feature server (not in the Tauri harness yet).',
+    defaults: {
+      mode: 'test',
+      present: 'transparent',
+      layout: '300x250',
+      duration: 100,
+      features: 'hang-long',
+    },
+    config: {
+      actions: [
+        { at: 0, do: 'ow-call', fn: 'isCMPRequired', label: 'isCMPRequired at load' },
+        { at: 75000, do: 'ow-call', fn: 'isCMPRequired', label: 'isCMPRequired after the hang' },
+      ],
+    },
+  },
+
+  'window-before-ready': {
+    describe:
+      '§5.2 #15, V8: an ow-tauri window created off the main thread and shown before the plugin registered it; the launch order (#5) is unchanged. ow-electron runs as usual (control). Not in the Tauri harness yet (windowBeforeReady).',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 30 },
+    config: { windowBeforeReady: true, actions: [] },
+  },
+
+  'parked-show-unfocused': {
+    describe:
+      '§5.2 #16, PAR-M9: the ad window is hidden from load, after consent; 12 s later it is shown without focus (Tauri show on a non-focusable window, ow-electron showInactive), visible 5 s, hidden again. Launch order, timings and window_closed.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 40 },
+    config: {
+      actions: [
+        { at: 0, do: 'window', method: 'hide' },
+        { at: 12000, do: 'window', method: 'showInactive' },
+        { at: 17000, do: 'window', method: 'hide' },
+        { at: 25000, do: 'probe-guests', label: 'after-park' },
+      ],
+    },
+  },
+
+  'email-hashes-golden': {
+    describe:
+      '§5.2 #17, D16, SEC-M9: setUserEmailHashes(generateUserEmailHashes(x)) for an ASCII, an upper-case, a padded and a non-ASCII address, then setUserEmailHashes(undefined): the eHashes messages and the state file after each.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 50 },
+    config: {
+      actions: [
+        ...[
+          ['ascii', TEST_EMAIL],
+          ['upper', 'Test.Email@Overwolf.COM'],
+          ['padded', `  ${TEST_EMAIL}  `],
+          ['non-ascii', 'tëst.émail@overwolf.com'],
+        ].flatMap(([name, email], i) => [
+          {
+            at: 8000 + i * 6000,
+            do: 'ow-call',
+            fn: 'setUserEmailHashes',
+            generateFrom: email,
+            label: name,
+          },
+          { at: 9000 + i * 6000, do: 'state-file', label: `after-${name}` },
+          { at: 10000 + i * 6000, do: 'probe-guests', label: `after-${name}` },
+        ]),
+        ...emailHashCall(34000, 'undefined', [{ $undefined: true }]),
+      ],
+    },
+  },
+
+  'dialog-probe': {
+    describe:
+      "§5.2 #19, OQ-39: what alert(), confirm() and prompt() return in an ad guest, and how long they block. ow-tauri only: ow-electron shows a native dialog for a guest's alert(), which the invisible lab must not show; its answers come from the Windows CI lab (--ci-visible).",
+    hosts: ['tauri'],
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 30 },
+    config: {
+      actions: [
+        {
+          at: 10000,
+          do: 'guest-eval',
+          label: 'dialogs',
+          code: `(() => ['alert', 'confirm', 'prompt'].map((name) => {
+            const t0 = performance.now();
+            let value;
+            try { value = window[name]('parity'); } catch (error) { value = 'threw ' + error; }
+            return { name, value: value === undefined ? 'undefined' : value, ms: Math.round(performance.now() - t0) };
+          }))()`,
+        },
+      ],
+    },
+  },
+
+  'build-identity': {
+    describe:
+      '§5.2 #20, PAR-M1, PAR-B2 (Windows CI lab): a build whose version is overridden (tauri build --config) installs and uninstalls with the install-record and uninstall Counter values equal to getInfo() and the launch Counter; the signing uid from a mocked /sign/electron. Needs the installer, so Windows CI only.',
+    windowsOnly: true,
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 30 },
+    config: { actions: [{ at: 2000, do: 'ow-call', fn: 'getInfo', label: 'getInfo' }] },
+  },
+
+  'no-analytics-config': {
+    describe:
+      '§5.2 #21, PAR-M6, R10: anonymous analytics off from the configuration (plugins.overwolf.analytics.disableAnonymous); ow-electron: disableAnonymousAnalytics() at module load.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 30 },
+    config: {
+      // ow-electron has no configuration switch: its twin calls
+      // disableAnonymousAnalytics() at module load.
+      disableAnalytics: 'electron-only',
+      overwolfConfig: { analytics: { disableAnonymous: true } },
+      actions: [],
+    },
+  },
+
+  'no-analytics-setup': {
+    describe:
+      '§5.2 #21: anonymous analytics off from the app setup (Rust disableAnonymousAnalytics before Ready); ow-electron at module load.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 30 },
+    config: { disableAnalytics: true, actions: [] },
+  },
+
+  'no-analytics-persisted': {
+    describe:
+      '§5.2 #21: the preference persisted by an earlier launch (setAnonymousAnalyticsPreference(false) in the first run) on the second launch. Run twice with the same --home profile:NAME; the first run sets it.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 30 },
+    config: {
+      actions: [
+        { at: 2000, do: 'ow-call', fn: 'setAnonymousAnalyticsPreference', args: [false] },
+        { at: 3000, do: 'state-file', label: 'after-preference' },
+      ],
+    },
+  },
+
+  'local-frame': {
+    describe:
+      "§5.2 #22, SEC-B1: an ad guest adds frames to the app's own origins (tauri://localhost, http://tauri.localhost, http://asset.localhost, a dev server on localhost, the app's file:// page) and probes the core IPC; none may load and no command may answer. The Windows half (http://tauri.localhost) runs in the Windows CI lab.",
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 40 },
+    config: {
+      actions: [
+        {
+          at: 10000,
+          do: 'guest-eval',
+          label: 'add local frames',
+          code: `(() => {
+            const urls = ['tauri://localhost/', 'http://tauri.localhost/', 'http://asset.localhost/x', 'http://localhost:1420/', 'file:///'];
+            window.__parityLocal = urls.map((url) => {
+              const frame = document.createElement('iframe');
+              const entry = { url, loads: 0 };
+              frame.onload = () => { entry.loads += 1; };
+              frame.style.cssText = 'position:absolute;width:1px;height:1px;opacity:0;pointer-events:none';
+              frame.src = url;
+              document.body.appendChild(frame);
+              entry.frame = frame;
+              return entry;
+            });
+            return { ipc: typeof window.__TAURI_INTERNALS__, ipcPost: typeof window.ipc };
+          })()`,
+        },
+        {
+          at: 16000,
+          do: 'guest-eval',
+          label: 'local frames',
+          code: `(() => (window.__parityLocal || []).map(({ url, loads, frame }) => {
+            let href;
+            try { href = frame.contentWindow.location.href; } catch (error) { href = 'cross-origin'; }
+            let ipc;
+            try { ipc = typeof frame.contentWindow.__TAURI_INTERNALS__; } catch (error) { ipc = 'cross-origin'; }
+            frame.remove();
+            return { url, loads, href, ipc };
+          }))()`,
+        },
+      ],
+    },
+  },
+
   long: {
     describe:
       'R2-9: a long hidden session (no ads, window never shown) to watch the periodic heartbeat. Needs --allow-long.',
@@ -1265,3 +1600,133 @@ export const SCENARIOS = {
     config: { tickMs: 600000, actions: [] },
   },
 };
+
+// §5.2 #8: messages with the plugin's macOS recreate-on-reload on and off.
+SCENARIOS['recreate-reload'] = {
+  describe:
+    "§5.2 #8 (macOS): messages with plugins.overwolf.ads.recreateOnReload on (the default): element events, messages, the 400025 count and the guest's request stream equal ow-electron's.",
+  defaults: SCENARIOS.messages.defaults,
+  config: { ...SCENARIOS.messages.config, overwolfConfig: { ads: { recreateOnReload: true } } },
+};
+SCENARIOS['recreate-reload-off'] = {
+  describe:
+    '§5.2 #8 (macOS): the control of recreate-reload: the guest reloads in place (recreateOnReload false).',
+  defaults: SCENARIOS.messages.defaults,
+  config: { ...SCENARIOS.messages.config, overwolfConfig: { ads: { recreateOnReload: false } } },
+};
+
+// §5.2 #10: crash with the macOS crash hook left unwired.
+SCENARIOS['crash-fallback'] = {
+  describe:
+    '§5.2 #10 (macOS): crash with on_web_content_process_terminate left unwired: the plugin finds the dead guest by probing and recovers it, and sends no 400024. ow-electron runs crash (control).',
+  defaults: SCENARIOS.crash.defaults,
+  config: { ...SCENARIOS.crash.config, crashHook: false },
+};
+
+/**
+ * DESIGN §5.2: each check, the scenarios that run it and where.
+ *
+ * - `lab`: `both` (the macOS invisible lab and the Windows CI lab),
+ *   `macos`, or `windows-ci` (Windows only: `ci/windows-lab.mjs`);
+ * - `missing`: what the harness still lacks for the ow-tauri run (the
+ *   scenario is defined; that host records `action-unsupported` or runs the
+ *   control).
+ * @type {Array<{n: number, check: string, scenarios: string[], lab: 'both' | 'macos' | 'windows-ci', missing?: string}>}
+ */
+export const SECTION_5_2 = [
+  { n: 1, check: 'window URLs and names', scenarios: ['windows-urls'], lab: 'both' },
+  {
+    n: 2,
+    check: 'default and setup titles',
+    scenarios: ['title-default', 'title-set-in-setup'],
+    lab: 'both',
+  },
+  { n: 3, check: 'user agent, custom UA', scenarios: ['custom-ua'], lab: 'both' },
+  { n: 4, check: 'launch burst at Ready', scenarios: ['ready-burst'], lab: 'both' },
+  {
+    n: 5,
+    check: 'exit paths',
+    scenarios: ['exit-last-window', 'exit-app-exit', 'exit-terminate', 'exit-tray-alive'],
+    lab: 'both',
+    missing: 'relaunch (tauri-plugin-process restart sentinel) is not in the harness app',
+  },
+  { n: 6, check: 'close to tray', scenarios: ['close-to-tray', 'close-to-tray-js'], lab: 'both' },
+  {
+    n: 7,
+    check: 'delayed close, confirm, destroy',
+    scenarios: ['close-js-delayed', 'close-confirm-5s', 'destroy-direct'],
+    lab: 'both',
+  },
+  {
+    n: 8,
+    check: 'recreate on reload',
+    scenarios: ['recreate-reload', 'recreate-reload-off'],
+    lab: 'macos',
+  },
+  { n: 9, check: 'guest crash (hook wired)', scenarios: ['crash'], lab: 'both' },
+  { n: 10, check: 'guest crash (hook unwired)', scenarios: ['crash-fallback'], lab: 'macos' },
+  {
+    n: 11,
+    check: 'heartbeat silence',
+    scenarios: ['heartbeat-silence'],
+    lab: 'both',
+    missing: 'a plugin lab hook to pause the shim heartbeat (change request)',
+  },
+  {
+    n: 12,
+    check: 'gestures',
+    scenarios: ['gesture-timing'],
+    lab: 'both',
+    missing: 'a plugin lab hook to load the loopback fixture in a guest (change request)',
+  },
+  {
+    n: 13,
+    check: 'consent request hang > 60 s',
+    scenarios: ['cmpreq-hang-long'],
+    lab: 'both',
+    missing: 'the loopback feature server for ow-tauri (Builder::endpoints)',
+  },
+  {
+    n: 14,
+    check: 'last window during consent',
+    scenarios: ['last-window-during-consent'],
+    lab: 'both',
+  },
+  {
+    n: 15,
+    check: 'window before Ready',
+    scenarios: ['window-before-ready'],
+    lab: 'both',
+    missing: 'windowBeforeReady in the Tauri harness app',
+  },
+  { n: 16, check: 'parked, shown unfocused', scenarios: ['parked-show-unfocused'], lab: 'both' },
+  {
+    n: 17,
+    check: 'email hash golden values',
+    scenarios: ['email-hashes-golden', 'email-hashes-clear'],
+    lab: 'both',
+  },
+  { n: 18, check: 'corrupt state file', scenarios: ['corrupt-state'], lab: 'both' },
+  { n: 19, check: 'guest dialogs', scenarios: ['dialog-probe'], lab: 'both' },
+  {
+    n: 20,
+    check: 'build identity',
+    scenarios: ['build-identity'],
+    lab: 'windows-ci',
+    missing: 'the build-override, install and uninstall steps in ci/windows-lab.mjs',
+  },
+  {
+    n: 21,
+    check: 'no analytics three ways',
+    scenarios: ['no-analytics-config', 'no-analytics-setup', 'no-analytics-persisted'],
+    lab: 'both',
+  },
+  { n: 22, check: 'local frames', scenarios: ['local-frame'], lab: 'both' },
+  {
+    n: 23,
+    check: 'single instance, second launch',
+    scenarios: [],
+    lab: 'both',
+    missing: 'tauri-plugin-single-instance in the harness app and a second-launch runner step',
+  },
+];

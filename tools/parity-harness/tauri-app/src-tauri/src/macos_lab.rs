@@ -12,6 +12,8 @@
 //!   guest renderer).
 //! - [`all_cookies`]: every cookie of the default website data store with
 //!   the attributes ow-electron's `cookies.on('changed')` reports.
+//! - [`terminate`]: `[NSApp terminate:]`, the quit of the app menu
+//!   (`quitStyle: "terminate"`).
 //!
 //! Every function that touches `AppKit` or `WebKit` runs on the main thread.
 
@@ -219,5 +221,18 @@ pub fn all_cookies(done: impl FnOnce(Vec<Value>) + Send + 'static) {
             return;
         };
         let () = msg_send![cookies, getAllCookies: &*block];
+    }
+}
+
+/// `[NSApp terminate:nil]`: the app quits as its app menu's Quit item quits
+/// it. Call on the main thread.
+pub fn terminate() {
+    // SAFETY: the shared application on the main thread; `terminate:` takes
+    // an optional sender.
+    unsafe {
+        let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        if let Some(ns_app) = ns_app.as_ref() {
+            let () = msg_send![ns_app, terminate: std::ptr::null_mut::<AnyObject>()];
+        }
     }
 }

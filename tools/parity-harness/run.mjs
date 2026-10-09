@@ -93,9 +93,11 @@ const USAGE = `Usage: node run.mjs [options]
                           listeners; compare with a run without it)
   --no-cdp                do not attach the DevTools protocol to webContents (control run:
                           the net log still records every request)
-  --quit-style close-then-quit|quit
+  --quit-style close-then-quit|quit|exit|terminate
                           end of run: close the ad window, then app.quit() 2 s later
-                          (default), or app.quit() with the window still open
+                          (default), or with the window still open: app.quit() (quit),
+                          app.exit(0) (exit), or [NSApp terminate:] (terminate; on
+                          ow-electron app.quit(), which is the same on macOS)
   --disable-analytics     call app.overwolf.disableAnonymousAnalytics() at startup
   --window-name NAME      BrowserWindow 'name' option for the ad window
   --identity FILE         identity JSON (default: local.identity.json, else neutral example)
@@ -209,6 +211,10 @@ function parseCli() {
     if (process.platform !== 'darwin' && !values['ci-visible'])
       fail('--host tauri runs on macOS only (window monitor), or with --ci-visible on CI');
   }
+  if (scenario?.hosts && !scenario.hosts.includes(values.host))
+    fail(`--scenario ${values.scenario} runs with --host ${scenario.hosts.join(' or ')} only`);
+  if (scenario?.windowsOnly && process.platform !== 'win32')
+    fail(`--scenario ${values.scenario} runs in the Windows CI lab only`);
   if (values['ci-visible'] && process.env.GITHUB_ACTIONS !== 'true')
     fail('--ci-visible is for GitHub Actions runners only (GITHUB_ACTIONS=true)');
   if (values.mode === 'live' && !values['live-ok']) fail('--mode live needs --live-ok');
@@ -220,7 +226,8 @@ function parseCli() {
   }
   if (!['hidden', 'transparent'].includes(values.present))
     fail('--present must be hidden or transparent');
-  if (!['close-then-quit', 'quit'].includes(values['quit-style'])) fail('bad --quit-style');
+  if (!['close-then-quit', 'quit', 'exit', 'terminate'].includes(values['quit-style']))
+    fail('bad --quit-style');
   const duration = Number(values.duration);
   const maxDuration = values['allow-long'] ? MAX_LONG_DURATION_S : MAX_DURATION_S;
   if (!(duration > 0 && duration <= maxDuration)) fail(`--duration must be 1..${maxDuration}`);
@@ -373,7 +380,13 @@ async function main() {
     webRequest: opts.webrequest,
     cdp: !opts['no-cdp'],
     quitStyle: opts['quit-style'],
-    disableAnalytics: opts['disable-analytics'],
+    // A scenario's `disableAnalytics: 'electron-only'` is the module-load
+    // twin of an ow-tauri configuration switch (no-analytics-config).
+    disableAnalytics:
+      opts['disable-analytics'] ||
+      (scenarioConfig.disableAnalytics === 'electron-only'
+        ? !tauri
+        : scenarioConfig.disableAnalytics === true),
     packages: opts.packages ? opts.packages.split(',') : [],
     window: scenarioConfig.window ?? windowSize(opts.layouts),
     windowTitle: displayName(pkg),

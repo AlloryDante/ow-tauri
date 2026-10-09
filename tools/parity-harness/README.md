@@ -175,6 +175,18 @@ taskpolicy -b node run.mjs --host tauri --no-build --identity local.identity.exa
 - **Front app.** `lib/front-monitor.mjs` samples the front app (`lsappinfo front`) every 200 ms on both hosts and writes `front-monitor.jsonl`. A run whose app ever became frontmost is a failure: an invisible app must never take the keyboard.
 - The app identity comes from `local.identity.json` (or `--identity <file>`) at run time (`PARITY_HARNESS_PACKAGE_JSON`): the app sets its name, version and `plugins.overwolf.{name, author, uid}` from it before the plugin starts, so it never enters the build or a tracked file.
 
+## The DESIGN §5.2 checks
+
+`SECTION_5_2` in `lib/scenarios.mjs` lists each check, the scenarios that run it and where (`both`: the macOS invisible lab and the Windows CI lab; `macos`; `windows-ci`), plus what the harness still lacks for the ow-tauri run (`missing`); `scenarios.test.mjs` keeps the list whole. Scenario options added for them, on both hosts unless noted:
+
+- `setupTitle`: the app retitles its window right after creating it (`title-set-in-setup`).
+- `windowUserAgent`: the ad window's own user agent (`custom-ua`).
+- `closeHandler`: the app's own close handler on its window, off while the run quits: `tray` (prevent, hide), `tray-js` (ow-tauri: the page's `onCloseRequested`), `delay-destroy` (destroy 500 ms later), `confirm-5s` (show again 5 s later).
+- `--quit-style exit` (`app.exit(0)`) and `terminate` (macOS `[NSApp terminate:]`; ow-electron `app.quit()`, the same call).
+- `overwolfConfig` (ow-tauri): merged into `plugins.overwolf` (`recreate-reload`, `no-analytics-config`).
+- `crashHook: false` (ow-tauri, macOS): the web content termination hook left unwired (`crash-fallback`).
+- `hosts` / `windowsOnly`: `run.mjs` refuses the scenario elsewhere. `dialog-probe` is ow-tauri only: ow-electron shows a native dialog for a guest's `alert()`.
+
 ## Windows lab on CI (`ci/windows-lab.mjs`)
 
 `.github/workflows/windows-lab.yml` runs the lab on a GitHub Windows runner (on pushes to `main` that touch the plugin, `ow-tauri` or the harness, and on demand with a scenario list). One job builds `tauri-app` with the `lab` feature; four shards then run, per scenario, ow-electron and ow-tauri one after the other on the same runner, run `parity-diff.mjs` on the pair and evaluate the Windows checks of `lib/windows-checks.mjs`. The scenarios are the round-2 base runs (`A`, `cmp`, `messages`) and every round-3 ad-format scenario. Captures, window copies and diffs are uploaded as the `windows-lab-captures-<shard>` artifacts; each shard's table is in the job summary.

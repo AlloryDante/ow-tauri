@@ -44,6 +44,8 @@ pub struct Spec<'a> {
     /// The title; `None` keeps Tauri's default (the plugin maps it to the
     /// app name, as ow-electron titles an untitled window).
     pub title: Option<&'a str>,
+    /// The webview's user agent; `None` keeps the default (custom-ua).
+    pub user_agent: Option<&'a str>,
     /// Frame size in logical pixels.
     pub size: (f64, f64),
     /// Frame position in logical pixels.
@@ -82,6 +84,9 @@ pub fn build(
         });
     if let Some(title) = spec.title {
         builder = builder.title(title);
+    }
+    if let Some(user_agent) = spec.user_agent {
+        builder = builder.user_agent(user_agent);
     }
     let window = builder.build()?.as_ref().window();
     set_frame_size(&window, spec.size.0, spec.size.1);
