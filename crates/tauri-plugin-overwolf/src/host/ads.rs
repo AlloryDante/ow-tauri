@@ -55,6 +55,10 @@ type Broadcast = Arc<dyn Fn(&str, Option<&Value>) + Send + Sync>;
 
 /// One mounted element.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    any(target_os = "android", target_os = "ios"),
+    allow(dead_code, reason = "mobile builds register no commands")
+)]
 pub(crate) struct Mount {
     /// The guest webview's label (`owad-<n>`).
     pub(crate) guest: String,
@@ -92,6 +96,10 @@ impl std::fmt::Debug for AdsCore {
 }
 
 /// The message of `adview_mount` where ads are unsupported.
+#[cfg_attr(
+    any(target_os = "android", target_os = "ios"),
+    allow(dead_code, reason = "mobile builds register no commands")
+)]
 fn unsupported_message() -> String {
     if cfg!(target_os = "linux") {
         "ads are not available on Linux".to_owned()
@@ -131,6 +139,10 @@ impl AdsCore {
     #[cfg_attr(
         not(ow_tauri_ads),
         expect(clippy::unused_self, reason = "no guest is ever mounted")
+    )]
+    #[cfg_attr(
+        any(target_os = "android", target_os = "ios"),
+        allow(dead_code, reason = "mobile builds register no commands")
     )]
     pub(crate) fn mount_of(&self, embedder: &str, element_id: &str) -> Option<Mount> {
         #[cfg(ow_tauri_ads)]
@@ -265,6 +277,10 @@ fn is_truthy(value: &Value) -> bool {
     not(ow_tauri_ads),
     allow(clippy::unused_async, reason = "the command awaits it")
 )]
+#[cfg_attr(
+    any(target_os = "android", target_os = "ios"),
+    allow(dead_code, reason = "mobile builds register no commands")
+)]
 pub(crate) async fn mount<R: Runtime>(
     core: &Arc<Core<R>>,
     embedder: &Webview<R>,
@@ -298,6 +314,10 @@ pub(crate) async fn mount<R: Runtime>(
         reason = "the ads build takes the request"
     )
 )]
+#[cfg_attr(
+    any(target_os = "android", target_os = "ios"),
+    allow(dead_code, reason = "mobile builds register no commands")
+)]
 pub(crate) fn update<R: Runtime>(
     core: &Arc<Core<R>>,
     embedder: &Webview<R>,
@@ -319,6 +339,10 @@ pub(crate) fn update<R: Runtime>(
 
 /// `adview_unmount` (idempotent): closes the guest; the element's own
 /// runtime dispatches `destroyed` (B.3.5).
+#[cfg_attr(
+    any(target_os = "android", target_os = "ios"),
+    allow(dead_code, reason = "mobile builds register no commands")
+)]
 pub(crate) fn unmount<R: Runtime>(core: &Arc<Core<R>>, embedder: &Webview<R>, element_id: &str) {
     #[cfg(ow_tauri_ads)]
     driver::unmount(core, embedder.label(), element_id);
@@ -331,6 +355,10 @@ pub(crate) fn unmount<R: Runtime>(core: &Arc<Core<R>>, embedder: &Webview<R>, el
 /// # Errors
 ///
 /// `not-found` for an element `embedder` did not mount.
+#[cfg_attr(
+    any(target_os = "android", target_os = "ios"),
+    allow(dead_code, reason = "mobile builds register no commands")
+)]
 pub(crate) fn command<R: Runtime>(
     core: &Arc<Core<R>>,
     embedder: &Webview<R>,
@@ -355,6 +383,10 @@ pub(crate) fn command<R: Runtime>(
 ///
 /// `invalid-argument` for a bad event name, `not-found` for a webview that
 /// is not a live guest.
+#[cfg_attr(
+    any(target_os = "android", target_os = "ios"),
+    allow(dead_code, reason = "mobile builds register no commands")
+)]
 pub(crate) fn guest_event<R: Runtime>(
     core: &Arc<Core<R>>,
     label: &str,
@@ -386,6 +418,10 @@ pub(crate) fn web_content_terminated<R: Runtime>(core: &Arc<Core<R>>, label: &st
 
 /// Whether `url` may call `adview_event`: the ad page's scope (the guest
 /// capability's remote URL, checked again here, §7.3).
+#[cfg_attr(
+    any(target_os = "android", target_os = "ios"),
+    allow(dead_code, reason = "mobile builds register no commands")
+)]
 pub(crate) fn guest_url_allowed(url: &Url) -> bool {
     crate::ads::is_overwolf_url(url) && url.as_str().starts_with(crate::ads::ADVIEW_SCOPE)
 }

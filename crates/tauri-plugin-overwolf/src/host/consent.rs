@@ -164,6 +164,10 @@ pub(crate) fn parse_color(s: &str) -> Option<Color> {
 }
 
 /// Whether `url` is a consent page under the `cmp_event` scope (D.6.4).
+#[cfg_attr(
+    any(target_os = "android", target_os = "ios"),
+    allow(dead_code, reason = "mobile builds register no commands")
+)]
 pub(crate) fn in_cmp_scope(url: &Url) -> bool {
     url.scheme() == "https" && url.as_str().starts_with(CMP_SCOPE)
 }
@@ -339,6 +343,7 @@ impl ConsentCore {
         lock(&self.state).settings_origin = custom;
         if let Some(w) = crate::compat::window(&core.app, CMP_SETTINGS_LABEL) {
             if crate::lab::may_focus() {
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 let _ = w.unminimize();
                 let _ = w.set_focus();
             }
@@ -369,18 +374,17 @@ impl ConsentCore {
                 .unwrap_or("#FFFFFF"),
         );
         let preloader = Url::parse(&preloader).map_err(|e| Error::backend(e.to_string()))?;
-        let mut builder = cmp_builder(core, CMP_SETTINGS_LABEL, preloader)
-            .title("CMP")
-            .inner_size(
-                options.width.unwrap_or(800.0),
-                options.height.unwrap_or(800.0),
-            )
-            .resizable(false)
-            .maximizable(false)
-            .minimizable(true);
+        let mut builder = settings_window_frame(
+            cmp_builder(core, CMP_SETTINGS_LABEL, preloader)
+                .title("CMP")
+                .inner_size(
+                    options.width.unwrap_or(800.0),
+                    options.height.unwrap_or(800.0),
+                ),
+        );
         if crate::lab::invisible() {
             // The invisible lab never shows a window.
-            builder = builder.visible(false).focused(false);
+            builder = unfocused(builder.visible(false));
         }
         if let Some(color) = parse_color(&background) {
             builder = builder.background_color(color);
@@ -395,7 +399,7 @@ impl ConsentCore {
         builder = match (options.x, options.y) {
             (Some(x), Some(y)) => builder.position(x, y),
             _ if options.center == Some(false) => builder,
-            _ => builder.center(),
+            _ => centered(builder),
         };
         if let Some(parent) = &parent {
             builder = with_parent(builder, parent)?;
@@ -574,6 +578,10 @@ impl ConsentCore {
     ///
     /// `forbidden` outside the consent page scope, `invalid-argument` for a
     /// bad consent string or flag, `io` when the state could not be saved.
+    #[cfg_attr(
+        any(target_os = "android", target_os = "ios"),
+        allow(dead_code, reason = "mobile builds register no commands")
+    )]
     pub(crate) fn cmp_event<R: Runtime>(
         &self,
         core: &Arc<Core<R>>,
@@ -878,12 +886,64 @@ fn with_parent<'a, R: Runtime>(
             .map_err(|e| Error::backend(e.to_string()))?;
         Ok(builder.parent_raw(ns_window))
     }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(any(windows, target_os = "macos", target_os = "android", target_os = "ios")))]
     {
         let gtk = parent
             .gtk_window()
             .map_err(|e| Error::backend(e.to_string()))?;
         Ok(builder.transient_for_raw(&gtk))
+    }
+    // Mobile windows have no parent.
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = parent;
+        Ok(builder)
+    }
+}
+
+/// The settings window's frame: not resizable and, on desktop, a minimize
+/// button but no maximize button (a mobile window has no title bar).
+fn settings_window_frame<R: Runtime>(
+    builder: WebviewWindowBuilder<'_, R, tauri::AppHandle<R>>,
+) -> WebviewWindowBuilder<'_, R, tauri::AppHandle<R>> {
+    let builder = builder.resizable(false);
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        builder.maximizable(false).minimizable(true)
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        builder
+    }
+}
+
+/// A consent window that does not take focus when it is created (a desktop
+/// option; the builder is returned unchanged on mobile).
+fn unfocused<R: Runtime>(
+    builder: WebviewWindowBuilder<'_, R, tauri::AppHandle<R>>,
+) -> WebviewWindowBuilder<'_, R, tauri::AppHandle<R>> {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        builder.focused(false)
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        builder
+    }
+}
+
+/// Centers a consent window on its screen (DESIGN §4.7.4); a mobile window
+/// fills the screen, so the builder is returned unchanged there.
+fn centered<R: Runtime>(
+    builder: WebviewWindowBuilder<'_, R, tauri::AppHandle<R>>,
+) -> WebviewWindowBuilder<'_, R, tauri::AppHandle<R>> {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        builder.center()
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        builder
     }
 }
 
@@ -909,15 +969,16 @@ fn open_hidden_window<R: Runtime>(
         s.created.insert(label.to_owned());
     }
     let (w, h) = HIDDEN_WINDOW_SIZE;
-    let builder = cmp_builder(core, label, url)
-        .title(&core.identity.app.name)
-        .inner_size(w, h)
-        .center()
-        .visible(false)
-        .focused(false)
-        .focusable(false)
-        .decorations(false)
-        .skip_taskbar(true);
+    let builder = centered(
+        cmp_builder(core, label, url)
+            .title(&core.identity.app.name)
+            .inner_size(w, h),
+    )
+    .visible(false)
+    .focusable(false);
+    // Desktop window options (no title bar, no taskbar entry).
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let builder = builder.focused(false).decorations(false).skip_taskbar(true);
     // Hidden: building it must not activate the app.
     let window = crate::platform::webview::without_app_activation(|| build_window(builder));
     let window = match window {
@@ -1136,6 +1197,10 @@ async fn cookie_fallback<R: Runtime>(core: &Arc<Core<R>>, label: &str) {
 ///
 /// `invalid-argument` when the URL is not `https:` or its origin is not
 /// listed.
+#[cfg_attr(
+    any(target_os = "android", target_os = "ios"),
+    allow(dead_code, reason = "mobile builds register no commands")
+)]
 pub(crate) fn check_js_cmp_url(url: &str, allowed_origins: &[String]) -> Result<()> {
     let parsed = Url::parse(url).map_err(|_| Error::invalid_argument("cmpURL is not a URL"))?;
     if parsed.scheme() != "https" {

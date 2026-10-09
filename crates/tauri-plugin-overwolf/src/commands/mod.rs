@@ -28,6 +28,10 @@ use crate::ext::Overwolf;
 use crate::host::Core;
 
 /// The [`Core`] behind the managed state.
+#[cfg_attr(
+    any(target_os = "android", target_os = "ios"),
+    allow(dead_code, reason = "mobile builds register no commands")
+)]
 pub(crate) fn core<'a, R: Runtime>(state: &'a State<'_, Overwolf<R>>) -> &'a Arc<Core<R>> {
     &state.inner().0
 }
@@ -69,6 +73,10 @@ pub(crate) fn is_app_page(url: &Url, dev_origin: Option<&str>, allowed: &[String
 /// # Errors
 ///
 /// `forbidden` otherwise.
+#[cfg_attr(
+    any(target_os = "android", target_os = "ios"),
+    allow(dead_code, reason = "mobile builds register no commands")
+)]
 pub(crate) fn require_app_webview<R: Runtime>(core: &Core<R>, webview: &Webview<R>) -> Result<()> {
     let label = webview.label();
     let refused = || {

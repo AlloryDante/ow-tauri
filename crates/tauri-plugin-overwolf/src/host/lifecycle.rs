@@ -61,6 +61,10 @@ impl Lifecycle {
 
     /// Waits until [`on_ready`] ran. Cannot deadlock: `RunEvent::Ready`
     /// always follows setup.
+    #[cfg_attr(
+        any(target_os = "android", target_os = "ios"),
+        allow(dead_code, reason = "mobile builds register no commands")
+    )]
     pub(crate) async fn wait_started(&self) {
         let mut rx = self.started.subscribe();
         let _ = rx.wait_for(|started| *started).await;
