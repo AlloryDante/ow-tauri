@@ -381,13 +381,19 @@ are the checks to run before you commit.
 windows, test ads. See [e2e/README.md](e2e/README.md). The Tauri app has the
 lab only with its `lab` Cargo feature, which is off by default.
 
-`npm run screenshots` records the documentation images. It runs the lab
-tour with stills in the dark and the light theme, with test ads only and the
-tracked placeholder identity. It refuses to use `identity.local.json` and
-checks that the app reported the placeholder's formula uid. Output goes to
-`e2e/out/screenshots/<theme>/` (git-ignored); `--out DIR` also copies each
-still to `DIR/<still>-<theme>.png`. See
-[scripts/screenshots.mjs](scripts/screenshots.mjs).
+`npm run screenshots` records the documentation images in the dark and the
+light theme, with test ads only, in the invisible lab. It runs this
+showcase's tour (one image per format of
+[docs/AD-FORMATS.md](../../docs/AD-FORMATS.md) and the consent page), every
+page of the [packages sample](../packages-sample) with the ad privacy
+settings window, and the [quickstart](../quickstart-vanilla) window. Each app
+runs with its tracked placeholder identity: the script refuses
+`identity.local.json`, a fixed uid and `TAURI_CONFIG`, and checks that each
+app reported only its placeholder's formula uid. A stalled run stops the
+script at once and names the step it stalled after. Output goes to
+`docs/images/<area>/<name>-<dark|light>.png` (`--out DIR` for another folder,
+`--only` to pick tours), each image at most 300 KB and the folder at most
+8 MB. See [scripts/screenshots.mjs](scripts/screenshots.mjs).
 
 For results that compare the two hosts, see
 [docs/PARITY.md](../../docs/PARITY.md).
