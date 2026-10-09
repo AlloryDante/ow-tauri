@@ -8,7 +8,9 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository = "https://github.com/AlloryDante/ow-tauri"
-keywords = ["tauri", "overwolf"]
+homepage = "https://github.com/AlloryDante/ow-tauri"
+documentation = "https://docs.rs/tauri-plugin-overwolf"
+keywords = ["tauri", "tauri-plugin", "overwolf"]
 categories = ["gui"]
 include = ["/src/**", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE"]
 

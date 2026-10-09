@@ -9,6 +9,8 @@
     "url": "git+https://github.com/AlloryDante/ow-tauri.git",
     "directory": "packages/cli"
   },
+  "homepage": "https://github.com/AlloryDante/ow-tauri#readme",
+  "bugs": "https://github.com/AlloryDante/ow-tauri/issues",
   "keywords": [
     "tauri",
     "overwolf",
@@ -32,6 +34,10 @@
   ],
   "engines": {
     "node": ">=22.12"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

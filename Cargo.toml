@@ -21,7 +21,7 @@ rust-version = "1.90"
 license = "MIT OR Apache-2.0"
 authors = ["ow-tauri contributors"]
 description = "Overwolf ads, consent and analytics for Tauri 2 apps."
-keywords = ["tauri", "overwolf", "plugin", "ads", "electron"]
+keywords = ["tauri", "tauri-plugin", "overwolf", "ads", "consent"]
 categories = ["gui", "api-bindings"]
 
 # Versions every lane must use. Latest stable as of 2026-10-06; see

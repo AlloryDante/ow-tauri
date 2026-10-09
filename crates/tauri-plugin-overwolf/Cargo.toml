@@ -1,6 +1,6 @@
 [package]
 name = "tauri-plugin-overwolf"
-description = "Overwolf ads (<owadview>), consent and analytics for Tauri 2 apps, wire-identical to ow-electron."
+description = "Overwolf ads (<owadview>), consent, analytics and app identity for Tauri 2 apps."
 readme = "README.md"
 version.workspace = true
 edition.workspace = true
@@ -10,6 +10,8 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 repository = "https://github.com/AlloryDante/ow-tauri"
+homepage = "https://github.com/AlloryDante/ow-tauri"
+documentation = "https://docs.rs/tauri-plugin-overwolf"
 # Tauri plugins declare `links` so tauri-build can find the permission files
 # this crate's build script generates (DEP_TAURI_PLUGIN_OVERWOLF_*).
 links = "tauri-plugin-overwolf"

@@ -9,6 +9,8 @@
     "url": "git+https://github.com/AlloryDante/ow-tauri.git",
     "directory": "packages/api"
   },
+  "homepage": "https://github.com/AlloryDante/ow-tauri#readme",
+  "bugs": "https://github.com/AlloryDante/ow-tauri/issues",
   "keywords": [
     "tauri",
     "tauri-plugin",
@@ -46,10 +48,16 @@
   "files": [
     "dist",
     "!dist/**/*.test.*",
+    "src",
+    "!src/**/*.test.ts",
     "README.md",
     "LICENSE-MIT",
     "LICENSE-APACHE"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "build:generated": "rolldown -c rolldown.config.mjs",
