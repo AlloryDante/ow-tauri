@@ -22,6 +22,7 @@ import { watchFront } from './lib/front-monitor.mjs';
 import { displayName, loadIdentity } from './lib/identity.mjs';
 import { launch, makeAppDir, owElectronVersion } from './lib/launch.mjs';
 import { waitForQuietMachine } from './lib/load-guard.mjs';
+import { startProcSampler, webKitPidsNow } from './lib/proc-sampler.mjs';
 import { parseNetlog, summarize } from './lib/netlog-parse.mjs';
 import { appDataDir, isolationEnv } from './lib/paths.mjs';
 import { FEATURE_PRESETS, SCENARIOS } from './lib/scenarios.mjs';
@@ -124,6 +125,9 @@ const USAGE = `Usage: node run.mjs [options]
                           --home profile with: ${Object.keys(CORRUPTIONS).join(', ')}
                           (corrupt-state scenario; needs a profile from an earlier run,
                           or --home real with --ci-visible in the CI lab)
+  --mem-sample-ms N       macOS: every N ms, write the app's processes (WebKit or
+                          Electron helpers included) and their physical footprint to
+                          proc-samples.jsonl (lib/mem-summary.mjs: the memory gate)
   --run-id ID             capture folder name (default: timestamp + mode)
   --no-wait               do not wait for a quiet machine before launching
   --help`;
@@ -162,6 +166,7 @@ function parseCli() {
       'no-build': { type: 'boolean', default: false },
       'ci-visible': { type: 'boolean', default: false },
       'corrupt-state': { type: 'string' },
+      'mem-sample-ms': { type: 'string' },
       help: { type: 'boolean', default: false },
     },
   });
@@ -254,6 +259,8 @@ function parseCli() {
     position = values.position.split(',').map(Number);
     if (position.length !== 2 || position.some((n) => !Number.isFinite(n))) fail('bad --position');
   }
+  if (values['mem-sample-ms'] !== undefined && !(Number(values['mem-sample-ms']) >= 1000))
+    fail('--mem-sample-ms must be at least 1000');
   const maxLiveLoads = Number(values['max-live-loads']);
   if (!(maxLiveLoads >= 1 && maxLiveLoads <= 50)) fail('--max-live-loads must be 1..50');
   return { ...values, duration, layouts, maxLiveLoads, scenarioDef: scenario, features, position };
@@ -434,7 +441,18 @@ async function main() {
     `run ${runId} (${opts.host}): ${opts.mode} ads, ${opts.layouts.join(' ')}, ${opts.duration}s`,
   );
   let stopFront = () => null;
+  let stopSampler = () => {};
+  const webKitBefore = opts['mem-sample-ms'] ? webKitPidsNow() : null;
   const onSpawn = (child) => {
+    if (webKitBefore) {
+      stopSampler = startProcSampler({
+        appPid: child.pid,
+        file: join(runDir, 'proc-samples.jsonl'),
+        everyMs: Number(opts['mem-sample-ms']),
+        before: webKitBefore,
+        toolsDir: join(harnessDir, 'captures', '.tools'),
+      });
+    }
     writeFileSync(join(runDir, 'app.pid'), `${child.pid}\n`);
     // The invisible app must never take the keyboard (front-monitor.jsonl).
     stopFront = watchFront(child.pid, join(runDir, 'front-monitor.jsonl'), { everyMs: 200 });
@@ -478,6 +496,7 @@ async function main() {
       });
 
   const front = stopFront();
+  stopSampler();
   const after = Object.fromEntries(
     Object.entries(watched).map(([k, dir]) => [
       k,

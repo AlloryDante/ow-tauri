@@ -1488,6 +1488,53 @@ export const SCENARIOS = {
     },
   },
 
+  'email-hashes-split': {
+    describe:
+      'L1 record-first: generateUserEmailHashes(x) alone, then setUserEmailHashes with literal values (all three hashes, sha256 only, an extra key, a string, an array): which call sends eHashes to the guests, with what data, and what the state file stores.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 40 },
+    config: {
+      actions: [
+        {
+          at: 8000,
+          do: 'ow-call',
+          fn: 'generateUserEmailHashes',
+          args: [TEST_EMAIL],
+          label: 'generate only',
+        },
+        { at: 9000, do: 'state-file', label: 'after-generate' },
+        {
+          at: 12000,
+          do: 'ow-call',
+          fn: 'setUserEmailHashes',
+          args: [{ sha1: 'a1', md5: 'b2', sha256: 'c3' }],
+          label: 'set literal',
+        },
+        { at: 13000, do: 'state-file', label: 'after-set-literal' },
+        {
+          at: 16000,
+          do: 'ow-call',
+          fn: 'setUserEmailHashes',
+          args: [{ sha256: 'only256' }],
+          label: 'set sha256 only',
+        },
+        { at: 17000, do: 'state-file', label: 'after-set-sha256-only' },
+        {
+          at: 20000,
+          do: 'ow-call',
+          fn: 'setUserEmailHashes',
+          args: [{ sha256: 'z9', extra: 'x', md5: 'm5' }],
+          label: 'set extra key',
+        },
+        { at: 21000, do: 'state-file', label: 'after-set-extra' },
+        { at: 24000, do: 'ow-call', fn: 'setUserEmailHashes', args: ['abc'], label: "set 'abc'" },
+        { at: 25000, do: 'state-file', label: 'after-set-string' },
+        { at: 27000, do: 'ow-call', fn: 'setUserEmailHashes', args: [['x']], label: "set ['x']" },
+        { at: 28000, do: 'state-file', label: 'after-set-array' },
+        { at: 30000, do: 'probe-guests', label: 'end' },
+      ],
+    },
+  },
+
   'dialog-probe': {
     describe:
       "§5.2 #19, OQ-39: what alert(), confirm() and prompt() return in an ad guest, and how long they block. ow-tauri only: ow-electron shows a native dialog for a guest's alert(), which the invisible lab must not show; its answers come from the Windows CI lab (--ci-visible).",
@@ -1619,6 +1666,42 @@ export const SCENARIOS = {
       'R2-9: a long hidden session (no ads, window never shown) to watch the periodic heartbeat. Needs --allow-long.',
     defaults: { mode: 'test', present: 'hidden', layout: 'none', duration: 46800 },
     config: { tickMs: 600000, actions: [] },
+  },
+};
+
+// DESIGN §7.6 / LEAD-RULINGS R9: the macOS guest footprint gate. Two slots
+// (400x600 + 400x60), memory sampled every 10 s (lib/mem-summary.mjs).
+const RELOAD_ALL = (at) => ({
+  at,
+  do: 'page-eval',
+  label: 'reload every slot',
+  code: `document.querySelectorAll('owadview').forEach((el) => el.reload()); 'ok'`,
+});
+SCENARIOS['memory-idle'] = {
+  describe:
+    "§7.6 / R9: 30 min idle with two running test ads (400x600 + 400x60); the footprint of the app and its web content processes every 10 s. The largest guest must stay flat after each of the ad library's own reloads.",
+  defaults: {
+    mode: 'test',
+    present: 'transparent',
+    layout: '400x600,400x60',
+    duration: 1800,
+    'mem-sample-ms': 10000,
+  },
+  config: { window: { width: 900, height: 760 }, actions: [] },
+};
+SCENARIOS['memory-reload'] = {
+  describe:
+    "§7.6 / R9: 10 min with two test ads (400x600 + 400x60) and every slot reloaded each 60 s (element.reload()); the largest guest's last 2-min median must stay within its first + 25 %.",
+  defaults: {
+    mode: 'test',
+    present: 'transparent',
+    layout: '400x600,400x60',
+    duration: 600,
+    'mem-sample-ms': 10000,
+  },
+  config: {
+    window: { width: 900, height: 760 },
+    actions: Array.from({ length: 9 }, (_, i) => RELOAD_ALL(60000 * (i + 1))),
   },
 };
 

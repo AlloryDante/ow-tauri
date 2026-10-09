@@ -14,7 +14,7 @@
     "uid-matrix": "node uid-matrix.mjs",
     "muid-probe": "node muid-probe.mjs",
     "parse-netlog": "node lib/netlog-parse.mjs",
-    "test": "node --test parity-diff.test.mjs windows-lab.test.mjs",
+    "test": "node --test parity-diff.test.mjs windows-lab.test.mjs guest-requests.test.mjs scenarios.test.mjs mem-summary.test.mjs",
     "parity-diff": "node parity-diff.mjs"
   },
   "dependencies": {
