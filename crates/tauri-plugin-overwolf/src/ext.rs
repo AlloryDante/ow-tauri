@@ -39,9 +39,6 @@ fn state_error(err: &crate::state::ow_electron::WriteError) -> Error {
         crate::state::ow_electron::WriteError::Io(io) => {
             Error::from_io("Updating ow-electron.json", io)
         }
-        crate::state::ow_electron::WriteError::InvalidExisting => {
-            Error::backend("ow-electron.json is not valid JSON; it was left untouched")
-        }
     }
 }
 
@@ -281,8 +278,11 @@ impl<R: Runtime> Overwolf<R> {
 
     /// `setUserEmailHashes(hashes)` (CONTRACT A.2.2): the hashes go to every
     /// ad guest and are stored as `eHashes` in `ow-electron.json`, as
-    /// ow-electron does. Empty hashes are ignored; so is every call after
-    /// [`Overwolf::disable_ads_fpd`] (one warning).
+    /// ow-electron does: the fields that are set, in the order `sha1`, `md5`,
+    /// `sha256`. Empty hashes store `{}` and send `{}`, as ow-electron does
+    /// for `setUserEmailHashes({})`. Ignored after
+    /// [`Overwolf::disable_ads_fpd`] (one warning). See
+    /// [`Overwolf::set_user_email_hashes_value`] for any JSON value.
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::{EmailHashes, OverwolfExt};
@@ -292,28 +292,47 @@ impl<R: Runtime> Overwolf<R> {
     /// # }
     /// ```
     pub fn set_user_email_hashes(&self, hashes: &EmailHashes) {
-        if hashes.is_empty() {
-            return;
-        }
-        if self.0.flags.ads_fpd_disabled.load(Ordering::SeqCst) {
+        let value = serde_json::to_value(hashes).unwrap_or_else(|_| Value::Object(Map::new()));
+        self.set_user_email_hashes_value(Some(value));
+    }
+
+    /// `setUserEmailHashes(value)` with the exact JavaScript argument
+    /// (W4 ruling L1, observed on ow-electron 42.11.4), so the guests and
+    /// `ow-electron.json` see what ow-electron would:
+    ///
+    /// - `Some(value)` stores `value` as given (`null`, `{}`, `""`, partial
+    ///   or extra keys, in the given key order) as `eHashes`;
+    /// - `None` (`setUserEmailHashes()` or `setUserEmailHashes(undefined)`)
+    ///   removes `eHashes`, so the file returns to its bytes before the set;
+    /// - every live guest gets one `eHashes` message with `value || {}`
+    ///   (`{}` for `None` and every falsy value); guests mounted or reloaded
+    ///   later get nothing.
+    ///
+    /// Ignored after [`Overwolf::disable_ads_fpd`] (one warning), except
+    /// `None`, which still removes stored hashes.
+    ///
+    /// ```no_run
+    /// use tauri_plugin_overwolf::OverwolfExt;
+    /// # fn example(app: &tauri::AppHandle) {
+    /// app.overwolf().set_user_email_hashes_value(Some(serde_json::json!({ "sha256": "ab12" })));
+    /// app.overwolf().set_user_email_hashes_value(None); // removes eHashes
+    /// # }
+    /// ```
+    pub fn set_user_email_hashes_value(&self, value: Option<Value>) {
+        if value.is_some() && self.0.flags.ads_fpd_disabled.load(Ordering::SeqCst) {
             log::warn!(target: LOG_TARGET, "setUserEmailHashes() after disableAdsFPD() is ignored");
             return;
         }
-        let get = |h: &Option<String>| h.clone().unwrap_or_default();
-        let (sha1, md5, sha256) = (get(&hashes.sha1), get(&hashes.md5), get(&hashes.sha256));
-        if let Err(err) = self
-            .0
-            .state
-            .ow_electron
-            .write_e_hashes(&sha1, &md5, &sha256)
-        {
+        if let Err(err) = self.0.state.ow_electron.write_e_hashes(value.as_ref()) {
             log::warn!(target: LOG_TARGET, "eHashes not stored: {err}");
         }
-        self.0.ads.set_email_hashes(Some(hashes.clone()));
+        self.0.ads.set_email_hashes(value);
     }
 
-    /// `clearUserEmailHashes()` (SEC-M9): forgets the hashes and removes
-    /// `eHashes` from `ow-electron.json`.
+    /// `clearUserEmailHashes()` (SEC-M9): the same as
+    /// `setUserEmailHashes(undefined)` in ow-electron ([`Overwolf::set_user_email_hashes_value`]
+    /// with `None`): removes `eHashes` from `ow-electron.json` and sends
+    /// every live guest `{}`, but reports a failed write.
     ///
     /// ```no_run
     /// use tauri_plugin_overwolf::OverwolfExt;
@@ -324,14 +343,11 @@ impl<R: Runtime> Overwolf<R> {
     ///
     /// # Errors
     ///
-    /// `io` or `backend` when `ow-electron.json` could not be updated.
+    /// `io` when `ow-electron.json` could not be updated.
     pub fn clear_user_email_hashes(&self) -> Result<()> {
+        let written = self.0.state.ow_electron.clear_e_hashes();
         self.0.ads.set_email_hashes(None);
-        self.0
-            .state
-            .ow_electron
-            .clear_e_hashes()
-            .map_err(|e| state_error(&e))
+        written.map_err(|e| state_error(&e))
     }
 
     /// `disableAnonymousAnalytics()` (CONTRACT E.3): only the mandatory

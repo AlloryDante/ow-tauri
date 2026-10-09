@@ -9,10 +9,12 @@
 //! | `ow-electron.json` (shared keys only) | [`ow_electron`] |
 //! | `ow-tauri.json` | [`ow_tauri`] |
 //!
-//! Nothing here is written before `RunEvent::Ready` (DESIGN §4.2). A file
-//! that does not parse is moved to `<name>.corrupt-<ms since 1970>` before
-//! the next write recreates it; the newest
-//! [`CORRUPT_KEPT`] such copies are kept (DESIGN §4.12, SEC-m7).
+//! Nothing here is written before `RunEvent::Ready` (DESIGN §4.2). An
+//! `ow-tauri.json` that does not parse is moved to
+//! `ow-tauri.json.corrupt-<ms since 1970>` at startup; the newest
+//! [`CORRUPT_KEPT`] such copies are kept (DESIGN §4.12, SEC-m7). A corrupt
+//! `ow-electron.json` is reset without a copy, as ow-electron resets it
+//! (W4 ruling L3, [`ow_electron`]).
 //!
 //! ```
 //! use tauri_plugin_overwolf::state::StateDir;

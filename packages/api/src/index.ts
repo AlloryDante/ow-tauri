@@ -129,18 +129,28 @@ export async function generateUserEmailHashes(email: string): Promise<EmailHashe
 }
 
 /**
- * Sends hashes the app computed itself and stores them. Without an argument
- * the stored hashes are sent again. Needs `overwolf:email-hashes`.
+ * Sends hashes the app computed itself to Overwolf's ad stack and stores
+ * them, exactly as ow-electron's `setUserEmailHashes` does:
  *
- * @param hashes - the hashes
+ * - a value (also `null`, `{}` or `''`) is stored as given, and every
+ *   running ad gets it (`{}` for `null`, `''` and other falsy values);
+ * - no argument or `undefined` removes the stored hashes, and every running
+ *   ad gets `{}`.
+ *
+ * Ads started later get nothing. Needs `overwolf:email-hashes`.
+ *
+ * @param hashes - the hashes, or nothing to remove them
  * @returns resolves when they were applied
  */
-export async function setUserEmailHashes(hashes?: EmailHashes): Promise<void> {
-  await call<null>('set_user_email_hashes', { hashes: hashes ?? null });
+export async function setUserEmailHashes(hashes?: EmailHashes | null | string): Promise<void> {
+  // `{ value: undefined }` serialises to `{}`: the plugin tells a missing
+  // value (undefined) from `null`, as ow-electron does.
+  await call<null>('set_user_email_hashes', { hashes: { value: hashes } });
 }
 
 /**
- * Removes the stored e-mail hashes. Needs `overwolf:email-hashes`.
+ * Removes the stored e-mail hashes, like `setUserEmailHashes()` with no
+ * argument, and reports a failed write. Needs `overwolf:email-hashes`.
  *
  * @returns resolves when they are removed
  */

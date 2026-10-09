@@ -1,5 +1,6 @@
 //! Identity, window naming and email hash commands (DESIGN §3.5).
 
+use serde_json::Value;
 use tauri::{Runtime, State, Webview};
 
 use super::{core, require_app_webview};
@@ -50,17 +51,31 @@ pub(crate) async fn generate_user_email_hashes<R: Runtime>(
     Ok(state.generate_user_email_hashes(&email))
 }
 
-/// `setUserEmailHashes(hashes)` (`overwolf:email-hashes`).
+/// The argument of `set_user_email_hashes`: `{ value }`, where a missing
+/// `value` is JavaScript `undefined` and `null` stays `null` (L1: the two
+/// differ in ow-electron).
+#[derive(Debug, Default, serde::Deserialize)]
+pub(crate) struct SetEmailHashes {
+    /// The app's argument; `None` when it passed `undefined` or nothing.
+    #[serde(default, deserialize_with = "present")]
+    value: Option<Value>,
+}
+
+/// Deserialises a present field, `null` included, as `Some`.
+fn present<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<Value>, D::Error> {
+    <Value as serde::Deserialize>::deserialize(d).map(Some)
+}
+
+/// `setUserEmailHashes(hashes)` (`overwolf:email-hashes`): see
+/// [`Overwolf::set_user_email_hashes_value`].
 #[tauri::command]
 pub(crate) async fn set_user_email_hashes<R: Runtime>(
     webview: Webview<R>,
     state: State<'_, Overwolf<R>>,
-    hashes: Option<EmailHashes>,
+    hashes: SetEmailHashes,
 ) -> Result<()> {
     require_app_webview(core(&state), &webview)?;
-    if let Some(hashes) = hashes {
-        state.set_user_email_hashes(&hashes);
-    }
+    state.set_user_email_hashes_value(hashes.value);
     Ok(())
 }
 
@@ -72,4 +87,23 @@ pub(crate) async fn clear_user_email_hashes<R: Runtime>(
 ) -> Result<()> {
     require_app_webview(core(&state), &webview)?;
     state.clear_user_email_hashes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// L1: a missing `value` is `undefined` (removes `eHashes`); `null` is
+    /// stored as `null`.
+    #[test]
+    fn set_email_hashes_tells_undefined_from_null() {
+        let parse = |json: &str| serde_json::from_str::<SetEmailHashes>(json).unwrap().value;
+        assert_eq!(parse("{}"), None);
+        assert_eq!(parse(r#"{"value":null}"#), Some(Value::Null));
+        assert_eq!(parse(r#"{"value":""}"#), Some(Value::String(String::new())));
+        assert_eq!(
+            parse(r#"{"value":{"sha256":"a","x":1}}"#),
+            Some(serde_json::json!({"sha256":"a","x":1}))
+        );
+    }
 }

@@ -16,7 +16,6 @@ use tauri::test::MockRuntime;
 
 use super::*;
 use crate::host::windows::tests::{Capture, mock_app, wait_until, window};
-use crate::identity::EmailHashes;
 
 type Events = Arc<Mutex<Vec<Value>>>;
 type Mock = Arc<Core<MockRuntime>>;
@@ -474,11 +473,7 @@ fn update_guest(core: &Mock, embedder: &Webview<MockRuntime>, request: AdviewUpd
 #[test]
 fn e_hashes_and_consent_reach_every_existing_guest() {
     let (app, dir, core, _) = app_with("ads-ehashes", &json!({}), &["main"]);
-    let hashes = EmailHashes {
-        sha1: Some("a".into()),
-        md5: Some("b".into()),
-        sha256: Some("c".into()),
-    };
+    let hashes = json!({ "sha256": "z9", "extra": "x", "md5": "m5" });
     core.ads.set_email_hashes(Some(hashes.clone()));
     let (a, _) = mount_on(&core, &app, "main", "e1");
     let (b, _) = mount_on(&core, &app, "main", "e2");
@@ -490,11 +485,36 @@ fn e_hashes_and_consent_reach_every_existing_guest() {
     for l in [&a, &b] {
         assert_eq!(
             delivered(&core, l, "eHashes"),
-            [json!({ "type": "eHashes", "data": { "sha1": "a", "md5": "b", "sha256": "c" } })]
+            [json!({ "type": "eHashes", "data": { "sha256": "z9", "extra": "x", "md5": "m5" } })],
+            "the value as given, in the app's key order (L1)"
         );
     }
     deliver_to_all(&core, "consent", Some(&json!("TCF-STRING")));
     assert_eq!(delivered(&core, &b, "consent").len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// L1: every clear-type value (`undefined`, `null`, `{}`, `""`) sends each
+/// live guest exactly one `{}`; a guest mounted after a clear gets nothing.
+#[test]
+fn e_hashes_clears_send_one_empty_object_and_nothing_later() {
+    let (app, dir, core, _) = app_with("ads-ehashes-clear", &json!({}), &["main"]);
+    let (a, _) = mount_on(&core, &app, "main", "e1");
+    let clears = [None, Some(json!(null)), Some(json!({})), Some(json!(""))];
+    for (n, value) in clears.into_iter().enumerate() {
+        core.ads.set_email_hashes(value);
+        let got = delivered(&core, &a, "eHashes");
+        assert_eq!(got.len(), n + 1, "one message per clear");
+        assert_eq!(got[n], json!({ "type": "eHashes", "data": {} }));
+    }
+    let (b, _) = mount_on(&core, &app, "main", "e2");
+    assert!(delivered(&core, &b, "eHashes").is_empty());
+    core.ads.set_email_hashes(Some(json!("abc")));
+    assert_eq!(
+        delivered(&core, &b, "eHashes"),
+        [json!({ "type": "eHashes", "data": "abc" })],
+        "a truthy non-object is sent as given (value || {{}})"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

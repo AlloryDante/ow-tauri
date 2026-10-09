@@ -46,7 +46,6 @@ use url::Url;
 use super::{Core, lock};
 use crate::ads::{AdviewCommandName, AdviewMount, AdviewUpdate, ChannelMessage};
 use crate::error::{Error, Result};
-use crate::identity::EmailHashes;
 
 #[cfg(ow_tauri_ads)]
 mod driver;
@@ -67,8 +66,8 @@ pub(crate) struct AdsCore {
     /// The guests (the driver owns this lock).
     #[cfg(ow_tauri_ads)]
     state: Mutex<driver::AdsState>,
-    /// The hashes of the last `setUserEmailHashes()`.
-    email_hashes: Mutex<Option<EmailHashes>>,
+    /// The value of the last `setUserEmailHashes()` (`None`: cleared).
+    email_hashes: Mutex<Option<Value>>,
     /// Delivers a host message to every existing guest; set at the first
     /// mount.
     broadcast: OnceLock<Broadcast>,
@@ -147,24 +146,27 @@ impl AdsCore {
         }
     }
 
-    /// Stores the hashes the guests receive (`None` clears them) and sends
-    /// non-empty ones to every existing guest as `eHashes` (D.5: `sha1`,
-    /// `md5`, `sha256`, empty strings for missing ones). Guests mounted
-    /// later do not get them, as in ow-electron.
-    pub(crate) fn set_email_hashes(&self, hashes: Option<EmailHashes>) {
-        let message = hashes
+    /// `setUserEmailHashes(value)` towards the guests (W4 ruling L1,
+    /// observed on ow-electron 42.11.4): every existing guest gets one
+    /// `eHashes` private message whose data is the value as given, or `{}`
+    /// for `undefined` (`None`) and every other falsy value (`null`, `""`,
+    /// `false`, `0`), as ow-electron sends `value || {}`. Guests mounted or
+    /// reloaded later get nothing.
+    pub(crate) fn set_email_hashes(&self, value: Option<Value>) {
+        let data = value
             .as_ref()
-            .filter(|h| !h.is_empty())
-            .map(e_hashes_message);
-        *lock(&self.email_hashes) = hashes;
-        if let (Some(data), Some(broadcast)) = (message, self.broadcast.get()) {
+            .filter(|v| is_truthy(v))
+            .cloned()
+            .unwrap_or_else(|| Value::Object(Map::new()));
+        *lock(&self.email_hashes) = value;
+        if let Some(broadcast) = self.broadcast.get() {
             broadcast("eHashes", Some(&data));
         }
     }
 
-    /// The hashes of the last `setUserEmailHashes()`.
+    /// The value of the last `setUserEmailHashes()`.
     #[allow(dead_code, reason = "read by tests and the Rust API's future getter")]
-    pub(crate) fn email_hashes(&self) -> Option<EmailHashes> {
+    pub(crate) fn email_hashes(&self) -> Option<Value> {
         lock(&self.email_hashes).clone()
     }
 
@@ -241,14 +243,15 @@ impl AdsCore {
     }
 }
 
-/// The `eHashes` data (D.5): all three keys, in this order.
-fn e_hashes_message(h: &EmailHashes) -> Value {
-    let get = |v: &Option<String>| Value::from(v.clone().unwrap_or_default());
-    let mut m = Map::new();
-    m.insert("sha1".into(), get(&h.sha1));
-    m.insert("md5".into(), get(&h.md5));
-    m.insert("sha256".into(), get(&h.sha256));
-    Value::Object(m)
+/// JavaScript truthiness of a JSON value (`value || {}` in ow-electron).
+fn is_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0 && !f.is_nan()),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(_) | Value::Object(_) => true,
+    }
 }
 
 /// `adview_mount`: creates the guest of `request` in `embedder`'s window
@@ -406,16 +409,14 @@ mod facade_tests {
     }
 
     #[test]
-    fn e_hashes_carry_all_three_keys_in_order() {
-        let h = EmailHashes {
-            md5: Some("m".into()),
-            ..EmailHashes::default()
-        };
-        let v = e_hashes_message(&h);
-        let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
-        assert_eq!(keys, ["sha1", "md5", "sha256"]);
-        assert_eq!(v["md5"], "m");
-        assert_eq!(v["sha1"], "");
+    fn falsy_values_are_javascript_falsy() {
+        use serde_json::json;
+        for v in [json!(null), json!(false), json!(0), json!(0.0), json!("")] {
+            assert!(!is_truthy(&v), "{v}");
+        }
+        for v in [json!(true), json!(1), json!("a"), json!([]), json!({})] {
+            assert!(is_truthy(&v), "{v}");
+        }
     }
 
     #[test]

@@ -167,6 +167,22 @@ describe('internal helpers', () => {
 });
 
 describe('the plugin API', () => {
+  it('tells undefined from null in setUserEmailHashes on the wire (L1)', async () => {
+    overwolf = mockOverwolf();
+    await setUserEmailHashes();
+    await setUserEmailHashes(undefined);
+    await setUserEmailHashes(null);
+    await setUserEmailHashes('');
+    await setUserEmailHashes({});
+    expect(overwolf.calls.map((c) => JSON.stringify(c.args))).toEqual([
+      '{"hashes":{}}',
+      '{"hashes":{}}',
+      '{"hashes":{"value":null}}',
+      '{"hashes":{"value":""}}',
+      '{"hashes":{"value":{}}}',
+    ]);
+  });
+
   it('passes each call through with its wire arguments', async () => {
     overwolf = mockOverwolf({
       info: { name: 'Sample' },
@@ -198,8 +214,11 @@ describe('the plugin API', () => {
       { command: 'open_ad_privacy_settings_window', args: { options: { tab: 'purposes' } } },
       { command: 'open_cmp_window', args: { options: { tab: 'vendors' } } },
       { command: 'generate_user_email_hashes', args: { email: 'a@example.com' } },
-      { command: 'set_user_email_hashes', args: { hashes: null } },
-      { command: 'set_user_email_hashes', args: { hashes: { sha1: 'a', md5: 'b', sha256: 'c' } } },
+      { command: 'set_user_email_hashes', args: { hashes: { value: undefined } } },
+      {
+        command: 'set_user_email_hashes',
+        args: { hashes: { value: { sha1: 'a', md5: 'b', sha256: 'c' } } },
+      },
       { command: 'clear_user_email_hashes', args: {} },
       { command: 'disable_anonymous_analytics', args: {} },
       { command: 'disable_ads_optimization', args: {} },

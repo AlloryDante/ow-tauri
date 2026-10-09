@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value, json};
 use sha2::Digest as _;
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, Wry};
-use tauri_plugin_overwolf::{CmpWindowOptions, EmailHashes, OverwolfExt};
+use tauri_plugin_overwolf::{CmpWindowOptions, OverwolfExt};
 
 use crate::harness::{self, lock, wait};
 use crate::{observe, windows};
@@ -799,19 +799,15 @@ fn rust_call(
             serde_json::to_value(ow.generate_user_email_hashes(email)).map_err(|e| e.to_string())
         }
         "setUserEmailHashes" => {
-            let hashes = match generate {
-                Some(email) => ow.generate_user_email_hashes(email.as_str().unwrap_or_default()),
-                None => match arg(0) {
-                    Some(v) => serde_json::from_value::<EmailHashes>(v.clone())
-                        .map_err(|e| e.to_string())?,
-                    None => {
-                        return Err(
-                            "the Rust API takes hashes (clear_user_email_hashes clears)".into()
-                        );
-                    }
-                },
-            };
-            ow.set_user_email_hashes(&hashes);
+            match generate {
+                // setUserEmailHashes(generateUserEmailHashes(email)).
+                Some(email) => {
+                    let hashes = ow.generate_user_email_hashes(email.as_str().unwrap_or_default());
+                    ow.set_user_email_hashes(&hashes);
+                }
+                // The argument as given; none or `undefined` removes them.
+                None => ow.set_user_email_hashes_value(arg(0).cloned()),
+            }
             Ok(Value::Null)
         }
         "setExternalPaymentUserId" => {

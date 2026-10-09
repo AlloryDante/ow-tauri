@@ -5,11 +5,16 @@
 //! as ow-electron does (observed)). It never writes `utmParams` and never removes
 //! keys; every other key keeps its value (and, with `serde_json`'s
 //! `preserve_order`, its position). Writes are read-modify-write under an
-//! in-process lock, through a temp file renamed over the original. A file
-//! that is not a JSON object is moved to `ow-electron.json.corrupt-<ms>` by
-//! the next write, which starts a new file (DESIGN §4.12, D27; the newest
-//! [`super::CORRUPT_KEPT`] copies are kept). Nothing is written before
-//! `RunEvent::Ready`.
+//! in-process lock, through a temp file renamed over the original. Nothing
+//! is written before `RunEvent::Ready`.
+//!
+//! A file that does not parse as a JSON object (garbage, truncated, empty,
+//! `null`, `[]`) or whose shared keys have the wrong type
+//! ([`FileStatus::Invalid`]) is reset the way ow-electron resets an
+//! unparseable file: it reads as a first launch, and the next write starts a
+//! new object, with no backup copy (W4 ruling L3). ow-electron itself keeps a
+//! `[]` or wrong-typed file forever and re-sends `app_first_launch` on every
+//! launch; resetting it once is a listed deviation (PARITY).
 //!
 //! ```
 //! # let dir = std::env::temp_dir().join(format!("owe-doc-{}", std::process::id()));
@@ -66,8 +71,9 @@ pub enum FileStatus {
     Missing,
     /// A JSON object.
     Valid,
-    /// Present but not a JSON object (or unreadable); the next write moves
-    /// a file that is not a JSON object aside and starts a new one.
+    /// Present but not a JSON object, a JSON object whose shared keys have
+    /// the wrong type, or unreadable; the next write of a file that could
+    /// be read starts a new object (no backup, as ow-electron).
     Invalid,
 }
 
@@ -83,10 +89,6 @@ pub struct ReadOutcome {
 /// Why a write did not happen.
 #[derive(Debug, thiserror::Error)]
 pub enum WriteError {
-    /// The existing file is not valid JSON and could not be moved aside;
-    /// it was left untouched.
-    #[error("ow-electron.json is not valid JSON; left untouched")]
-    InvalidExisting,
     /// Reading or writing failed.
     #[error("ow-electron.json: {0}")]
     Io(#[from] std::io::Error),
@@ -97,9 +99,21 @@ pub enum WriteError {
 enum Loaded {
     Missing,
     Valid(Map<String, Value>),
-    /// Not a JSON object.
+    /// Not a JSON object, or a shared key of the wrong type.
     Unparseable,
     Unreadable(std::io::Error),
+}
+
+/// Whether the shared keys ow-electron reads have a type ow-electron writes:
+/// `firstLaunch` a boolean, `cmp` an object, `utmParams` an object or
+/// `null`. Absent keys are fine. `eHashes` may hold any JSON value
+/// (`setUserEmailHashes` stores what the app passes, L1), and other keys are
+/// not looked at.
+fn shared_keys_well_typed(map: &Map<String, Value>) -> bool {
+    let ok = |key: &str, accept: fn(&Value) -> bool| map.get(key).is_none_or(accept);
+    ok("firstLaunch", Value::is_boolean)
+        && ok("cmp", Value::is_object)
+        && ok("utmParams", |v| v.is_object() || v.is_null())
 }
 
 /// Access to one `ow-electron.json`.
@@ -138,7 +152,7 @@ impl OwElectronFile {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Loaded::Missing,
             Err(e) => Loaded::Unreadable(e),
             Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
-                Ok(Value::Object(map)) => Loaded::Valid(map),
+                Ok(Value::Object(map)) if shared_keys_well_typed(&map) => Loaded::Valid(map),
                 _ => Loaded::Unparseable,
             },
         }
@@ -176,33 +190,20 @@ impl OwElectronFile {
     ///
     /// # Errors
     ///
-    /// [`WriteError::InvalidExisting`] when the file is not a JSON object
-    /// and could not be moved aside; [`WriteError::Io`] when reading or
-    /// writing fails.
+    /// [`WriteError::Io`] when reading or writing fails. A file that is
+    /// [`FileStatus::Invalid`] but readable is replaced by a new object.
     pub fn update(&self, edit: impl FnOnce(&mut Map<String, Value>)) -> Result<(), WriteError> {
         let _guard = self
             .lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut map = match self.load_raw() {
-            Loaded::Missing => Map::new(),
             Loaded::Valid(map) => map,
             Loaded::Unreadable(e) => return Err(WriteError::Io(e)),
-            Loaded::Unparseable => {
-                let moved = super::move_aside(&self.path).ok_or(WriteError::InvalidExisting)?;
-                #[cfg(feature = "plugin")]
-                log::warn!(
-                    target: "tauri_plugin_overwolf",
-                    "ow-electron.json was not valid JSON; moved to {}",
-                    moved
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default()
-                );
-                #[cfg(not(feature = "plugin"))]
-                let _ = moved;
-                Map::new()
-            }
+            // A missing file starts a new object; so does an unparseable
+            // one, as ow-electron resets it: no backup copy (L3). The
+            // startup read logged it once.
+            Loaded::Missing | Loaded::Unparseable => Map::new(),
         };
         edit(&mut map);
         // Compact, no trailing newline: ow-electron's exact encoding (F.2).
@@ -222,43 +223,45 @@ impl OwElectronFile {
         })
     }
 
-    /// Writes `eHashes: { sha1, md5, sha256 }`, replacing an earlier value
-    /// (ow-electron stores the hashes of every `setUserEmailHashes()`
-    /// (observed)).
+    /// Stores `eHashes` as `setUserEmailHashes(value)` does in ow-electron
+    /// (W4 ruling L1, observed): `Some(value)` stores the value as given
+    /// (`null`, `{}`, `""`, partial or extra keys, in the app's key order),
+    /// and `None` (JavaScript `undefined`) removes the key, so the file
+    /// returns to the bytes it had before the hashes were set. Removing a key
+    /// the file does not have writes nothing.
     ///
     /// # Errors
     ///
     /// As [`OwElectronFile::update`].
-    pub fn write_e_hashes(&self, sha1: &str, md5: &str, sha256: &str) -> Result<(), WriteError> {
+    pub fn write_e_hashes(&self, value: Option<&Value>) -> Result<(), WriteError> {
+        let Some(value) = value else {
+            let (status, map) = {
+                let _guard = self
+                    .lock
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                self.load()
+            };
+            if status != FileStatus::Valid || !map.contains_key("eHashes") {
+                return Ok(());
+            }
+            return self.update(|map| {
+                map.remove("eHashes");
+            });
+        };
         self.update(|map| {
-            let mut hashes = Map::new();
-            hashes.insert("sha1".into(), Value::String(sha1.to_owned()));
-            hashes.insert("md5".into(), Value::String(md5.to_owned()));
-            hashes.insert("sha256".into(), Value::String(sha256.to_owned()));
-            map.insert("eHashes".into(), Value::Object(hashes));
+            map.insert("eHashes".into(), value.clone());
         })
     }
 
-    /// Removes `eHashes` (`clearUserEmailHashes`, SEC-M9); nothing is
-    /// written when the file has none.
+    /// Removes `eHashes` (`clearUserEmailHashes()`, SEC-M9): the same as
+    /// [`OwElectronFile::write_e_hashes`] with `None`.
     ///
     /// # Errors
     ///
     /// As [`OwElectronFile::update`].
     pub fn clear_e_hashes(&self) -> Result<(), WriteError> {
-        let (status, map) = {
-            let _guard = self
-                .lock
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            self.load()
-        };
-        if status != FileStatus::Valid || !map.contains_key("eHashes") {
-            return Ok(());
-        }
-        self.update(|map| {
-            map.remove("eHashes");
-        })
+        self.write_e_hashes(None)
     }
 
     /// Writes the fields of `cmp` that are set, keeping other keys of the
@@ -304,7 +307,10 @@ mod tests {
         file.clear_e_hashes().unwrap();
         assert!(!file.path().exists(), "nothing to clear writes nothing");
         file.set_first_launch().unwrap();
-        file.write_e_hashes("a", "b", "c").unwrap();
+        file.write_e_hashes(Some(
+            &serde_json::json!({"sha1":"a","md5":"b","sha256":"c"}),
+        ))
+        .unwrap();
         file.clear_e_hashes().unwrap();
         let text = std::fs::read_to_string(file.path()).unwrap();
         assert_eq!(text, r#"{"firstLaunch":true}"#);
@@ -386,8 +392,12 @@ mod tests {
             unified_consent_string: None,
         })
         .unwrap();
-        file.write_e_hashes("old", "old", "old").unwrap();
-        file.write_e_hashes("s1", "m5", "s256").unwrap();
+        file.write_e_hashes(Some(&serde_json::json!({"sha1":"old"})))
+            .unwrap();
+        file.write_e_hashes(Some(
+            &serde_json::json!({"sha1":"s1","md5":"m5","sha256":"s256"}),
+        ))
+        .unwrap();
         assert_eq!(
             std::fs::read_to_string(file.path()).unwrap(),
             r#"{"firstLaunch":true,"cmp":{"cmpString":"CQ","timeStamp":1},"eHashes":{"sha1":"s1","md5":"m5","sha256":"s256"}}"#
@@ -395,47 +405,98 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// DESIGN §4.12 (D27): the next write moves an invalid file aside and
-    /// starts a new one; reading never changes it.
+    /// L1 (observed on ow-electron 42.11.4): the value is stored as given,
+    /// in the app's key order; `None` (`undefined`) removes the key and the
+    /// file returns to its bytes before the set.
     #[test]
-    fn invalid_file_is_moved_aside_by_the_next_write() {
-        let dir = test_dir("owe-invalid");
-        let path = dir.join("ow-electron.json");
-        std::fs::write(&path, b"{not json").unwrap();
-        let file = OwElectronFile::new(path.clone());
-        let read = file.read();
-        assert_eq!(read.status, FileStatus::Invalid);
-        assert_eq!(read.state, SharedState::default());
-        assert_eq!(
-            std::fs::read(&path).unwrap(),
-            b"{not json",
-            "reads write nothing"
-        );
+    fn e_hashes_store_the_value_as_given_and_undefined_removes_it() {
+        let dir = test_dir("owe-ehash-values");
+        let file = OwElectronFile::new(dir.join("ow-electron.json"));
         file.set_first_launch().unwrap();
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            r#"{"firstLaunch":true}"#
-        );
-        let copies = |dir: &Path| {
-            let mut c: Vec<PathBuf> = std::fs::read_dir(dir)
+        let before = std::fs::read(file.path()).unwrap();
+        let cases: [(Value, &str); 6] = [
+            (Value::Null, r#""eHashes":null"#),
+            (serde_json::json!({}), r#""eHashes":{}"#),
+            (Value::String(String::new()), r#""eHashes":"""#),
+            (
+                serde_json::json!({"sha256":"z9","extra":"x","md5":"m5"}),
+                r#""eHashes":{"sha256":"z9","extra":"x","md5":"m5"}"#,
+            ),
+            (Value::String("abc".into()), r#""eHashes":"abc""#),
+            (serde_json::json!(["x"]), r#""eHashes":["x"]"#),
+        ];
+        for (value, expected) in cases {
+            file.write_e_hashes(Some(&value)).unwrap();
+            let text = std::fs::read_to_string(file.path()).unwrap();
+            assert_eq!(text, format!(r#"{{"firstLaunch":true,{expected}}}"#));
+            file.write_e_hashes(None).unwrap();
+            assert_eq!(std::fs::read(file.path()).unwrap(), before);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// L3: every kind of corruption reads as a first launch (defaults) and
+    /// the next write starts a new object, with no backup copy; reading
+    /// never changes the file.
+    #[test]
+    fn corrupt_files_reset_like_ow_electron_without_a_backup() {
+        let kinds: [&[u8]; 9] = [
+            b"this is not json\n",
+            b"{\"firstLaunch\":fal",
+            b"",
+            b"null",
+            b"[]",
+            b"[1,2]",
+            br#"{"firstLaunch":"no","cmp":42,"eHashes":"x","utmParams":[]}"#,
+            br#"{"cmp":"weird"}"#,
+            br#"{"utmParams":7}"#,
+        ];
+        for (i, bytes) in kinds.iter().enumerate() {
+            let dir = test_dir(&format!("owe-corrupt-{i}"));
+            let path = dir.join("ow-electron.json");
+            std::fs::write(&path, bytes).unwrap();
+            let file = OwElectronFile::new(path.clone());
+            let read = file.read();
+            assert_eq!(read.status, FileStatus::Invalid, "case {i}");
+            assert_eq!(read.state, SharedState::default(), "case {i}");
+            assert_eq!(std::fs::read(&path).unwrap(), *bytes, "reads write nothing");
+            file.set_first_launch().unwrap();
+            file.write_cmp(&CmpBlock {
+                cmp_string: Some("CQ".into()),
+                time_stamp: Some(1),
+                unified_consent_string: None,
+            })
+            .unwrap();
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                r#"{"firstLaunch":true,"cmp":{"cmpString":"CQ","timeStamp":1}}"#,
+                "case {i}"
+            );
+            let siblings: Vec<_> = std::fs::read_dir(&dir)
                 .unwrap()
                 .filter_map(Result::ok)
-                .map(|e| e.path())
-                .filter(|p| p.to_string_lossy().contains("ow-electron.json.corrupt-"))
+                .map(|e| e.file_name().to_string_lossy().into_owned())
                 .collect();
-            c.sort();
-            c
-        };
-        let first = copies(&dir);
-        assert_eq!(first.len(), 1);
-        assert_eq!(std::fs::read(&first[0]).unwrap(), b"{not json");
-        std::fs::write(&path, b"[1,2]").unwrap();
-        file.write_e_hashes("a", "b", "c").unwrap();
-        assert_eq!(copies(&dir).len(), 2);
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            r#"{"eHashes":{"sha1":"a","md5":"b","sha256":"c"}}"#
-        );
+            assert_eq!(siblings, ["ow-electron.json"], "no backup copy (case {i})");
+            assert!(file.read().state.first_launch, "the next launch is normal");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// Wrong types only in keys ow-tauri does not read keep the file valid,
+    /// and an `eHashes` of any type is what ow-electron itself writes.
+    #[test]
+    fn other_keys_and_any_e_hashes_keep_the_file_valid() {
+        let dir = test_dir("owe-valid-shapes");
+        let path = dir.join("ow-electron.json");
+        std::fs::write(
+            &path,
+            r#"{"firstLaunch":true,"eHashes":["x"],"other":42,"utmParams":null}"#,
+        )
+        .unwrap();
+        let file = OwElectronFile::new(path);
+        assert_eq!(file.read().status, FileStatus::Valid);
+        assert!(file.read().state.first_launch);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -446,27 +507,6 @@ mod tests {
         assert_eq!(file.read().status, FileStatus::Missing);
         file.set_first_launch().unwrap();
         assert_eq!(file.read().status, FileStatus::Valid);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn non_object_cmp_is_ignored_on_read_and_replaced_on_write() {
-        let dir = test_dir("owe-cmp");
-        let path = dir.join("ow-electron.json");
-        std::fs::write(&path, r#"{"cmp":"weird","utmParams":null}"#).unwrap();
-        let file = OwElectronFile::new(path);
-        let read = file.read();
-        assert!(read.state.cmp.is_none());
-        assert!(read.state.utm_params.is_none());
-        file.write_cmp(&CmpBlock {
-            cmp_string: Some("A".into()),
-            ..CmpBlock::default()
-        })
-        .unwrap();
-        assert_eq!(
-            file.read().state.cmp.unwrap().cmp_string.as_deref(),
-            Some("A")
-        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
