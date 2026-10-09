@@ -17,10 +17,12 @@ repository builds it in CI on Windows, macOS and Linux.
 | [src/main.ts](src/main.ts), [index.html](index.html)                       | the `<owadview>` runtime, the ad and the ad privacy settings button                                 |
 | [src-tauri/.gitignore](src-tauri/.gitignore)                               | `/gen/overwolf` (the build step writes it)                                                          |
 
-In your own app the dependencies are `tauri-plugin-overwolf = "1"`,
-`tauri-plugin-overwolf-api` and `tauri-plugin-overwolf-cli` from the
-registries; here they are the repository's crate (by path) and npm
-workspaces.
+In your own app `tauri-plugin-overwolf` is a git dependency on this
+repository, and `tauri-plugin-overwolf-api` and `tauri-plugin-overwolf-cli`
+are tarballs built from a clone
+([GETTING-STARTED](../../docs/GETTING-STARTED.md#before-you-start)). They
+are not on crates.io or npm yet. Here they are the repository's crate (by
+path) and npm workspaces.
 
 ## Run
 

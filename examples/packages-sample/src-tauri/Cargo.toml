@@ -35,7 +35,8 @@ lab = [
 
 [dependencies]
 tauri = { version = "2.12.1", features = [] }
-# In your app: `tauri-plugin-overwolf = "1"`; here the repository's crate.
+# In your app: a git dependency on this repository (docs/GETTING-STARTED.md;
+# not on crates.io yet); here the repository's crate.
 tauri-plugin-overwolf = { path = "../../../crates/tauri-plugin-overwolf" }
 tauri-plugin-log = "2.10.0"
 # `generate_context!` embeds the plugin configuration with it.

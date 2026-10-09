@@ -18,8 +18,8 @@ publish = false
 name = "my_game_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
-# In your app: `tauri-plugin-overwolf = "1"` (docs/GETTING-STARTED.md); here
-# the repository's crate by path.
+# In your app: a git dependency on this repository (docs/GETTING-STARTED.md;
+# not on crates.io yet); here the repository's crate by path.
 [build-dependencies]
 tauri-build = { version = "2.7.1", features = [] }
 tauri-plugin-overwolf = { path = "../../../crates/tauri-plugin-overwolf", default-features = false, features = ["build"] }
