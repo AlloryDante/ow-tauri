@@ -245,13 +245,13 @@ Clicking an ad is for test mode only, and only when someone asks to see it:
 each click opens one browser window and nothing crashes. Never click a live
 ad.
 
-Do not claim:
+The demo does not show:
 
 - in-stream ads (ow-electron has no API for them);
 - macOS request-header parity for subresources and `x-ow-*` headers, or
   request shaping on Linux;
 - a server-verified reward (none exists);
-- that `performance_ad_no_fill` fires (ow-electron sends `shutdown` only).
+- `performance_ad_no_fill` firing (ow-electron sends `shutdown` only).
 
 ## Test mode and live mode
 
