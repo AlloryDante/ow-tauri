@@ -152,6 +152,19 @@ tauri = { workspace = true, features = ["test"] }
 [lints]
 workspace = true
 
+# docs.rs (DESIGN §8.3): the app-facing features only (`lab` and
+# `test-util` are for this repository's tests), Windows first so the
+# Windows-only update client is documented.
 [package.metadata.docs.rs]
-all-features = true
+features = ["plugin", "ads", "updater", "build"]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]
 rustdoc-args = ["--cfg", "docsrs"]
+
+# Platform support, as Tauri's plugins declare it (DESIGN §8.3).
+[package.metadata.platforms.support]
+windows = { level = "full", notes = "" }
+macos = { level = "full", notes = "The update client is Windows only" }
+linux = { level = "partial", notes = "No ads, no updater" }
+android = { level = "none", notes = "" }
+ios = { level = "none", notes = "" }
