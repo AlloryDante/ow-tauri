@@ -2,19 +2,20 @@
 
 The plugin has two halves. The npm package `tauri-plugin-overwolf-api` runs in
 your app's webviews. The crate `tauri-plugin-overwolf` runs in your app's
-native process and build script.
+native process and build script. Pick the page for what you are calling.
 
-| Page | Covers |
+| You are working with | Read |
 |---|---|
-| [js.md](js.md) | `tauri-plugin-overwolf-api`: identity, consent, email hashes, the analytics switches, the window name, `./updater`, errors and types |
-| [owadview.md](owadview.md) | the `<owadview>` element (`tauri-plugin-overwolf-api/adview`): attributes, members, events, lifecycle and layout |
-| [rust.md](rust.md) | `tauri-plugin-overwolf`: `Builder`, `OverwolfExt`, the macOS terminate hook, the updater, the build step, errors and types |
-| [permissions.md](permissions.md) | the permission sets and the caller check |
-| [testing.md](testing.md) | `tauri-plugin-overwolf-api/testing`, the fake plugin for unit tests |
+| The functions of `tauri-plugin-overwolf-api`: identity, consent, email hashes, the analytics switches, the window name, `./updater`, errors and types | [js.md](js.md) |
+| The `<owadview>` element (`tauri-plugin-overwolf-api/adview`): attributes, members, events, lifecycle and layout | [owadview.md](owadview.md) |
+| The Rust crate `tauri-plugin-overwolf`: `Builder`, `OverwolfExt`, the macOS terminate hook, the updater, the build step, errors and types | [rust.md](rust.md) |
+| Capabilities: which permission set to grant, and why a command was refused (the caller check) | [permissions.md](permissions.md) |
+| Unit tests of your app code: `tauri-plugin-overwolf-api/testing`, a fake plugin | [testing.md](testing.md) |
 
-The command-line tool is described in
+The `ow-tauri` command is described in
 [packages/cli/README.md](../../packages/cli/README.md), and every
-`plugins.overwolf` key in [CONFIG.md](../CONFIG.md).
+`plugins.overwolf` key in [CONFIG.md](../CONFIG.md). The list of every doc is
+in [docs/README.md](../README.md).
 
 ## Generated reference
 

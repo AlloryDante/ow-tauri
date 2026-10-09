@@ -36,3 +36,9 @@ Thumbs.db
 /examples/ad-showcase/e2e/out/
 /examples/ad-showcase/src-tauri/gen/
 /examples/ad-showcase/src-tauri/windows/hooks.nsh
+
+# Editors and local tools
+# (.vscode/ is not listed: the quickstart examples track .vscode/extensions.json)
+.claude/
+.idea/
+*.swp
