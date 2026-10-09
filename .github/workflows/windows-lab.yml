@@ -65,9 +65,11 @@ on:
 permissions:
   contents: read
 
+# The running lab always finishes and only the newest push waits behind it,
+# so a stream of commits cannot keep the 8 shards from ever completing.
 concurrency:
   group: windows-lab-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always

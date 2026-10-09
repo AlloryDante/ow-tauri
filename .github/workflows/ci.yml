@@ -12,9 +12,12 @@ on:
 permissions:
   contents: read
 
+# Pull requests cancel a superseded run. On main every run finishes (the
+# newest push waits behind it), so several lanes pushing still get a
+# complete result instead of a chain of cancelled runs.
 concurrency:
   group: ci-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
