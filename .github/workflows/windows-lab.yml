@@ -17,6 +17,9 @@ name: Windows lab
 #                     change typing in an app page (DESIGN §4.6a; G5 59/59)
 #   webview2-minimum  the plugin on a fixed-version WebView2 Runtime at the
 #                     floor (ads work) and below it (ads fail closed)
+#   build-identity    DESIGN §5.2 #20: an NSIS build with an overridden
+#                     version installs, runs, updates and uninstalls with the
+#                     merged-config identity
 #   macos-drift       the weekly macOS subset on a hosted runner (invisible lab)
 #   report            one summary; the weekly run opens or updates an issue
 #                     when Overwolf's live ad page or the newest ow-electron
@@ -397,6 +400,116 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  build-identity:
+    name: Build identity (NSIS install, run, update, uninstall)
+    # DESIGN §5.2 #20 (PAR-M1) and §5.1 "NSIS install record + uninstall
+    # Counter": the quickstart built with `tauri build --config` overriding
+    # its version installs with the install record of the merged-config uid
+    # and version, runs under that uid, keeps its state on an /UPDATE
+    # install, and removes record and state on a real uninstall. Overwolf's
+    # hosts resolve to 127.0.0.1 for the whole job, so the app's launch
+    # traffic and the uninstall Counter never leave the runner; the Counter's
+    # values are checked in the generated hooks instead. The signing-uid half
+    # (PAR-B2) is a CLI unit test (packages/cli).
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      OVERRIDE_VERSION: 9.8.7
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: examples/quickstart-vanilla/src-tauri -> target
+      - name: install, and build the JavaScript API the quickstart imports
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build --workspace tauri-plugin-overwolf-api
+      - name: NSIS installer with the version overridden by tauri build --config
+        working-directory: examples/quickstart-vanilla
+        shell: pwsh
+        run: |
+          $override = Join-Path $env:RUNNER_TEMP 'build-identity.conf.json'
+          @{ version = $env:OVERRIDE_VERSION } | ConvertTo-Json | Set-Content -Encoding utf8 $override
+          npx tauri build --debug --bundles nsis --config $override
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $setup = Get-ChildItem src-tauri/target/debug/bundle/nsis -Filter "*_$($env:OVERRIDE_VERSION)_x64-setup.exe" | Select-Object -First 1
+          if (-not $setup) { throw "no installer for $($env:OVERRIDE_VERSION)" }
+          "SETUP=$($setup.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: the generated hooks carry the merged-config identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          uid="$(node -e "import('./tools/parity-harness/lib/uid.mjs').then((m) => console.log(m.electronUid('Example Studio', 'My Game App')))")"
+          echo "UID=$uid" >> "$GITHUB_ENV"
+          node - "$uid" <<'EOF'
+          const fs = require('node:fs');
+          const [uid] = process.argv.slice(2);
+          const hooks = fs.readFileSync('examples/quickstart-vanilla/src-tauri/gen/overwolf/overwolf-hooks.nsh', 'utf8');
+          const version = process.env.OVERRIDE_VERSION;
+          const need = (ok, what) => { if (!ok) { console.error(`hooks: ${what}`); process.exit(1); } };
+          need(hooks.includes(`"Software\\OverwolfElectron\\${uid}" "version" "${version}"`), 'install record version');
+          const extra = /&Extra=([^"]+)"/.exec(hooks);
+          need(extra, 'uninstall Counter Extra');
+          const values = JSON.parse(decodeURIComponent(extra[1].replace(/\+/g, ' ')));
+          need(JSON.stringify(values) === JSON.stringify({ app_id: uid, app_version: version, app_name: 'My Game App' }), `Counter Extra ${JSON.stringify(values)}`);
+          need(/Name=ow_tauri_app_uninstall/.test(hooks), 'Counter name');
+          console.log('hooks: install record and uninstall Counter carry', JSON.stringify(values));
+          EOF
+      - name: Overwolf hosts resolve to 127.0.0.1 (nothing leaves the runner)
+        shell: pwsh
+        run: |
+          $hosts = 'analyticsnew.overwolf.com', 'analyticssec.overwolf.com', 'tracking.overwolf.com', 'features.overwolf.com', 'content.overwolf.com', 'www.overwolf.com', 'cdn.overwolf.com', 'electron-updates.overwolf.com'
+          $hosts | ForEach-Object { "127.0.0.1 $_" } | Add-Content "$env:SystemRoot\System32\drivers\etc\hosts"
+          ipconfig /flushdns | Out-Null
+          Resolve-DnsName analyticsnew.overwolf.com -ErrorAction SilentlyContinue | Format-Table Name, IPAddress
+      - name: install, run, update, uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $key = "HKCU:\Software\OverwolfElectron\$env:UID"
+          $state = Join-Path $env:APPDATA "ow-electron\$env:UID"
+          function Check($ok, $what) { if (-not $ok) { throw "build-identity: $what" } else { Write-Host "ok: $what" } }
+
+          Start-Process -FilePath $env:SETUP -ArgumentList '/S' -Wait
+          Check (Test-Path $key) "install record $key"
+          $record = Get-ItemProperty $key
+          Check ($record.version -eq $env:OVERRIDE_VERSION) "record version $($record.version)"
+          $exe = Join-Path $record.InstallLocation $record.ShortcutName
+          Check (Test-Path $exe) "installed executable $exe"
+          $product = (Get-Item $exe).VersionInfo.ProductVersion
+          Check ($product -eq $env:OVERRIDE_VERSION) "executable version $product (what the runtime reports)"
+
+          # The runtime keeps its state under the uid it computes: the same
+          # folder name as the install record proves the same uid.
+          $app = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 20
+          taskkill /PID $app.Id /T /F | Out-Null
+          Start-Sleep -Seconds 2
+          Get-ChildItem (Join-Path $env:APPDATA 'ow-electron') -ErrorAction SilentlyContinue | Format-Table Name
+          Check (Test-Path $state) "runtime state folder ow-electron\$env:UID"
+
+          # An update (/UPDATE) keeps the record and the state.
+          Start-Process -FilePath $env:SETUP -ArgumentList '/S', '/UPDATE' -Wait
+          Start-Sleep -Seconds 5
+          Check (Test-Path $key) 'install record kept by an /UPDATE install'
+          Check (Test-Path $state) 'state folder kept by an /UPDATE install'
+
+          # A real uninstall removes both (the uninstaller re-launches itself
+          # from %TEMP%, so wait for the outcome, not the process).
+          $record = Get-ItemProperty $key
+          Start-Process -FilePath (Join-Path $record.InstallLocation 'uninstall.exe') -ArgumentList '/S' -Wait
+          for ($i = 0; $i -lt 60 -and (Test-Path $key); $i++) { Start-Sleep -Seconds 1 }
+          Check (-not (Test-Path $key)) 'install record removed by the uninstall'
+          Check (-not (Test-Path $state)) 'state folder removed by the uninstall'
+
   macos-drift:
     name: macOS drift subset (invisible lab, test ads)
     if: github.event_name == 'schedule' || inputs.drift == true
@@ -454,7 +567,7 @@ jobs:
 
   report:
     name: Report
-    needs: [lab, unstable-input, webview2-minimum, macos-drift]
+    needs: [lab, unstable-input, webview2-minimum, build-identity, macos-drift]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 10

@@ -5,7 +5,7 @@
 // lab checks (lib/windows-checks.mjs). Never loads a live ad.
 //
 //   node ci/windows-lab.mjs --shard 1/8 [--scenarios a,b] [--out <dir>]
-//   node ci/windows-lab.mjs --list [--scenarios a,b]   # the plan, no runs
+//   node ci/windows-lab.mjs --list [--suite windows|macos-drift] [--shard 3/8]   # the plan, no runs
 //
 // On Windows (the lab proper) each run starts from a clean state: the
 // ow-electron state folder, the app's userData (ads data store included)
@@ -370,9 +370,16 @@ function main() {
       scenarios: { type: 'string', default: 'all' },
       out: { type: 'string', default: join(harnessDir, 'captures', 'windows-lab') },
       list: { type: 'boolean', default: false },
+      // Which entries `all` means: the Windows lab, or the macOS drift subset.
+      suite: { type: 'string', default: process.platform === 'win32' ? 'windows' : 'macos-drift' },
     },
   });
-  const all = process.platform === 'win32' ? LAB_SCENARIOS : MACOS_DRIFT_SCENARIOS;
+  const suites = { windows: LAB_SCENARIOS, 'macos-drift': MACOS_DRIFT_SCENARIOS };
+  const all = suites[/** @type {keyof typeof suites} */ (values.suite)];
+  if (!all) {
+    console.error(`--suite must be ${Object.keys(suites).join(' or ')}`);
+    process.exit(2);
+  }
   let wanted;
   try {
     wanted = entriesOf(values.scenarios, all);

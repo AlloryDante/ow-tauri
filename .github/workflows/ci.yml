@@ -246,6 +246,8 @@ jobs:
         env:
           RUSTDOCFLAGS: --cfg docsrs -D warnings
           RUSTFLAGS: ''
+          # docs.rs sets it; -sys crates skip their native builds for docs.
+          DOCS_RS: '1'
         run: |
           set -euo pipefail
           features="$(sed -n '/^\[package.metadata.docs.rs\]/,/^\[/s/^features *= *\[\(.*\)\]/\1/p' crates/tauri-plugin-overwolf/Cargo.toml | tr -d '" ')"

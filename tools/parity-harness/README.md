@@ -189,8 +189,10 @@ taskpolicy -b node run.mjs --host tauri --no-build --identity local.identity.exa
 
 ## Windows lab on CI (`ci/windows-lab.mjs`)
 
-`.github/workflows/windows-lab.yml` runs the lab on a GitHub Windows runner (on pushes to `main` that touch the plugin, `ow-tauri` or the harness, and on demand with a scenario list). One job builds `tauri-app` with the `lab` feature; four shards then run, per scenario, ow-electron and ow-tauri one after the other on the same runner, run `parity-diff.mjs` on the pair and evaluate the Windows checks of `lib/windows-checks.mjs`. The scenarios are the round-2 base runs (`A`, `cmp`, `messages`) and every round-3 ad-format scenario. Captures, window copies and diffs are uploaded as the `windows-lab-captures-<shard>` artifacts; each shard's table is in the job summary.
+`.github/workflows/windows-lab.yml` runs the lab on a GitHub Windows runner (on pushes to `main` that touch the plugin, the API or guest-shim packages or the harness, weekly as the drift lab, and on demand with a list of lab entries). One job builds `tauri-app` with the `lab` feature; eight shards then run, per lab entry, ow-electron and ow-tauri one after the other on the same runner, run `parity-diff.mjs` on the pair and evaluate the Windows checks of `lib/windows-checks.mjs`. The entries (`LAB_SCENARIOS` in `ci/windows-lab.mjs`) are the round-2 base runs, every round-3 ad-format scenario, the record-first scenarios (email-hash clears, the last window during consent, every `corrupt-state` kind, gesture timing) and every DESIGN §5.2 check that applies to Windows. Captures, window copies and diffs are uploaded as the `windows-lab-captures-<shard>` artifacts; each shard's table, with every BUG row under it, is in the job summary and in the `report` job.
 
+- **Lab entries.** A scenario name, or `corrupt-state:<kind>` for one corruption (`corrupt-state` in `--scenarios` means all seven). `corrupt-state` and `no-analytics-persisted` need an earlier launch: the driver runs a seed launch per host on the same state first and compares only the second. A scenario that runs on ow-tauri only (`hosts`, `dialog-probe`) is recorded and listed as `n/a` without a comparison. `build-identity` (an installer) is its own job.
+- **Other jobs of the workflow.** `unstable-input` (the key-input spike: stable 58/58, unstable without and with a child webview 58/58 and 59/59), `webview2-minimum` (ow-tauri on fixed-version WebView2 Runtimes: `sizes` and `local-frame` on the floor's Edge 98 build with ads working, checked by `ci/webview2-min.mjs`, and Edge 97 below it with no ad guest), `build-identity` (DESIGN §5.2 #20: the quickstart's NSIS installer with an overridden version installs, runs, updates and uninstalls with the merged-config uid; Overwolf's hosts resolve to 127.0.0.1 there) and, weekly or with `drift: true`, the newest ow-electron `latest`, the newest Tauri 2.x for the spike and a macOS subset (`MACOS_DRIFT_SCENARIOS`, invisible lab on a hosted runner); a failed weekly run opens or updates an issue.
 - **Test ads only.** The driver passes `--mode test` to every run and never `--live-ok`.
 - **Neutral identity.** The harness default (`Example Studio` / `Parity Harness`, formula uid). The driver refuses to run when a `local.identity.json` is present.
 - **Visible on the runner.** `run.mjs --ci-visible` (refused unless `GITHUB_ACTIONS=true`) runs the Tauri app without the invisible lab mode (which on Windows only keeps windows hidden, and a hidden slot does not fill); the runner's desktop is nobody's screen. ow-electron keeps its opacity-0 windows. No window monitor runs there.
@@ -200,8 +202,10 @@ taskpolicy -b node run.mjs --host tauri --no-build --identity local.identity.exa
 
 ```sh
 # On a runner (the workflow's lab step):
-node ci/windows-lab.mjs --shard 1/4 --scenarios all
-node ci/windows-lab.mjs --scenarios lab-layers,audio
+node ci/windows-lab.mjs --shard 1/8 --scenarios all
+node ci/windows-lab.mjs --scenarios lab-layers,audio,corrupt-state:array
+# Anywhere: print a shard's plan (entries and estimated seconds) without running it.
+node ci/windows-lab.mjs --list --suite windows --shard 3/8
 ```
 
 ## Comparing the hosts (`parity-diff.mjs`)
