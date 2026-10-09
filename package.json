@@ -9,7 +9,8 @@
     "packages/*",
     "examples/ad-showcase",
     "examples/quickstart-vanilla",
-    "examples/quickstart-react"
+    "examples/quickstart-react",
+    "examples/packages-sample"
   ],
   "engines": {
     "node": ">=22.12.0"

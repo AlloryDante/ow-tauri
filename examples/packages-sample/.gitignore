@@ -1,0 +1,7 @@
+node_modules/
+# Vite output: the app build and the lab build (e2e/run.mjs)
+dist/
+dist-lab/
+# Invisible-lab runs (e2e/run.mjs)
+e2e/out/
+*.local

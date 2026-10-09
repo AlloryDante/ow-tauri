@@ -1,0 +1,49 @@
+{
+  "name": "ow-tauri-packages-sample",
+  "productName": "ow-tauri Packages Sample",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Overwolf's ow-electron packages sample rebuilt as a Tauri 2 app on tauri-plugin-overwolf: logger, ads tester, consent and settings, updater, and what packages mean on Tauri.",
+  "author": "Example Studio",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/run.mjs",
+    "start:test": "node scripts/run.mjs -- --test-ad",
+    "dev": "tauri dev",
+    "dev:test": "tauri dev -- -- --test-ad",
+    "serve": "vite",
+    "build": "vite build",
+    "tauri": "tauri",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint . --max-warnings 0",
+    "test": "vitest run --maxWorkers=2",
+    "check:rust": "cargo fmt --check --manifest-path src-tauri/Cargo.toml && cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings && cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --features lab -- -D warnings",
+    "lab:smoke": "node e2e/run.mjs",
+    "doctor": "ow-tauri doctor"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.12.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "tauri-plugin-overwolf-api": "^0.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@tauri-apps/cli": "2.12.1",
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "eslint": "10.12.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "globals": "17.13.0",
+    "happy-dom": "20.14.5",
+    "tauri-plugin-overwolf-cli": "^0.1.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "8.71.1",
+    "vite": "8.3.4",
+    "vitest": "5.0.3"
+  }
+}
