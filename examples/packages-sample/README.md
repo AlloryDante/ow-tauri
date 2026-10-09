@@ -76,7 +76,7 @@ trees, and the search box filters by message and value.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/packages-sample/logger-dark.png">
-  <img alt="The Logger page: getInfo() and isCMPRequired() logged at launch, each with its result as an expandable value, under the search box." src="../../docs/images/packages-sample/logger-light.png">
+  <img alt="The Logger page: getInfo() and isCMPRequired() logged at launch with their results, the getInfo() result as an expandable object, under the search box." src="../../docs/images/packages-sample/logger-light.png">
 </picture>
 
 ### Ads tester
@@ -114,7 +114,7 @@ The "CMP & Settings" page shows whether consent rules apply and opens the ad pri
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/packages-sample/settings-dark.png">
-  <img alt="The CMP & Settings page: the consent card with isCMPRequired() and the privacy window buttons, the e-mail hashes card, the identity card with a placeholder uid, and the restart card." src="../../docs/images/packages-sample/settings-light.png">
+  <img alt="The CMP & Settings page: the consent card with isCMPRequired() and the privacy window buttons, the e-mail hashes card, the identity card with the sample's computed uid, and the restart card." src="../../docs/images/packages-sample/settings-light.png">
 </picture>
 
 ### Updater

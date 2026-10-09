@@ -68,7 +68,7 @@ a parity run if you touch parity-sensitive code.
 | TypeScript | Prettier, ESLint (including "no Node imports" in the API package), typecheck, Vitest with coverage thresholds, TypeDoc, generated scripts match their sources, package checks (publint, are-the-types-wrong) | CI `node` | see below |
 | ACL suite | every command against every webview class in Tauri's mock runtime (`crates/tauri-plugin-overwolf/tests/acl-app`) | CI `rust` (part of `cargo test`) | `cargo test --workspace` |
 | macOS lab | the parity scenarios against an ow-electron twin, invisible (`everVisible: false`, never frontmost), plus the 53 macOS key-input cases | maintainers' Macs | [tools/parity-harness](tools/parity-harness/README.md) |
-| Windows lab | the parity scenarios and the 59 Windows key-input cases | `windows-lab.yml`, on pushes to `main` that touch the plugin, the API, the guest shims or the harness, weekly, and on demand | ask a maintainer to dispatch it |
+| Windows lab | the parity scenarios and the 59 Windows key-input cases | `windows-lab.yml`, weekly and on demand | ask a maintainer to dispatch it |
 | Performance | idle cost of the 250 ms poll, CPU of one visible ad against the ow-electron twin, cold start to burst, macOS guest memory over a reload run | labs | PARITY lists the numbers |
 | Release dry run | packaging and publishing without uploading | `release.yml` | [docs/RELEASING.md](docs/RELEASING.md) |
 | Docs | every relative link and anchor in every Markdown file; rustdoc and TypeDoc without warnings | CI `docs-links`, `rust`, `node` | `npm run check:links` |

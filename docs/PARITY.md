@@ -153,6 +153,7 @@ Status values:
   the fallback, and Overwolf is asked whether the gap is acceptable.
 - **R2-n / R3-n**: a harness item ([Harness rounds](#harness-rounds)) still
   has to observe part of it; CONTRACT gives the interim behaviour.
+- **Partial**: the target holds except for the detail the row names.
 - **Deviation**: ow-tauri differs on purpose ([Deviations](#deviations)).
 - **Optimised**: ow-tauri gets the same outcome another way
   ([Optimised, same outcome](#optimised-same-outcome)).
@@ -206,7 +207,7 @@ Status values:
 | skipped when consent not required | cannot be observed (every response gave `true`) | always opened | D.6.1 | Overwolf |
 | consent page globals | `cmp.saveConsent`, `cmp.saveUnifiedConsent`, `privacy.*`, native `close` | identical names and storage | D.6.6 | Target |
 | consent cookies | written by the page, 365 days, every launch, before ads | written by the page; host fallback only if missing | D.6.3 | Target |
-| `isCMPRequired()` | one `cmp-eu-only` request per launch, not persisted, no timeout; resolves at the startup page's load; a `{}` body disables the cache | identical | D.6.2 | Target |
+| `isCMPRequired()` | one `cmp-eu-only` request per launch, not persisted, no timeout; resolves at the startup page's load; a `{}` body disables the cache | identical, except a 60 s client timeout ([Deviations](#deviations)) | D.6.2 | Target |
 | `isCMPRequired()` rule | `true` for every response served | `true` | D.6.2 | Overwolf |
 | settings window | title `CMP`, 800 x 800, not modal, preloader then `cmp.html` with a fixed query; closing writes nothing | identical, verified in the lab | D.6.4 | Target; R3-5 (`firstRun`, `cmpRequired` on later launches) |
 | settings window promise | resolves on creation; a second call focuses | identical | A.2.2 | Target |
@@ -329,8 +330,8 @@ classes these `intended:optimised`.
 
 These checks run in the Tauri lab before a release, per platform. Each
 compares the Tauri capture with the baseline capture of the same scenario.
-On Windows the [Windows lab](#windows-lab) runs checks 1, 4 and 8 on every
-push that touches the plugin.
+On Windows the [Windows lab](#windows-lab) runs checks 1, 4 and 8 every
+week and on demand.
 
 The results on this page come from these runs, all recorded from
 2026-10-06 to 2026-10-08, before the plugin's Tauri-native rewrite
@@ -413,12 +414,11 @@ uid (OQ-A10).
 
 ### Windows lab
 
-`.github/workflows/windows-lab.yml` runs on pushes to `main` that touch the
-plugin, `ow-tauri` or the harness, and on demand. It builds the Tauri
-harness app with the `lab` feature, then four shards run every scenario on
-ow-electron and on ow-tauri one after the other on the same runner (Windows
-Server 2025, display 1920 x 1080), diff the pair and evaluate the Windows
-checks. Test ads only, with the harness's neutral identity.
+`.github/workflows/windows-lab.yml` runs weekly and on demand. It builds
+the Tauri harness app with the `lab` feature, then eight shards run every
+scenario on ow-electron and on ow-tauri one after the other on the same
+runner (Windows Server 2025, display 1920 x 1080), diff the pair and
+evaluate the Windows checks. Test ads only, with the harness's neutral identity.
 
 Last full run on `a333efb`: 27 scenarios (the base runs `A`, `cmp` and
 `messages`, and every ad-format scenario), 0 `BUG`, and the checks L1-W,
@@ -483,7 +483,7 @@ node parity-diff.mjs captures/<ow-electron run> captures/T-sizes   # exit 1 whil
 ```
 
 The Windows lab is the `windows-lab.yml` workflow (`workflow_dispatch` with
-a scenario list, or a push to `main`); its captures and diffs are the
+a scenario list, or the weekly schedule); its captures and diffs are the
 `windows-lab-captures-<shard>` artifacts.
 
 Captures are git-ignored and stay on the machine that made them; they
