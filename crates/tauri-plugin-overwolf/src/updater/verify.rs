@@ -1,4 +1,4 @@
-//! Download verification (CONTRACT I.3, DESIGN §4.14 [R5],
+//! Download verification (CONTRACT I.3, DESIGN §4.14, R5,
 //! [ADR 0008](https://github.com/AlloryDante/ow-tauri/blob/main/docs/adr/0008-updater-client.md)):
 //! the SHA-512 of the feed entry, the detached minisign signature, and the
 //! parts of the Windows publisher check that need no OS: the Authenticode
