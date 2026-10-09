@@ -17,6 +17,19 @@ publish = false
 test = false
 doctest = false
 
+# Stands in for an NSIS installer in the update tests: records its
+# arguments beside itself and exits.
+[[bin]]
+name = "fake-installer"
+path = "src/bin/fake-installer.rs"
+test = false
+doctest = false
+
+[features]
+# The update client (Windows); `tests/updater.rs` drives it from a loopback
+# feed.
+updater = ["tauri-plugin-overwolf/updater"]
+
 [dependencies]
 tauri = { workspace = true, features = ["test"] }
 tauri-plugin-overwolf = { path = "../..", features = ["test-util"] }
