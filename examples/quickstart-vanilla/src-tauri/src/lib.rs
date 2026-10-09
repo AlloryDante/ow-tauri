@@ -18,7 +18,7 @@ pub fn run() {
                 .with_filter(|label| !label.starts_with("ow-cmp"))
                 .build(),
         )
-        // Register the log plugin first so the overwolf plugin's setup messages reach it (§4.16).
+        // Register the log plugin before the overwolf plugin so the overwolf plugin's setup messages reach it (§4.16).
         .plugin(tauri_plugin_log::Builder::new().build())
         .plugin(tauri_plugin_overwolf::init());
 
