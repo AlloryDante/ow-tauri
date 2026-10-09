@@ -1,9 +1,10 @@
 # tauri-plugin-overwolf-api
 
 The JavaScript API of
-[`tauri-plugin-overwolf`](https://github.com/AlloryDante/ow-tauri):
-Overwolf ads (`<owadview>`), consent, email hashes, the analytics switches,
-identity and the Windows updater, for Tauri 2 apps.
+[`tauri-plugin-overwolf`](https://github.com/AlloryDante/ow-tauri), for the
+pages of a Tauri 2 app that uses the plugin: Overwolf ads (`<owadview>`),
+consent, email hashes, the analytics switches, identity and the Windows
+updater.
 
 It is a thin layer over Tauri's IPC. The Rust plugin produces everything
 Overwolf receives; this package calls its commands and runs the `<owadview>`
@@ -14,8 +15,9 @@ This project is not affiliated with or endorsed by Overwolf.
 
 ## Install
 
-Not on npm yet. Build the package from a clone of the repository and install
-the tarball (`npm pack` prints its file name):
+Not on npm yet. The planned npm name is `tauri-plugin-overwolf-api`. Until
+then, build the package from a clone of the repository and install the
+tarball (`npm pack` prints its file name):
 
 ```sh
 git clone https://github.com/AlloryDante/ow-tauri ../ow-tauri
@@ -26,11 +28,11 @@ cd -
 npm add ../ow-tauri/tauri-plugin-overwolf-api-0.1.0.tgz
 ```
 
-Register the Rust plugin in your app
-([getting started](https://github.com/AlloryDante/ow-tauri/blob/main/docs/GETTING-STARTED.md))
-and grant `overwolf:default` to the **webviews** that call it, never to the
-windows: an ad is a child webview inside your window, and a capability that
-names the window would also cover the ad. The opt-in sets are
+The package needs the Rust plugin in your app. Add and register it as the
+[getting started guide](https://github.com/AlloryDante/ow-tauri/blob/main/docs/GETTING-STARTED.md)
+shows. Then grant `overwolf:default` to the webviews that call it, never to
+the windows. An ad is a child webview inside your window, so a capability
+that names the window would also cover the ad. The opt-in sets are
 `overwolf:machine-id`, `overwolf:email-hashes`, `overwolf:analytics` and
 `overwolf:updater`
 ([permissions](https://github.com/AlloryDante/ow-tauri/blob/main/docs/api/permissions.md)).
@@ -45,7 +47,9 @@ names the window would also cover the ad. The opt-in sets are
 | `tauri-plugin-overwolf-api/jsx` | types only: `<owadview>` as a React JSX element |
 | `tauri-plugin-overwolf-api/testing` | `mockOverwolf()`, a fake plugin for unit tests |
 
-## Ads
+## Show an ad
+
+Import the element once, then put it in a sized container:
 
 ```ts
 import 'tauri-plugin-overwolf-api/adview';
@@ -62,7 +66,12 @@ document. Ad events (`display_ad_loaded`, `impression`, ...) are dispatched
 on the element as plain DOM events, as in ow-electron. Size the container,
 not the element. The ad always paints above your page.
 
-## Calls
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/AlloryDante/ow-tauri/main/docs/images/showcase/sizes-dark.webp">
+  <img alt="The Sizes page of the ad showcase example: 160x600, 336x280, 400x300 video and 300x250 test ads, each in its own owadview element." src="https://raw.githubusercontent.com/AlloryDante/ow-tauri/main/docs/images/showcase/sizes-light.webp">
+</picture>
+
+## Call the plugin
 
 ```ts
 import { getInfo, isCMPRequired, openAdPrivacySettingsWindow } from 'tauri-plugin-overwolf-api';
@@ -77,7 +86,7 @@ A failed call rejects with an `OverwolfError` whose `code` is one of
 command the webview's capability does not allow), `io`, `network`,
 `verification`, `backend`, `config` or `tauri`.
 
-## Updater
+## Check for updates
 
 ```ts
 import { check } from 'tauri-plugin-overwolf-api/updater';
@@ -86,10 +95,12 @@ const update = await check();
 if (update) await update.downloadAndInstall();
 ```
 
-Windows only. Needs the `overwolf:updater` permission and the crate's
-`updater` feature.
+The updater is Windows only. It needs the `overwolf:updater` permission and
+the crate's `updater` feature.
 
-## Testing
+## Test your code
+
+`mockOverwolf()` replaces the plugin in unit tests and records the calls:
 
 ```ts
 import { mockOverwolf } from 'tauri-plugin-overwolf-api/testing';
