@@ -879,10 +879,24 @@ What the page does [OBS]:
 | state file (D.6.6) | `cmp` written | `cmp` rewritten; only `timeStamp` changes |
 | cookies | `euconsent-v2`, `acconsent` inserted | both rewritten with a new expiry |
 
-**Last window.** When the last app window is destroyed while the startup
-window is open, the plugin keeps it until its page has saved or asked to
-close, or until `consent.readyTimeoutMs` [DEC; awaits a lab observation,
-see [OPEN-QUESTIONS](OPEN-QUESTIONS.md)].
+**Last window.** Consent windows never keep the app alive, as in
+ow-electron, which quits at `window-all-closed` [OBS]. An app window is any
+window but the plugin's own `ow-cmp*` and `owad-*` windows. When the last
+app window is destroyed, the plugin:
+
+- closes the settings window `ow-cmp` and the hidden `ow-cmp-default`;
+- closes a startup window whose page has saved. Its accept Counter was
+  already sent and `cmp` already written; the cookie fallback (D.6.3) runs
+  as on any close;
+- discards a startup window whose page has not saved, at once. The consent
+  is lost: nothing is written, no Counter is sent and no cookie is written.
+  A later `cmp_event` from that window fails with `forbidden`;
+- skips a startup round whose window does not exist yet, so
+  `isCMPRequired()` callers waiting for it return.
+
+Tauri's own exit flow then runs. The plugin never prevents or forces the
+exit; an app that prevents `ExitRequested` keeps that choice. A startup
+round that starts after a new app window opened runs as usual.
 
 #### D.6.2 `isCMPRequired()`
 

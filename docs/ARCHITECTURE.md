@@ -260,8 +260,11 @@ webviews keep their own user agent.
 5. `isCMPRequired()` resolves when the startup page has loaded.
 6. Each guest's first navigation waits until the startup window has closed,
    or until 3 s after its mount.
-7. If the last app window closes during the round, the startup window
-   closes once its page has saved, or at `consent.readyTimeoutMs`.
+7. If the last app window closes during the round, consent windows do not
+   keep the app alive. A startup window whose page has saved closes; an
+   unsaved one is discarded at once, and its consent is lost with nothing
+   written. A round whose window does not exist yet is skipped. Tauri's
+   exit flow then runs (CONTRACT D.6.1).
 
 `openAdPrivacySettingsWindow` and `openCMPWindow` open the settings window
 `ow-cmp`. The first call also opens the hidden `ow-cmp-default`, as
