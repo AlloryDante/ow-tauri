@@ -57,8 +57,11 @@ Overwolf knows your app by its uid. ow-electron computes it from the
 `overwolf.uid` sets it. Keep the same inputs and the Tauri app has the same
 uid.
 
+The CLI is not on npm yet: build it from a clone of the repository first
+([GETTING-STARTED](GETTING-STARTED.md#before-you-start)).
+
 ```sh
-npm add -D tauri-plugin-overwolf-cli@1.0.0-rc.1
+npm add -D ../ow-tauri/tauri-plugin-overwolf-cli-0.1.0.tgz
 npm exec --no -- ow-tauri migrate --from ../my-electron-app/package.json --write src-tauri/tauri.conf.json
 ```
 
@@ -210,8 +213,6 @@ call, so use it only for this case.
 The app binary also accepts `--test-ad`. In-app restarts under
 `tauri dev` lose the dev server ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#restart-does-nothing-under-tauri-dev)).
 
-<a id="11-sign-the-build"></a>
-
 ## 10. Sign the build (optional)
 
 Overwolf signing is off by default. Nothing in the plugin needs the signed
@@ -260,7 +261,7 @@ certificate subject) or `updater.pubkey` in a release build. Overwolf's feed
 serves NSIS installers; build your release with Tauri's NSIS target.
 
 ```toml
-tauri-plugin-overwolf = { version = "1.0.0-rc.1", features = ["updater"] }
+tauri-plugin-overwolf = { git = "https://github.com/AlloryDante/ow-tauri", features = ["updater"] }
 ```
 
 Test an update from your last ow-electron release to the Tauri build before
@@ -285,6 +286,9 @@ What changes:
 - the analytics and ad requests carry the host label `tauri` where
   ow-electron sends `electron`, and the version derived from it. This is
   the one intended difference in the data;
+- on macOS, ad subresource requests do not carry ow-electron's `Origin` and
+  `x-ow-*` headers ([CONTRACT D.8.3](CONTRACT.md#d83-per-platform),
+  [OQ-05](OPEN-QUESTIONS.md#oq-05-request-shaping-for-the-ad-page)).
   [PARITY.md](PARITY.md) lists what is compared and the known platform
   differences.
 

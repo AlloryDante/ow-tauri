@@ -5,12 +5,15 @@ The crate `tauri-plugin-overwolf` is the native half of the plugin. The app's
 rustdoc has every item; this page is the map. The source is
 `crates/tauri-plugin-overwolf/src/`.
 
+It is not on crates.io yet. Add it from GitHub, optionally pinned with
+`rev = "<commit>"`:
+
 ```toml
 [dependencies]
-tauri-plugin-overwolf = "1.0.0-rc.1"
+tauri-plugin-overwolf = { git = "https://github.com/AlloryDante/ow-tauri" }
 
 [build-dependencies]
-tauri-plugin-overwolf = { version = "1.0.0-rc.1", default-features = false, features = ["build"] }
+tauri-plugin-overwolf = { git = "https://github.com/AlloryDante/ow-tauri", default-features = false, features = ["build"] }
 ```
 
 ## Contents

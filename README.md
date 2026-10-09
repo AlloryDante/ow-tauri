@@ -6,8 +6,13 @@ Overwolf ads, consent and app analytics for Tauri 2 apps.
 app: the `<owadview>` ad element, Overwolf's consent flow, email hashes, the
 anonymous app analytics, the app uid and machine ids, and Overwolf's update
 feed on Windows. Overwolf receives the same data it receives from an
-ow-electron app, with one intended difference: the host label says `tauri`
-where ow-electron says `electron`.
+ow-electron app, with two differences:
+
+- The analytics host label says `tauri` where ow-electron says `electron`.
+  This one is intended.
+- On macOS, ad subresource requests do not carry ow-electron's `Origin` and
+  `x-ow-*` headers ([CONTRACT D.8.3](docs/CONTRACT.md#d83-per-platform),
+  [OQ-05](docs/OPEN-QUESTIONS.md#oq-05-request-shaping-for-the-ad-page)).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/showcase/layouts-dark.webp">
@@ -16,25 +21,30 @@ where ow-electron says `electron`.
 
 <sub>The <a href="examples/ad-showcase">ad-showcase</a> example running on Tauri with Overwolf test ads. Every <code>&lt;owadview&gt;</code> event shows up in the timeline on the right.</sub>
 
-> **Status: 1.0.0-rc.1, a release candidate.** Overwolf has not yet confirmed
+> **Status: pre-release, GitHub only.** Not on crates.io or npm yet; install
+> from this repository ([Quick start](#quick-start)). The first release is
+> planned as 1.0.0-rc.1. Overwolf has not yet confirmed
 > live ads in production or console uploads for apps built on Tauri; see
 > [docs/OVERWOLF-ONBOARDING.md](docs/OVERWOLF-ONBOARDING.md). This project is
 > not affiliated with or endorsed by Overwolf.
 
 ## Packages
 
-| Package | Registry | What it is |
+| Package | Registry (planned) | What it is |
 |---|---|---|
 | `tauri-plugin-overwolf` | crates.io | the Tauri plugin (Rust) |
 | `tauri-plugin-overwolf-api` | npm | the JavaScript API and the `<owadview>` runtime |
 | `tauri-plugin-overwolf-cli` | npm | the `ow-tauri` command: `init`, `migrate`, `doctor`, `sign`, `sign-exe` |
 | `tauri-plugin-overwolf-unstable` | crates.io | a helper the plugin uses to turn on Tauri's `unstable` feature; you never add it yourself |
 
+Not on crates.io or npm yet. Until the first release, the crates come from
+this Git repository and the npm packages are built from a clone of it.
+
 ## Platforms
 
 | Platform | Status |
 |---|---|
-| Windows 10 and 11, x64 | supported; ads need WebView2 98.0.1108.44 or newer |
+| Windows 10 22H2 and 11, x64 | supported; ads need WebView2 98.0.1108.44 or newer |
 | macOS 14 or newer, Apple Silicon | supported |
 | Windows arm64, Intel Macs, macOS before 14 | best effort |
 | Linux | builds and runs; ads report `unsupported` |
@@ -44,17 +54,35 @@ The `tauri` crate must be 2.12.1 or newer, below 3. See
 
 ## Quick start
 
-In a Tauri 2 app:
+Not on crates.io or npm yet, so you install from GitHub. In a Tauri 2 app,
+add the crate to `src-tauri/Cargo.toml`:
+
+```toml
+[dependencies]
+tauri-plugin-overwolf = { git = "https://github.com/AlloryDante/ow-tauri" }
+
+[build-dependencies]
+tauri-plugin-overwolf = { git = "https://github.com/AlloryDante/ow-tauri", default-features = false, features = ["build"] }
+```
+
+Build the npm packages from a clone next to your app and install the two
+tarballs (`npm pack` prints their file names; the version follows the
+repository):
 
 ```sh
-cd src-tauri
-cargo add tauri-plugin-overwolf@1.0.0-rc.1
-cargo add tauri-plugin-overwolf@1.0.0-rc.1 --build --no-default-features --features build
-cd ..
-npm add tauri-plugin-overwolf-api@1.0.0-rc.1
-npm add -D tauri-plugin-overwolf-cli@1.0.0-rc.1
+git clone https://github.com/AlloryDante/ow-tauri ../ow-tauri
+cd ../ow-tauri
+npm ci
+npm pack -w tauri-plugin-overwolf-api -w tauri-plugin-overwolf-cli
+cd -
+npm add ../ow-tauri/tauri-plugin-overwolf-api-0.1.0.tgz
+npm add -D ../ow-tauri/tauri-plugin-overwolf-cli-0.1.0.tgz
 npm exec --no -- ow-tauri init --author "Example Studio" --name "Example App"
 ```
+
+Take the crate and the npm packages from the same commit:
+[GETTING-STARTED](docs/GETTING-STARTED.md#before-you-start) shows how to pin
+it with `rev`.
 
 `init` adds the `plugins.overwolf` block (with test ads on), the
 `overwolf:default` permission for your first window's webview, the Windows installer
@@ -246,7 +274,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 ## License
 
 The crates and npm packages are licensed under MIT or Apache-2.0, at your
-option. `examples/packages-sample` keeps the MIT notice of its upstream
+option ([LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE)).
+`examples/packages-sample` keeps the MIT notice of its upstream
 (Copyright Overwolf Ltd.).
 
 Overwolf and ow-electron are trademarks of Overwolf Ltd.

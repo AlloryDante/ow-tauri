@@ -72,10 +72,10 @@ dependencies:
 
 ```toml
 [target.'cfg(windows)'.dependencies]
-tauri-plugin-overwolf = { version = "1.0.0-rc.1", features = ["updater"] }
+tauri-plugin-overwolf = { git = "https://github.com/AlloryDante/ow-tauri", features = ["updater"] }
 
 [target.'cfg(not(windows))'.dependencies]
-tauri-plugin-overwolf = "1.0.0-rc.1"
+tauri-plugin-overwolf = { git = "https://github.com/AlloryDante/ow-tauri" }
 tauri-plugin-updater = "2"
 ```
 

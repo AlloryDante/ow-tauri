@@ -173,7 +173,7 @@ Read only with the crate's `updater` feature, on Windows:
 
 ```toml
 # src-tauri/Cargo.toml
-tauri-plugin-overwolf = { version = "1.0.0-rc.1", features = ["updater"] }
+tauri-plugin-overwolf = { git = "https://github.com/AlloryDante/ow-tauri", features = ["updater"] }
 ```
 
 | Key | Type | Default | Meaning |

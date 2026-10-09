@@ -38,11 +38,30 @@ You need:
   runs, but ads report `unsupported` (see
   [COMPATIBILITY.md](COMPATIBILITY.md)).
 
-The packages are in their release-candidate phase. The commands below add
-`1.0.0-rc.1`; Cargo and npm read that as "1.0.0-rc.1 or any newer 1.x", so
-the same lines keep working after 1.0.0 ships.
+Not on crates.io or npm yet. Until the first release (1.0.0-rc.1, planned),
+the crate comes from GitHub and the npm packages are built from a clone.
+Clone the repository into the folder that will hold your app, build the two
+npm packages, and note the commit:
+
+```sh
+git clone https://github.com/AlloryDante/ow-tauri
+cd ow-tauri
+npm ci
+npm pack -w tauri-plugin-overwolf-api -w tauri-plugin-overwolf-cli
+git rev-parse HEAD
+cd ..
+```
+
+`npm pack` builds both packages and writes
+`tauri-plugin-overwolf-api-<version>.tgz` and
+`tauri-plugin-overwolf-cli-<version>.tgz` into `ow-tauri/`. The version is
+`0.1.0` today; the commands below use that name. `git rev-parse HEAD` prints
+the commit. Step 2 pins the crate to it, so the crate and the npm packages
+come from the same code.
 
 ## 1. Create the app
+
+In the same folder as `ow-tauri/`:
 
 ```sh
 npm create tauri-app@latest my-game-app -- --template vanilla-ts --manager npm
@@ -55,17 +74,32 @@ files.
 
 ## 2. Add the Rust plugin
 
+In `src-tauri/Cargo.toml`, with `<commit>` replaced by the commit from
+[Before you start](#before-you-start):
+
+```toml
+[dependencies]
+tauri-plugin-overwolf = { git = "https://github.com/AlloryDante/ow-tauri", rev = "<commit>" }
+
+[build-dependencies]
+tauri-plugin-overwolf = { git = "https://github.com/AlloryDante/ow-tauri", rev = "<commit>", default-features = false, features = ["build"] }
+```
+
+The first entry adds the plugin. The second adds it again as a build
+dependency with only its `build` feature: that is the build step below.
+Without `rev`, Cargo takes the newest commit on `main` and records it in
+`Cargo.lock`; `cargo update -p tauri-plugin-overwolf` moves it forward. Do
+not use `cargo add --git` for the plugin: it also writes the current version
+requirement (`version = "0.1.0"`), which stops matching once the repository
+moves to `1.0.0-rc.1`.
+
+Then add the log plugin. It is optional; it shows the plugin's messages.
+
 ```sh
 cd src-tauri
-cargo add tauri-plugin-overwolf@1.0.0-rc.1
-cargo add tauri-plugin-overwolf@1.0.0-rc.1 --build --no-default-features --features build
 cargo add tauri-plugin-log@2
 cd ..
 ```
-
-The first line adds the plugin. The second adds it again as a build
-dependency with only its `build` feature: that is the build step below. The
-log plugin is optional; it shows the plugin's messages.
 
 The plugin needs `tauri` 2.12.1 or newer. Its default `ads` feature turns on
 Tauri's `unstable` feature, on Windows and macOS only, for the whole app (see
@@ -204,10 +238,16 @@ opt-in sets (machine ids, email hashes, analytics settings, updater) are in
 
 ## 5. Add the JavaScript API and an ad
 
+Install the two tarballs you built in [Before you start](#before-you-start),
+from `my-game-app/`:
+
 ```sh
-npm add tauri-plugin-overwolf-api@1.0.0-rc.1
-npm add -D tauri-plugin-overwolf-cli@1.0.0-rc.1
+npm add ../ow-tauri/tauri-plugin-overwolf-api-0.1.0.tgz
+npm add -D ../ow-tauri/tauri-plugin-overwolf-cli-0.1.0.tgz
 ```
+
+npm records them as `file:` dependencies in `package.json`. To update, pull
+the clone, run `npm pack` again and repeat these two lines.
 
 `src/main.ts`:
 

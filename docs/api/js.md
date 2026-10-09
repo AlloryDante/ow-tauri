@@ -3,8 +3,11 @@
 `tauri-plugin-overwolf-api` is the browser-side API of the plugin. It is
 ESM-only, has no Node dependencies, and runs in your app's webviews.
 
+It is not on npm yet: build it from a clone and install the tarball, as
+[GETTING-STARTED](../GETTING-STARTED.md#before-you-start) shows.
+
 ```sh
-npm add tauri-plugin-overwolf-api@1.0.0-rc.1
+npm add ../ow-tauri/tauri-plugin-overwolf-api-0.1.0.tgz
 ```
 
 | Import | Contents |
@@ -147,7 +150,7 @@ with `io` or `backend` when the file cannot be written.
 | `disableAdsFPD()` | `overwolf:default` | no first-party data reaches the ads for this launch |
 | `setAnonymousAnalyticsPreference(enabled: boolean)` | `overwolf:analytics` | stores the user's choice in `ow-tauri.json`; it applies from the next launch's first requests |
 | `setAnalyticsUserEnabled(enabled: boolean)` | `overwolf:analytics` | the app-level user switch; rejects with `unsupported` unless `analytics.userSwitch` is `true` |
-| `setExternalPaymentUserId(options)` | `overwolf:analytics` | sends one `sub_info` event with the user's id at a payment provider |
+| `setExternalPaymentUserId(options)` | `overwolf:analytics` | sends one `<label>_sub_info` request (`tauri_sub_info`) with the user's id at a payment provider |
 
 All return `Promise<void>`.
 

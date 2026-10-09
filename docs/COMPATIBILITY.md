@@ -16,13 +16,17 @@ Keep the `tauri` crate and `@tauri-apps/api` on the same minor version;
 `tauri-plugin-overwolf-cli` have the same version as the crate; use the same
 version of all three.
 
-The plugin reproduces the data of ow-electron 42.11.4.
+The plugin reproduces the data of ow-electron 42.11.4, with two differences:
+the analytics host label is `tauri`, and on macOS ad subresource requests do
+not carry ow-electron's `Origin` and `x-ow-*` headers
+([CONTRACT D.8.3](CONTRACT.md#d83-per-platform),
+[OQ-05](OPEN-QUESTIONS.md#oq-05-request-shaping-for-the-ad-page)).
 
 ## Platforms
 
 | Platform | Status | Ads |
 |---|---|---|
-| Windows 10 and 11, x64 | supported | yes, with the WebView2 Runtime 98.0.1108.44 or newer |
+| Windows 10 22H2 and 11, x64 | supported | yes, with the WebView2 Runtime 98.0.1108.44 or newer |
 | macOS 14 or newer, Apple Silicon | supported | yes |
 | Windows on arm64 | best effort | yes |
 | macOS on Intel, macOS before 14 | best effort | yes |

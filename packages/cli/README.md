@@ -1,14 +1,22 @@
 # tauri-plugin-overwolf-cli
 
 The `ow-tauri` command of
-[`tauri-plugin-overwolf`](https://crates.io/crates/tauri-plugin-overwolf). It
+[`tauri-plugin-overwolf`](https://github.com/AlloryDante/ow-tauri). It
 sets a Tauri 2 app up for Overwolf ads, keeps an ow-electron app's uid,
 checks the setup, and signs the app with Overwolf's signing service.
 
 This project is not affiliated with or endorsed by Overwolf.
 
+Not on npm yet. Build the package from a clone of the repository and install
+the tarball (`npm pack` prints its file name):
+
 ```sh
-npm add -D tauri-plugin-overwolf-cli@1.0.0-rc.1
+git clone https://github.com/AlloryDante/ow-tauri ../ow-tauri
+cd ../ow-tauri
+npm ci
+npm pack -w tauri-plugin-overwolf-cli
+cd -
+npm add -D ../ow-tauri/tauri-plugin-overwolf-cli-0.1.0.tgz
 ```
 
 Always run it from the local install: `npm exec --no -- ow-tauri <command>`,

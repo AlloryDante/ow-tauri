@@ -1,7 +1,7 @@
 # tauri-plugin-overwolf-api
 
 The JavaScript API of
-[`tauri-plugin-overwolf`](https://crates.io/crates/tauri-plugin-overwolf):
+[`tauri-plugin-overwolf`](https://github.com/AlloryDante/ow-tauri):
 Overwolf ads (`<owadview>`), consent, email hashes, the analytics switches,
 identity and the Windows updater, for Tauri 2 apps.
 
@@ -14,8 +14,16 @@ This project is not affiliated with or endorsed by Overwolf.
 
 ## Install
 
+Not on npm yet. Build the package from a clone of the repository and install
+the tarball (`npm pack` prints its file name):
+
 ```sh
-npm add tauri-plugin-overwolf-api@1.0.0-rc.1
+git clone https://github.com/AlloryDante/ow-tauri ../ow-tauri
+cd ../ow-tauri
+npm ci
+npm pack -w tauri-plugin-overwolf-api
+cd -
+npm add ../ow-tauri/tauri-plugin-overwolf-api-0.1.0.tgz
 ```
 
 Register the Rust plugin in your app
