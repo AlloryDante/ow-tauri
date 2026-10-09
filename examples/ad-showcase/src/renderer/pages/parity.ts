@@ -48,7 +48,7 @@ function renderReport(body: HTMLElement, lookup: ParityLookup): void {
       ),
       h('p', {
         class: 'muted',
-        text: 'Both hosts read the same file: ow-electron and ow-tauri use the same userData folder for the same product name.',
+        text: 'Each host reads its own data folder: ow-electron the userData folder named after the product name, ow-tauri the app data folder named after the bundle identifier. Copy the report to the path above for the host you run.',
       }),
     );
     return;
