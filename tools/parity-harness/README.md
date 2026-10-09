@@ -8,10 +8,15 @@ ow-electron. `tauri-app/` runs the same scenarios on the plugin, and
 `parity-diff.mjs` lists every difference. ow-tauri uses the harness to match
 ow-electron's ad, consent, analytics and identity behaviour on the wire.
 
-It is not part of the npm workspace, and nothing in ow-tauri imports it. To
-check the parity results yourself, start with
-[Rerun the proof](#rerun-the-proof). The rest of this file is for
-contributors who add scenarios or read captures.
+It is not part of the npm workspace, and nothing in ow-tauri imports it.
+
+- For the results, read [docs/PARITY.md](../../docs/PARITY.md).
+- To check them on your own machine, start with
+  [Rerun the proof](#rerun-the-proof).
+- [Safety](#safety) covers the invisible windows, the rule that the harness
+  never clicks an ad, and the opt-in cap on live ads.
+- The rest of this file is for contributors who add scenarios or read
+  captures.
 
 ## Rerun the proof
 
@@ -20,7 +25,8 @@ Tauri with the plugin, and diff the two captures: host and ad page requests,
 consent, cookies, state files, guest state and `<owadview>` events.
 
 You need macOS (the Tauri run needs the window monitor), Node.js 22.12 or
-newer, and Rust with the [Tauri 2 prerequisites](https://tauri.app/start/prerequisites/).
+newer, and Rust 1.90 or newer with the
+[Tauri 2 prerequisites](https://tauri.app/start/prerequisites/).
 Install at the repository root, then the harness on its own:
 
 ```sh

@@ -2,18 +2,25 @@
 
 A Tauri 2 app that shows every Overwolf `<owadview>` ad format and the consent
 flow through `tauri-plugin-overwolf`. The same page also runs on ow-electron,
-so you can put the two hosts side by side and compare them. Pick a page, watch
-the ads load, and read every event the ad elements raise in the timeline on
-the right. It is for developers who want to see the plugin work before they
-add ads to their own app, and for anyone who presents the project.
+so you can put the two hosts side by side and compare them. Each page mounts
+`<owadview>` elements, and the timeline on the right lists every event they
+raise. The `:test` scripts show Overwolf's test ads, and a clean clone runs
+with a placeholder app identity.
+
+| If you want to                              | Read                                                                                                               |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| run it on your machine                      | [Run it in test mode](#run-it-in-test-mode)                                                                        |
+| present it                                  | [Showing it to someone](#showing-it-to-someone)                                                                    |
+| see how a Tauri app wires in the plugin     | [How it is built](#how-it-is-built), then [docs/GETTING-STARTED.md](../../docs/GETTING-STARTED.md)                 |
+| compare it with the same app on ow-electron | [Compare with ow-electron](#compare-with-ow-electron), then [docs/MIGRATION.md](../../docs/MIGRATION.md)           |
+| check the parity results                    | [docs/PARITY.md](../../docs/PARITY.md) and [Rerun the proof](../../tools/parity-harness/README.md#rerun-the-proof) |
+| run live ads with your own app identity     | [Test mode and live mode](#test-mode-and-live-mode)                                                                |
+| change the example                          | [Scripts](#scripts) and [Lab and tests](#lab-and-tests)                                                            |
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/showcase/layouts-dark.webp">
   <img alt="The showcase in test mode on the Layouts page: the numbered page list on the left, the Tall Duo layout with a 160x600 test ad and a 400x600 slot playing a video test ad in the middle, and the event timeline with its counts on the right." src="../../docs/images/showcase/layouts-light.webp">
 </picture>
-
-To run it, start with [Run it in test mode](#run-it-in-test-mode). To present
-it, read [Showing it to someone](#showing-it-to-someone).
 
 ## Run it in test mode
 
@@ -84,16 +91,17 @@ documented minimum.
   everything. The counts at the bottom and the slot filter follow that
   choice. You can filter by slot or event family, pause, hide the rail and
   click a row to see its payload. Export JSON writes
-  `<userData>/exports/timeline-<host>-<mode>-<time>.json`. Paths in the
-  window and in the export show your home folder as `~`.
+  `exports/timeline-<host>-<mode>-<time>.json` in the app's data folder
+  (ow-electron's userData, Tauri's app data folder). Paths in the window and
+  in the export show your home folder as `~`.
 
 The pages follow, in sidebar order.
 
 ### 1. Sizes
 
 The seven documented sizes (970x90, 728x90, 160x600, 400x600, 400x60,
-400x300, 300x250), each with its own `cid`. Look at how a slot loads only
-once at least half of it is in view.
+400x300, 300x250), each with its own `cid`. A slot loads only once at least
+half of it is in view.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/showcase/sizes-dark.webp">
@@ -196,10 +204,10 @@ test flag).
 
 ### 9. Parity
 
-The parity harness's report (`parity-diff.json` copied to
-`<userData>/parity-report.json`), or the commands that make it. Both hosts
-read the same file, because they use the same userData folder for the same
-product name. See
+The parity harness's report, or the commands that make it. Copy a
+`parity-diff.json` to `parity-report.json` in the app's data folder. Each
+host reads its own folder (ow-electron's userData, Tauri's app data folder),
+and the page shows the path it looked in. See
 [Rerun the proof](../../tools/parity-harness/README.md#rerun-the-proof).
 
 ## Showing it to someone
@@ -226,7 +234,8 @@ Then:
 4. On Consent & identity, show the consent chip, open the ad privacy
    settings and generate the email hashes.
 5. Export both timelines and open Parity.
-6. Press Restart in LIVE on both, with your own identity (below). Show
+6. Press Restart in LIVE on both, with your own identity
+   ([Test mode and live mode](#test-mode-and-live-mode)). Show
    Layouts filling, and a house ad on no-fill if one is set up. Say that high
    impact, interstitial and reward do not fill until Overwolf qualifies the
    uid; the timeline still shows each slot's ad page loading on both hosts.
@@ -286,10 +295,11 @@ mode, give it your own app identity:
 
 To stage another file, run `node scripts/stage.mjs --host all --identity FILE`.
 The stage script never prints the identity values. The window shows the uid,
-cuid and muid masked (`abcd…wxyz`); Reveal shows one in full on screen only,
-and timeline exports carry the masked uid.
+cuid and muid masked (`abcd…wxyz`). Clicking a masked value shows it in full
+on screen only, and timeline exports carry the masked uid.
 
-Never click live ads. The LIVE confirmation banner says the same.
+Never click live ads. Before a LIVE restart, the confirmation banner warns
+that real ad requests go out for the app's uid.
 
 ## Compare with ow-electron
 
@@ -317,22 +327,22 @@ from the harness install. ow-electron downloads its runtime on first use.
 
 Run these from `examples/ad-showcase`.
 
-| Script                        | What it does                                                                                       |
-| ----------------------------- | -------------------------------------------------------------------------------------------------- |
-| `npm run start:tauri:test`    | stage, debug build with the page embedded, run it with `--test-ad` (test ads)                      |
-| `npm run start:tauri`         | the same without `--test-ad` (live ads)                                                            |
-| `npm run dev:tauri:test`      | `tauri dev` with hot reload and `--test-ad`; Restart is refused here                               |
-| `npm run dev:tauri`           | the same without `--test-ad`                                                                       |
-| `npm run start:electron:test` | stage, then `ow-electron --test-ad .stage/electron` (test ads)                                     |
-| `npm run start:electron`      | the same without `--test-ad` (live ads)                                                            |
-| `npm run build`               | stage both hosts (`.stage/electron`, `.stage/tauri`)                                               |
-| `npm run stage`               | the same as `build`                                                                                |
-| `npm run typecheck`           | `tsc`                                                                                              |
-| `npm run lint`                | ESLint                                                                                             |
-| `npm run test`                | vitest                                                                                             |
-| `npm run check:rust`          | `cargo fmt --check`, and `cargo clippy -D warnings` with and without the `lab` feature             |
-| `npm run lab:smoke`           | the invisible lab smoke run (macOS; see [e2e/README.md](e2e/README.md))                            |
-| `npm run screenshots`         | the documentation images, in the invisible lab with test ads (see [Lab and tests](#lab-and-tests)) |
+| Script                        | What it does                                                                                              |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `npm run start:tauri:test`    | stage, debug build with the page embedded, run it with `--test-ad` (test ads)                             |
+| `npm run start:tauri`         | the same without `--test-ad` (live ads)                                                                   |
+| `npm run dev:tauri:test`      | `tauri dev` with hot reload and `--test-ad`; Restart is refused here                                      |
+| `npm run dev:tauri`           | the same without `--test-ad`                                                                              |
+| `npm run start:electron:test` | stage, then `ow-electron --test-ad .stage/electron` (test ads)                                            |
+| `npm run start:electron`      | the same without `--test-ad` (live ads)                                                                   |
+| `npm run build`               | stage both hosts (`.stage/electron`, `.stage/tauri`)                                                      |
+| `npm run stage`               | the same as `build`                                                                                       |
+| `npm run typecheck`           | `tsc`                                                                                                     |
+| `npm run lint`                | ESLint                                                                                                    |
+| `npm run test`                | vitest                                                                                                    |
+| `npm run check:rust`          | `cargo fmt --check`, and `cargo clippy -D warnings` with and without the `lab` feature                    |
+| `npm run lab:smoke`           | the invisible lab smoke run (macOS; see [e2e/README.md](e2e/README.md))                                   |
+| `npm run screenshots`         | the documentation images, in the invisible lab with test ads (macOS; see [Lab and tests](#lab-and-tests)) |
 
 ## How it is built
 
@@ -350,7 +360,8 @@ Run these from `examples/ad-showcase`.
   ([src-tauri/capabilities/default.json](src-tauri/capabilities/default.json))
   grants `overwolf:default` and `overwolf:email-hashes`.
 - The ow-electron twin is [src/main/main.ts](src/main/main.ts) and
-  [src/preload/preload.ts](src/preload/preload.ts).
+  [src/preload/preload.ts](src/preload/preload.ts). Read it next to the
+  Tauri files to see what moving an ow-electron app changes.
   [types/electron.d.ts](types/electron.d.ts) types the part of `electron` the
   twin uses. The showcase runs ow-electron from the harness install instead
   of depending on it, so the workspace install does not download the
