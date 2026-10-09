@@ -1,0 +1,7 @@
+{
+  "identifier": "windows-scoped",
+  "description": "overwolf:default for the window `overlay:hud`, matched by window label: it also matches every other webview in that window, ad guests included (a local frame inside a guest), so the plugin's own gate must refuse those. Prefer `webviews`.",
+  "local": true,
+  "windows": ["overlay:hud"],
+  "permissions": ["overwolf:default"]
+}

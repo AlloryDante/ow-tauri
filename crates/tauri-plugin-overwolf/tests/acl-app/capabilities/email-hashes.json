@@ -1,0 +1,7 @@
+{
+  "identifier": "email-hashes-only",
+  "description": "Only the opt-in set overwolf:email-hashes, for the webview `email-hashes`.",
+  "local": true,
+  "webviews": ["email-hashes"],
+  "permissions": ["overwolf:email-hashes"]
+}

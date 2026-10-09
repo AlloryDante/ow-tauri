@@ -1,0 +1,7 @@
+{
+  "identifier": "labels",
+  "description": "overwolf:default for webviews named with Tauri's whole label charset (`/` and `:`), and for the child webview `embedded`: matched by webview label.",
+  "local": true,
+  "webviews": ["settings/panel", "embedded"],
+  "permissions": ["overwolf:default"]
+}

@@ -1,0 +1,7 @@
+{
+  "identifier": "analytics-only",
+  "description": "Only the opt-in set overwolf:analytics, for the webview `analytics`.",
+  "local": true,
+  "webviews": ["analytics"],
+  "permissions": ["overwolf:analytics"]
+}

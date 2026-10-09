@@ -1,25 +1,33 @@
-//! Mock-runtime tests of the plugin's permission sets, runtime capabilities
-//! and caller gate (DESIGN §3.5, §3.6, §4.5, §7.2; W1 minimal suite).
+//! Mock-runtime tests of the plugin's permission sets, runtime
+//! capabilities and caller gate (DESIGN §3.5, §3.6, §4.5, §7.2).
 //!
 //! The ACL comes from the plugin's permission sets, the runtime
 //! capabilities the plugin adds for its own webviews, and `capabilities/`
 //! here. Every command is invoked from several webviews; a command is
 //! either refused by Tauri's ACL, refused by the plugin's gate
 //! (`forbidden`), or reaches its handler.
+//!
+//! Fixture capabilities: `default.json` (webview `main`), `labels.json`
+//! (webviews `settings/panel` and `embedded`), `windows-scoped.json`
+//! (window `overlay:hud`), `opt-in.json` (webview `admin`, every opt-in
+//! set), one capability per opt-in set (webviews `machine-id`,
+//! `email-hashes`, `analytics`, `updater`), `allowed-embedder.json` (the
+//! remote page `http://localhost:9527` in webview `localhost-ui`) and
+//! `misgranted.json` (plugin webview labels).
 
-#![expect(
+#![allow(
     clippy::unwrap_used,
-    reason = "test helpers outside #[test] functions fail the test on any unexpected error"
+    clippy::panic,
+    reason = "a test fails on any unexpected error"
 )]
 
-use std::path::PathBuf;
+mod common;
 
 use serde_json::{Value, json};
-use tauri::ipc::{CallbackFn, InvokeBody, InvokeResponseBody};
-use tauri::test::{INVOKE_KEY, MockRuntime, get_ipc_response, mock_builder};
-use tauri::webview::InvokeRequest;
-use tauri::{App, Manager, WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_overwolf::{Builder, COMMANDS};
+use tauri::{WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_overwolf::{Builder, COMMANDS, OverwolfExt};
+
+use common::{ADVIEW_PAGE, CMP_PAGE, Outcome, app, code, invoke, origin, outcome, probe_body};
 
 /// `overwolf:default` (DESIGN §3.6).
 const DEFAULT: [&str; 12] = [
@@ -38,105 +46,34 @@ const DEFAULT: [&str; 12] = [
 ];
 /// Commands of the plugin's own webviews only (runtime capabilities).
 const GUEST_ONLY: [&str; 2] = ["adview_event", "cmp_event"];
-/// The ad document, inside the ad guests' capability.
-const ADVIEW_PAGE: &str = "https://www.overwolf.com/monsdk/electron/latest/adview.html";
-/// A consent page, inside the consent windows' capability.
-const CMP_PAGE: &str = "https://content.overwolf.com/monsdk/electron/latest/cmp/ow-cmp-v2.html";
+/// The remote app page `allowed-embedder.json` names.
+const LOCALHOST_UI: &str = "http://localhost:9527/";
 
-fn temp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ow-tauri-acl-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-/// A mock app with the plugin and the windows `labels` (app pages).
-fn app(name: &str, labels: &[&str]) -> App<MockRuntime> {
-    let mut context = ow_tauri_acl_tests::context();
-    let plugins = &mut context.config_mut().plugins.0;
-    let mut block = plugins
-        .get("overwolf")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    block["state"] = json!({ "appDataDir": temp_dir(name) });
-    plugins.insert("overwolf".into(), block);
-    let app = mock_builder()
-        .plugin(Builder::new().build())
-        .build(context)
-        .unwrap();
-    for label in labels {
-        WebviewWindowBuilder::new(&app, *label, WebviewUrl::default())
-            .build()
-            .unwrap();
-    }
-    app
-}
-
-fn origin() -> &'static str {
-    if cfg!(any(windows, target_os = "android")) {
-        "http://tauri.localhost"
-    } else {
-        "tauri://localhost"
-    }
-}
-
-fn invoke(
-    app: &App<MockRuntime>,
-    label: &str,
-    url: &str,
-    cmd: &str,
-    body: Value,
-) -> Result<Value, Value> {
-    let webview = app.get_webview_window(label).unwrap();
-    get_ipc_response(
-        &webview,
-        InvokeRequest {
-            cmd: format!("plugin:overwolf|{cmd}"),
-            callback: CallbackFn(0),
-            error: CallbackFn(1),
-            url: url.parse().unwrap(),
-            body: InvokeBody::Json(body),
-            headers: tauri::http::HeaderMap::default(),
-            invoke_key: INVOKE_KEY.to_owned(),
-        },
-    )
-    .map(|b| match b {
-        InvokeResponseBody::Json(s) => serde_json::from_str(&s).unwrap(),
-        InvokeResponseBody::Raw(_) => Value::Null,
-    })
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Outcome {
-    /// Refused by Tauri's ACL.
-    Acl,
-    /// Allowed by the ACL but no handler (not registered).
-    NotRegistered,
-    /// Refused by the plugin's caller gate.
-    Forbidden,
-    /// Reached the handler (which may reject its arguments).
-    Reached,
-}
-
-fn outcome(result: &Result<Value, Value>) -> Outcome {
-    match result {
-        Err(Value::String(s)) if s.contains("not allowed") => Outcome::Acl,
-        Err(Value::String(s)) if s.contains("not found") => Outcome::NotRegistered,
-        Err(e) if e.get("code") == Some(&json!("forbidden")) => Outcome::Forbidden,
-        _ => Outcome::Reached,
-    }
-}
-
-/// Arguments that reach a handler without lasting effect: commands that
-/// would wait for `RunEvent::Ready` or send a request get invalid ones.
-fn probe_body(cmd: &str) -> Value {
-    match cmd {
-        "set_window_name" | "adview_event" | "cmp_event" => json!({ "name": "probe" }),
-        "set_analytics_user_enabled" | "set_anonymous_analytics_preference" => {
-            json!({ "enabled": true })
+/// The commands webview `label` reaches from the app origin; any other
+/// outcome than an ACL refusal or the handler fails the test.
+fn granted(app: &tauri::App<tauri::test::MockRuntime>, label: &str) -> Vec<&'static str> {
+    let mut granted = Vec::new();
+    for cmd in COMMANDS {
+        let result = invoke(app, label, origin(), cmd, probe_body(cmd));
+        match outcome(&result) {
+            Outcome::Acl => {}
+            Outcome::Reached => granted.push(*cmd),
+            other => panic!("{label} {cmd}: {other:?} {result:?}"),
         }
-        "generate_user_email_hashes" => json!({ "email": "user@example.com" }),
-        _ => json!({}),
+    }
+    granted
+}
+
+/// Valid bodies of the element commands, so a refusal comes from the gate
+/// and not from argument parsing. The mount's gate runs before it waits
+/// for `RunEvent::Ready`.
+fn element_body(cmd: &str) -> Value {
+    match cmd {
+        "adview_mount" => common::mount_body("e1", 1),
+        "adview_update" => json!({ "request": { "elementId": "e1" } }),
+        "adview_unmount" => json!({ "elementId": "e1" }),
+        "adview_command" => json!({ "elementId": "e1", "command": "reload" }),
+        _ => probe_body(cmd),
     }
 }
 
@@ -157,16 +94,83 @@ fn twenty_five_commands_are_registered() {
 #[test]
 fn overwolf_default_grants_exactly_twelve_commands() {
     let app = app("default", &["main"]);
-    let mut granted = Vec::new();
-    for cmd in COMMANDS {
-        let result = invoke(&app, "main", origin(), cmd, probe_body(cmd));
-        match outcome(&result) {
-            Outcome::Acl => {}
-            Outcome::Reached => granted.push(*cmd),
-            other => panic!("{cmd}: {other:?} {result:?}"),
-        }
+    assert_eq!(granted(&app, "main"), DEFAULT);
+}
+
+/// Labels with `/` and `:` (Tauri's label charset) work in capabilities,
+/// by webview label (`labels.json`) and by window label
+/// (`windows-scoped.json`); an unnamed webview gets nothing.
+#[test]
+fn labels_with_slashes_and_colons_get_overwolf_default() {
+    let app = app("labels", &["settings/panel", "overlay:hud", "other"]);
+    assert_eq!(granted(&app, "settings/panel"), DEFAULT);
+    assert_eq!(granted(&app, "overlay:hud"), DEFAULT);
+    assert_eq!(granted(&app, "other"), Vec::<&str>::new());
+}
+
+/// Each opt-in set grants exactly its commands (DESIGN §3.6, R7), and only
+/// that set grants them.
+#[test]
+fn opt_in_sets_grant_exactly_their_commands() {
+    let sets: [(&str, &[&str]); 4] = [
+        ("machine-id", &["get_machine_ids"]),
+        (
+            "email-hashes",
+            &[
+                "generate_user_email_hashes",
+                "set_user_email_hashes",
+                "clear_user_email_hashes",
+            ],
+        ),
+        (
+            "analytics",
+            &[
+                "set_external_payment_user_id",
+                "set_analytics_user_enabled",
+                "set_anonymous_analytics_preference",
+            ],
+        ),
+        (
+            "updater",
+            &[
+                "updater_check",
+                "updater_download",
+                "updater_install",
+                "updater_download_and_install",
+            ],
+        ),
+    ];
+    let labels: Vec<&str> = sets.iter().map(|(l, _)| *l).collect();
+    let app = app("opt-in-sets", &labels);
+    for (label, commands) in sets {
+        assert_eq!(granted(&app, label), commands, "{label}");
     }
-    assert_eq!(granted, DEFAULT);
+    // Together with `overwolf:default` (`opt-in.json`): every app command.
+    let all = common::app("opt-in-all", &["admin"]);
+    let admin = granted(&all, "admin");
+    let app_commands: Vec<&str> = COMMANDS
+        .iter()
+        .copied()
+        .filter(|c| !GUEST_ONLY.contains(c))
+        .collect();
+    assert_eq!(admin, app_commands);
+}
+
+/// `overwolf:machine-id`: `getMachineIds()` answers both ids, which
+/// `getInfo()` never carries (R7).
+#[test]
+fn machine_ids_need_their_own_set() {
+    let app = app("machine-ids", &["machine-id", "main"]);
+    let ids = invoke(&app, "machine-id", origin(), "get_machine_ids", json!({})).unwrap();
+    let ow = app.overwolf();
+    assert_eq!(ids, json!({ "muid": ow.muid(), "muidV2": ow.muid_v2() }));
+    assert!(!ids["muid"].as_str().unwrap().is_empty());
+    let refused = invoke(&app, "main", origin(), "get_machine_ids", json!({}));
+    assert_eq!(outcome(&refused), Outcome::Acl, "{refused:?}");
+    let info = invoke(&app, "main", origin(), "get_info", json!({})).unwrap();
+    assert_eq!(info["name"], "ACL Fixture");
+    assert_eq!(info["uid"].as_str().unwrap().len(), 40);
+    assert!(info.get("muid").is_none() && info.get("muidV2").is_none());
 }
 
 #[test]
@@ -206,20 +210,89 @@ fn guests_get_their_one_command_only() {
     }
 }
 
+/// A guest is a child webview of the app window that hosts it. A
+/// capability naming the webview `main` never matches it: from the ad page
+/// it reaches `adview_event` only, from a local frame nothing. A capability
+/// naming the window (`windows-scoped.json`, window `overlay:hud`) matches
+/// every webview of that window, the guest's local frames included; the
+/// plugin's gate refuses those (DESIGN §4.5 rule 2).
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
-fn a_misgranted_plugin_label_is_refused_by_the_gate() {
+fn window_capabilities_also_match_guests_and_the_gate_refuses_them() {
+    let app = app("windows-vs-webviews", &["main", "overlay:hud"]);
+    let ad = WebviewUrl::External(ADVIEW_PAGE.parse().unwrap());
+    common::child_webview(&app, "main", "owad-7", ad.clone());
+    common::child_webview(&app, "overlay:hud", "owad-8", ad);
+    common::child_webview(
+        &app,
+        "overlay:hud",
+        "embedded",
+        WebviewUrl::App("hud.html".into()),
+    );
+    for cmd in COMMANDS {
+        let from_page = invoke(&app, "owad-7", ADVIEW_PAGE, cmd, probe_body(cmd));
+        let want = if *cmd == "adview_event" {
+            Outcome::Reached
+        } else {
+            Outcome::Acl
+        };
+        assert_eq!(
+            outcome(&from_page),
+            want,
+            "owad-7 page {cmd}: {from_page:?}"
+        );
+        let local_frame = invoke(&app, "owad-7", origin(), cmd, element_body(cmd));
+        assert_eq!(
+            outcome(&local_frame),
+            Outcome::Acl,
+            "owad-7 local {cmd}: {local_frame:?}"
+        );
+    }
+    for cmd in DEFAULT {
+        let local_frame = invoke(&app, "owad-8", origin(), cmd, element_body(cmd));
+        assert_eq!(
+            outcome(&local_frame),
+            Outcome::Forbidden,
+            "owad-8 local {cmd}: {local_frame:?}"
+        );
+        // The window capability is local only: the ad page gets nothing.
+        let from_page = invoke(&app, "owad-8", ADVIEW_PAGE, cmd, probe_body(cmd));
+        assert_eq!(
+            outcome(&from_page),
+            Outcome::Acl,
+            "owad-8 page {cmd}: {from_page:?}"
+        );
+    }
+    // The app's own child webview in that window (the child-webview
+    // embedder) gets `overwolf:default`.
+    assert_eq!(granted(&app, "embedded"), DEFAULT);
+}
+
+/// Labels starting `owad-` / `ow-cmp` are the plugin's (D10): a capability
+/// that names them hands them nothing, every app command (the element
+/// commands with valid arguments too) is `forbidden`.
+#[test]
+fn reserved_labels_are_refused_by_the_gate() {
     let app = app("misgranted", &["owad-misgranted", "ow-cmp-misgranted"]);
     for label in ["owad-misgranted", "ow-cmp-misgranted"] {
         for cmd in DEFAULT {
-            let r = invoke(&app, label, origin(), cmd, probe_body(cmd));
-            if cmd.starts_with("adview_") {
-                // Argument errors come first for these (empty body).
-                assert_ne!(outcome(&r), Outcome::Acl, "{label} {cmd}: {r:?}");
-                continue;
-            }
+            let r = invoke(&app, label, origin(), cmd, element_body(cmd));
             assert_eq!(outcome(&r), Outcome::Forbidden, "{label} {cmd}: {r:?}");
         }
     }
+    // An app window that takes a plugin window's label is not one: it
+    // cannot save consent, and the Rust API cannot rename it.
+    let app = self::app("reserved-cmp", &["ow-cmp"]);
+    let save = invoke(
+        &app,
+        "ow-cmp",
+        CMP_PAGE,
+        "cmp_event",
+        json!({ "name": "saveConsent", "data": { "consent": "CQ" } }),
+    );
+    assert_eq!(code(&save), Some("not-found"), "{save:?}");
+    let rename = app.overwolf().set_window_name("ow-cmp", "x").unwrap_err();
+    assert_eq!(rename.code(), tauri_plugin_overwolf::ErrorCode::Forbidden);
 }
 
 #[test]
@@ -242,11 +315,71 @@ fn a_remote_page_in_an_app_webview_is_refused_by_the_gate() {
     );
 }
 
+/// DESIGN §4.5 rule 3: a non-app origin is refused unless it is listed in
+/// `ads.allowedEmbedderOrigins` (an app served by
+/// `tauri-plugin-localhost`); the capability grants the remote URL.
 #[test]
-fn get_info_answers_without_machine_ids() {
-    let app = app("info", &["main"]);
-    let info = invoke(&app, "main", origin(), "get_info", json!({})).unwrap();
+fn a_remote_origin_needs_allowed_embedder_origins() {
+    let page = WebviewUrl::External(LOCALHOST_UI.parse().unwrap());
+    let plain = app("embedder-plain", &[]);
+    common::window(&plain, "localhost-ui", page.clone());
+    let refused = invoke(&plain, "localhost-ui", LOCALHOST_UI, "get_info", json!({}));
+    assert_eq!(outcome(&refused), Outcome::Forbidden, "{refused:?}");
+
+    let (context, _dir) = common::context(
+        "embedder-allowed",
+        &json!({ "ads": { "allowedEmbedderOrigins": ["http://localhost:9527"] } }),
+        &[],
+    );
+    let allowed = common::build(context, Builder::new(), None);
+    common::window(&allowed, "localhost-ui", page);
+    common::window(
+        &allowed,
+        "other",
+        WebviewUrl::External("http://localhost:9528/".parse().unwrap()),
+    );
+    assert_eq!(
+        granted_from(&allowed, "localhost-ui", LOCALHOST_UI),
+        DEFAULT
+    );
+    let info = invoke(
+        &allowed,
+        "localhost-ui",
+        LOCALHOST_UI,
+        "get_info",
+        json!({}),
+    )
+    .unwrap();
     assert_eq!(info["name"], "ACL Fixture");
-    assert_eq!(info["uid"].as_str().unwrap().len(), 40);
-    assert!(info.get("muid").is_none() && info.get("muidV2").is_none());
+    // Another port is another origin; the capability does not name it.
+    let other = invoke(
+        &allowed,
+        "other",
+        "http://localhost:9528/",
+        "get_info",
+        json!({}),
+    );
+    assert_eq!(outcome(&other), Outcome::Acl, "{other:?}");
+    // The listed origin may not reach the guest or consent commands.
+    for cmd in GUEST_ONLY {
+        let r = invoke(&allowed, "localhost-ui", LOCALHOST_UI, cmd, probe_body(cmd));
+        assert_eq!(outcome(&r), Outcome::Acl, "{cmd}: {r:?}");
+    }
+}
+
+/// [`granted`] for a page at `url`.
+fn granted_from(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    label: &str,
+    url: &str,
+) -> Vec<&'static str> {
+    COMMANDS
+        .iter()
+        .copied()
+        .filter(|cmd| {
+            let r = invoke(app, label, url, cmd, probe_body(cmd));
+            assert_ne!(outcome(&r), Outcome::Forbidden, "{label} {cmd}: {r:?}");
+            outcome(&r) == Outcome::Reached
+        })
+        .collect()
 }

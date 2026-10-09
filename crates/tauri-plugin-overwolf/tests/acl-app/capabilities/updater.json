@@ -1,0 +1,7 @@
+{
+  "identifier": "updater-only",
+  "description": "Only the opt-in set overwolf:updater, for the webview `updater`.",
+  "local": true,
+  "webviews": ["updater"],
+  "permissions": ["overwolf:updater"]
+}

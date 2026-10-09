@@ -1,0 +1,8 @@
+{
+  "identifier": "allowed-embedder",
+  "description": "overwolf:default for an app page served from http://localhost:9527 (tauri-plugin-localhost): the remote URL must also be listed in ads.allowedEmbedderOrigins, or the plugin's gate refuses it.",
+  "local": false,
+  "webviews": ["localhost-ui", "other"],
+  "remote": { "urls": ["http://localhost:9527/*"] },
+  "permissions": ["overwolf:default"]
+}

@@ -1,0 +1,7 @@
+{
+  "identifier": "machine-id-only",
+  "description": "Only the opt-in set overwolf:machine-id, for the webview `machine-id`.",
+  "local": true,
+  "webviews": ["machine-id"],
+  "permissions": ["overwolf:machine-id"]
+}
