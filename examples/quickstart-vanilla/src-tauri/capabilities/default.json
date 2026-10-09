@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Main webview: core APIs and Overwolf ads, consent and identity",
+  "webviews": ["main"],
+  "permissions": ["core:default", "overwolf:default"]
+}

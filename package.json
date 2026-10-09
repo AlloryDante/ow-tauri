@@ -7,7 +7,9 @@
   "type": "module",
   "workspaces": [
     "packages/*",
-    "examples/ad-showcase"
+    "examples/ad-showcase",
+    "examples/quickstart-vanilla",
+    "examples/quickstart-react"
   ],
   "engines": {
     "node": ">=22.12.0"

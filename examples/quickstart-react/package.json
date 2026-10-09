@@ -1,0 +1,32 @@
+{
+  "name": "my-react-game-app",
+  "private": true,
+  "version": "1.0.0",
+  "description": "The React variant of the tauri-plugin-overwolf getting-started app.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "start": "node scripts/run.mjs",
+    "typecheck": "tsc --noEmit",
+    "doctor": "ow-tauri doctor"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.12.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "tauri-plugin-overwolf-api": "^0.1.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "tauri-plugin-overwolf-cli": "^0.1.0",
+    "typescript": "~6.0.3",
+    "vite": "8.3.4"
+  }
+}
