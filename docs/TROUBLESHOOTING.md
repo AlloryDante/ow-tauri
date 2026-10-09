@@ -70,9 +70,10 @@ Rename it.
 
 ## A command fails with a permission error
 
-Tauri refuses a command its capability does not allow, with a message that
-names the command, for example `overwolf.get_machine_ids not allowed`. Add the
-set that contains it ([api/permissions.md](api/permissions.md)):
+Tauri refuses a command the webview's capability does not allow. The
+JavaScript API rejects with an `OverwolfError` whose `code` is `forbidden`;
+Tauri's own text, which names the command (`... not allowed ...`), is in
+`error.data.raw`. Add the set that contains the command ([api/permissions.md](api/permissions.md)):
 `getMachineIds()` needs `overwolf:machine-id`, the email hash functions need
 `overwolf:email-hashes`, `setAnonymousAnalyticsPreference`,
 `setAnalyticsUserEnabled` and `setExternalPaymentUserId` need
