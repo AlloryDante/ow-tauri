@@ -46,26 +46,6 @@ pub(crate) const CMP_STARTUP_LABEL: &str = "ow-cmp-startup";
 /// The hidden default-consent window's label (D.6.4).
 pub(crate) const CMP_DEFAULT_LABEL: &str = "ow-cmp-default";
 
-/// Behaviours that wait for a W3 harness observation of ow-electron
-/// (DESIGN §4.2, `last-window-during-consent`). Each default is the
-/// behaviour DESIGN-v2 specifies until then.
-pub(crate) mod pending_observation {
-    /// What happens to an open startup consent window when the last app
-    /// window is destroyed.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(crate) enum StartupWindowAtLastWindow {
-        /// It closes as soon as its page has saved (or asked to close), or
-        /// at its `consent.readyTimeoutMs` bound.
-        AfterSave,
-        /// It closes at once.
-        AtOnce,
-    }
-
-    /// The current rule.
-    pub(crate) const STARTUP_WINDOW_AT_LAST_WINDOW: StartupWindowAtLastWindow =
-        StartupWindowAtLastWindow::AfterSave;
-}
-
 /// A function called with the stored consent value after every save
 /// (`saveConsent`, `saveUnifiedConsent`): the ads host pushes it to the
 /// running guests (D.5).
@@ -497,8 +477,14 @@ impl ConsentCore {
 
     /// A window event: a consent window that is gone resolves its round and
     /// may open the gate; the destruction of the last app window applies
-    /// the last-window rule (DESIGN §4.2): Tauri asks to exit only when no
-    /// window at all is left, and the consent windows count.
+    /// the last-window rule (W4 ruling L2, observed on ow-electron): the
+    /// consent windows never keep the app alive. When no app window is left
+    /// (every window but the plugin's own `ow-cmp*` and `owad-*`), the
+    /// settings and default windows close, a startup window whose page has
+    /// saved closes (its accept Counter and `cmp` are already out), and an
+    /// unsaved one is discarded at once: its consent is lost and nothing is
+    /// written, as when ow-electron quits at `window-all-closed`. Tauri's own
+    /// exit flow then runs; the plugin never prevents or forces the exit.
     pub(crate) fn window_event<R: Runtime>(
         &self,
         core: &Arc<Core<R>>,
@@ -512,7 +498,10 @@ impl ConsentCore {
             self.window_gone(label);
             return;
         }
-        if crate::config::is_reserved_label(label) || !core.windows.is_empty() {
+        if crate::config::is_reserved_label(label)
+            || !core.windows.is_empty()
+            || app_window_left(core, Some(label))
+        {
             return;
         }
         let startup: Vec<(String, bool)> = {
@@ -532,10 +521,30 @@ impl ConsentCore {
             }
         }
         for (l, saved) in startup {
-            use pending_observation::{STARTUP_WINDOW_AT_LAST_WINDOW, StartupWindowAtLastWindow};
-            if saved || STARTUP_WINDOW_AT_LAST_WINDOW == StartupWindowAtLastWindow::AtOnce {
+            if saved {
                 close_hidden(core, &l);
+            } else {
+                discard_hidden(core, &l);
             }
+        }
+    }
+
+    /// Whether startup rounds are skipped: the last app window is gone and
+    /// none came back (L2: a consent window must not keep the app alive).
+    fn app_gone<R: Runtime>(&self, core: &Core<R>) -> bool {
+        lock(&self.state).app_gone && core.windows.is_empty() && !app_window_left(core, None)
+    }
+
+    /// Resolves startup round `round` without a window (the app's last
+    /// window is gone, or the window could not be created), so that
+    /// `isCMPRequired()` callers waiting for it return.
+    fn round_skipped(&self, round: u32) {
+        let waiters = lock(&self.state).resolve(round);
+        for tx in waiters {
+            let _ = tx.send(());
+        }
+        if round == 1 {
+            self.open_gate("startup window skipped");
         }
     }
 
@@ -577,6 +586,12 @@ impl ConsentCore {
             log::warn!(target: LOG_TARGET, "{label}: cmp_event from a page outside {CMP_SCOPE} refused");
             return Err(Error::forbidden("this page cannot save consent"));
         }
+        if label.starts_with(CMP_STARTUP_LABEL) && !lock(&self.state).hidden.contains_key(label) {
+            // Discarded at the app's last window (L2) or already gone: an
+            // unsaved consent stays lost.
+            log::debug!(target: LOG_TARGET, "{label}: cmp_event from a closed startup window ignored");
+            return Err(Error::forbidden("this consent window is closed"));
+        }
         let data = data.unwrap_or_default();
         // An empty string clears the stored consent: the clearing startup
         // page saves "" when consent is not required (D.6.2, observed).
@@ -593,9 +608,6 @@ impl ConsentCore {
                 .map_err(|e| match e {
                     crate::state::ow_electron::WriteError::Io(io) => {
                         Error::from_io("Updating ow-electron.json", &io)
-                    }
-                    crate::state::ow_electron::WriteError::InvalidExisting => {
-                        Error::backend("ow-electron.json is not valid JSON")
                     }
                 })
         };
@@ -757,6 +769,13 @@ fn spawn_round<R: Runtime>(core: &Arc<Core<R>>, round: u32) {
 /// page, or the clearing page when consent is not required (D.6.2).
 fn open_startup_window<R: Runtime>(core: &Arc<Core<R>>, round: u32) {
     let label = startup_label(round);
+    if core.consent.app_gone(core) {
+        // L2: the app's last window closed before this window existed
+        // (ow-electron quits at `window-all-closed` and never shows it).
+        log::debug!(target: LOG_TARGET, "{label}: not opened, no app window is left");
+        core.consent.round_skipped(round);
+        return;
+    }
     let url = if core.consent.last_answer() {
         let stored = core
             .state
@@ -777,6 +796,7 @@ fn open_startup_window<R: Runtime>(core: &Arc<Core<R>>, round: u32) {
     if let Err(err) = open_hidden_window(core, &label, &url, Some(round)) {
         log::warn!(target: LOG_TARGET, "the startup consent window failed: {err}");
         core.consent.window_gone(&label);
+        core.consent.round_skipped(round);
     }
 }
 
@@ -1005,6 +1025,32 @@ pub(crate) fn web_content_terminated<R: Runtime>(core: &Arc<Core<R>>, label: &st
 }
 
 /// Closes a hidden consent window. After a startup window, the cookie
+/// Whether an app window (any window but the plugin's own `ow-cmp*` and
+/// `owad-*`) other than `except` exists.
+fn app_window_left<R: Runtime>(core: &Core<R>, except: Option<&str>) -> bool {
+    tauri::Manager::windows(&core.app)
+        .keys()
+        .any(|l| Some(l.as_str()) != except && !crate::config::is_reserved_label(l))
+}
+
+/// L2: closes hidden startup window `label` whose page has not saved,
+/// without the cookie fallback: its consent is lost and nothing is
+/// written.
+fn discard_hidden<R: Runtime>(core: &Arc<Core<R>>, label: &str) {
+    let discard = {
+        let mut s = lock(&core.consent.state);
+        s.hidden
+            .get_mut(label)
+            .is_some_and(|h| !std::mem::replace(&mut h.closing, true))
+    };
+    if !discard {
+        return;
+    }
+    log::debug!(target: LOG_TARGET, "{label}: discarded, the app's last window closed before the consent was saved");
+    destroy_soon(core, label);
+    core.consent.window_gone(label);
+}
+
 /// fallback runs first (D.6.3).
 pub(crate) fn close_hidden<R: Runtime>(core: &Arc<Core<R>>, label: &str) {
     let target = {

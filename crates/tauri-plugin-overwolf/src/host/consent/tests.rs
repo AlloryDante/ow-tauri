@@ -366,7 +366,7 @@ fn cmp_events_save_and_notify() {
     let event = |name, consent: Option<&str>, enabled: Option<bool>| {
         core.consent.cmp_event(
             &core,
-            CMP_STARTUP_LABEL,
+            CMP_DEFAULT_LABEL,
             Some(&url),
             name,
             Some(CmpEventData {
@@ -423,9 +423,9 @@ fn cmp_events_save_and_notify() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// DESIGN §4.2: when the last app window is destroyed, the settings and
-/// default windows close at once, a startup window as soon as its page
-/// has saved.
+/// W4 ruling L2: when the last app window is destroyed, every consent
+/// window closes at once; an unsaved startup page is discarded (nothing is
+/// written).
 #[test]
 fn the_last_window_rule() {
     let capture = Capture::answering(r#"{"params":[]}"#);
@@ -450,14 +450,44 @@ fn the_last_window_rule() {
         .window_event(&core, "main", &WindowEvent::Destroyed);
     assert!(wait_until(Duration::from_secs(5), || !core
         .consent
-        .owns_window(CMP_DEFAULT_LABEL)));
-    assert!(!core.consent.owns_window(CMP_SETTINGS_LABEL));
-    std::thread::sleep(Duration::from_millis(300));
-    assert!(
-        core.consent.owns_window(CMP_STARTUP_LABEL),
-        "the startup page may still save"
+        .owns_window(CMP_DEFAULT_LABEL)
+        && !core.consent.owns_window(CMP_SETTINGS_LABEL)
+        && !core.consent.owns_window(CMP_STARTUP_LABEL)));
+    // A late save from the discarded page is refused and writes nothing.
+    let late = core.consent.cmp_event(
+        &core,
+        CMP_STARTUP_LABEL,
+        Some(&scope_url()),
+        CmpEventName::SaveConsent,
+        Some(CmpEventData {
+            consent: Some("CQ".into()),
+            enabled: None,
+        }),
     );
-    assert!(!core.consent.is_gate_open());
+    assert!(late.is_err(), "the discarded window's events are refused");
+    assert!(
+        core.state.ow_electron.read().state.cmp.is_none(),
+        "an unsaved consent is lost (L2)"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// L2: a startup page that saved before the last app window closed has
+/// written `cmp`; its window closes with the others.
+#[test]
+fn the_last_window_rule_keeps_a_saved_consent() {
+    let capture = Capture::answering(r#"{"params":[]}"#);
+    let (app, dir, core) = mock_app(
+        "consent-last-window-saved",
+        &json!({ "consent": { "readyTimeoutMs": 10000 } }),
+        &[],
+        capture,
+    );
+    window(&app, "main");
+    crate::host::lifecycle::on_ready(&core);
+    assert!(wait_until(Duration::from_secs(5), || core
+        .consent
+        .owns_window(CMP_STARTUP_LABEL)));
     core.consent
         .cmp_event(
             &core,
@@ -470,9 +500,49 @@ fn the_last_window_rule() {
             }),
         )
         .unwrap();
+    core.windows
+        .window_event(&core, "main", &WindowEvent::Destroyed);
+    core.consent
+        .window_event(&core, "main", &WindowEvent::Destroyed);
     assert!(wait_until(Duration::from_secs(5), || !core
         .consent
         .owns_window(CMP_STARTUP_LABEL)));
+    assert_eq!(
+        core.state
+            .ow_electron
+            .read()
+            .state
+            .cmp
+            .and_then(|c| c.cmp_string)
+            .as_deref(),
+        Some("CQ")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// L2: the last app window closed before the startup window existed: the
+/// round resolves without a window (ow-electron never shows it), unless an
+/// app window came back.
+#[test]
+fn no_startup_window_once_the_last_app_window_is_gone() {
+    let capture = Capture::answering(r#"{"params":[]}"#);
+    let (app, dir, core) = mock_app("consent-last-window-before", &json!({}), &[], capture);
+    window(&app, "main");
+    core.windows
+        .window_event(&core, "main", &WindowEvent::Destroyed);
+    core.consent
+        .window_event(&core, "main", &WindowEvent::Destroyed);
+    let main = crate::compat::window(&app, "main").unwrap();
+    let _ = main.destroy();
+    let (tx, rx) = oneshot::channel();
+    {
+        let mut s = lock(&core.consent.state);
+        s.rounds = 1;
+        s.waiters.push((1, tx));
+    }
+    open_startup_window(&core, 1);
+    assert!(block_on(rx).is_ok(), "the round resolved without a window");
+    assert!(!core.consent.owns_window(CMP_STARTUP_LABEL));
     assert!(core.consent.is_gate_open());
     let _ = std::fs::remove_dir_all(&dir);
 }
