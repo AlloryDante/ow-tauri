@@ -1,9 +1,7 @@
 /**
- * The showcase's main process, written against the Electron API only. On
- * ow-electron `electron` is the real module; on ow-tauri the bundler aliases
- * it to `ow-tauri/electron` and this file runs unchanged in the plugin's
- * hidden main webview. The one per-host piece is `#host` (file access and
- * version strings, see `host/contract.ts`).
+ * The ow-electron twin's main process (the Tauri app's native side is
+ * `src-tauri`, Rust, with the same commands: `src-tauri/src/showcase.rs`).
+ * `#host` is the file access and version strings (`host/contract.ts`).
  *
  * It opens one window (1280x860, the size that meets every format's
  * documented minimum) and answers the window's `showcase:*` requests with

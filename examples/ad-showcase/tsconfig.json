@@ -22,11 +22,10 @@
     "skipLibCheck": true,
     "types": ["node"],
     "paths": {
-      "electron": ["../../packages/ow-tauri/src/types/electron.d.ts"],
-      "ow-tauri/electron": ["../../packages/ow-tauri/src/electron/index.ts"],
-      "ow-tauri/main": ["../../packages/ow-tauri/src/main/index.ts"],
-      "#host": ["./src/main/host/contract.ts"]
+      "#host": ["./src/main/host/contract.ts"],
+      "tauri-plugin-overwolf-api": ["../../packages/api/src/index.ts"],
+      "tauri-plugin-overwolf-api/adview": ["../../packages/api/src/adview/index.ts"]
     }
   },
-  "include": ["src"]
+  "include": ["src", "types"]
 }

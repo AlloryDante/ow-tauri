@@ -11,7 +11,7 @@ export default defineConfig(
   tseslint.configs.strictTypeChecked,
   tseslint.configs.stylisticTypeChecked,
   {
-    files: ['src/**/*.ts'],
+    files: ['src/**/*.ts', 'types/**/*.ts'],
     languageOptions: {
       globals: { ...globals.browser },
       parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },

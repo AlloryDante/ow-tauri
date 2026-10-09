@@ -1,8 +1,7 @@
 /**
- * The window's preload: exposes the `showcase:*` IPC as `window.showcase`.
- * On ow-electron it runs as a sandboxed Electron preload; on ow-tauri the
- * `ow-tauri/electron` facade injects it as an initialization script. The
- * page itself never imports `electron`.
+ * The ow-electron window's preload: exposes the `showcase:*` IPC as
+ * `window.showcase` (the Tauri app installs the same API from
+ * `src/tauri/install.ts`). The page itself never imports `electron`.
  *
  * @packageDocumentation
  */

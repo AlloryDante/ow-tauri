@@ -18,6 +18,12 @@ node e2e/run.mjs --host tauri --mode live --steps live-layout     # LIVE, budget
 
 - `--steps smoke` (default): the window starts, page 1 renders, and the run
   waits (`--ad-wait`, 60 s) until its slots have an ad.
+- `--steps restart` (ow-tauri): starts on the parity page (no ad guest),
+  restarts in TEST through `window.showcase.restart` onto
+  `parity/restarted`, and follows the new process under its own window
+  monitor and front check until it reports that page and quits
+  (`summary.json` `restart`). It proves the restart of a built app and that
+  the lab environment carries over, so the new process stays invisible.
 - `--steps tour`: then every page in order, waiting for each format's events
   instead of fixed times: the size groups and the below-the-fold box
   (scrolled by the page's own scroll box), all eight layouts, the high-impact
@@ -72,7 +78,8 @@ script a play) and `live-perf` (one interstitial, 1). Each mounted guest is
 one line in `e2e/out/live-loads.jsonl` (run id, host, slot, running count);
 a run whose planned loads would take the count over `--live-cap` (default 10) is refused before launch. A live run reports the guests it mounted, the
 fill events per slot and the impression pings the ad pages sent (ow-electron:
-`--log-net-log`; ow-tauri: the lab's guest probes).
+`--log-net-log`; ow-tauri reports none: the plugin no longer probes guest
+pages).
 
 Output goes to `e2e/out/<run-id>/` (git-ignored): `e2e.jsonl` (one record
 per step, with `window.__showcase.snapshot()` and the new timeline rows),
@@ -82,15 +89,15 @@ per step, with `window.__showcase.snapshot()` and the new timeline rows),
 ## Invisibility
 
 - **ow-tauri**: `OW_TAURI_LAB_INVISIBLE=1`. The app is an accessory app (no
-  Dock icon, no app switcher entry) and is never activated; every window is
-  built hidden, then gets alpha 0, click-through and an on-screen position
-  (an ad must be on screen to fill). Dialogs and the file manager do not
-  open. The showcase's main process runs unchanged, `show()` included: for
-  the whole run the plugin's lab turns every app activation into a no-op
-  and orders a window front without making it key (`orderFrontRegardless`),
-  so neither `BrowserWindow.show()` / `focus()` nor the ad privacy settings
-  window brings the app to the front (`activation-suppressed` and
-  `key-front-redirected` in the trace's `wc-events.jsonl`).
+  Dock icon, no app switcher entry) and is never activated
+  ([src-tauri/src/lab.rs](../src-tauri/src/lab.rs)): before the app is
+  built, the lab turns every app activation into a no-op and makes
+  `makeKeyAndOrderFront:` order a window front without making it key
+  (`WebKit` activates the app for every webview it creates). The showcase
+  window is built hidden, gets alpha 0, click-through and not focusable,
+  and is then ordered front (`orderFrontRegardless`): on screen, as an ad
+  needs to be to fill, and invisible. Dialogs and the file manager do not
+  open (the plugin's lab).
 - **ow-electron**: [electron-main.cjs](electron-main.cjs) is the main entry
   of a throwaway app folder around `.stage/electron`. It hides the Dock icon,
   pins every window at opacity 0, click-through and not focusable, turns
@@ -114,6 +121,15 @@ no fatal error and (test mode) a `display_ad_loaded` arrived.
 - `OW_SHOWCASE_E2E_CONFIG`: the driver's configuration (`runDir`, `steps`,
   `mode`, `adWaitMs`, `dwellMs`, `liveObserveMs`, `theme`, `stillsDir`). Without it
   the driver stays inert.
-- `OW_TAURI_LAB_DIR`, `OW_TAURI_LAB_PACKAGE_JSON` (ow-tauri): the trace
-  folder and the manifest to run with (`.stage/package.json`, so the staged
-  identity applies; see the main README).
+- `OW_TAURI_LAB_DIR` (ow-tauri): the plugin's trace folder; the driver's
+  `e2e.jsonl` goes there too. The staged identity is built in
+  (`TAURI_CONFIG` from `.stage/tauri.conf.json`), under the lab bundle id
+  `dev.ow-tauri.ad-showcase.lab`, so a lab process never reaches a running
+  normal build through the single-instance lock.
+- `OW_SHOWCASE_LAB_SINK` (ow-tauri): the loopback sink the runner starts for
+  the plugin's analytics (`Counter`, `InsertStats`) and the consent
+  experiment (`cmp-eu-only`); each request is a line of `sink.jsonl`.
+  Without it a lab build sends them to a closed loopback port: a lab build
+  never reports to Overwolf. The consent page itself (the CMP window, opened
+  by the consent page and the privacy settings) still loads from Overwolf:
+  the plugin accepts only an `https` `consent.cmpUrl`.

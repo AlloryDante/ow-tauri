@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { stagedManifest } from './manifest.mjs';
+import { stagedManifest, tauriConfig } from './manifest.mjs';
 
 const base = {
   name: 'ow-tauri-ad-showcase',
@@ -48,5 +48,34 @@ describe('stagedManifest', () => {
     const copy = structuredClone(base);
     stagedManifest(base, { productName: 'X', uid: 'abc' });
     expect(base).toEqual(copy);
+  });
+});
+
+describe('tauriConfig', () => {
+  it('carries the placeholder identity', () => {
+    expect(tauriConfig(base)).toEqual({
+      productName: 'ow-tauri Ad Showcase',
+      version: '1.0.0',
+      plugins: { overwolf: { name: 'ow-tauri Ad Showcase', author: 'Example Studio' } },
+    });
+  });
+
+  it('carries a local identity with its uid', () => {
+    const staged = stagedManifest(base, {
+      productName: 'Other App',
+      author: { name: 'Other Studio' },
+      uid: 'abc123',
+    });
+    expect(tauriConfig(staged).plugins).toEqual({
+      overwolf: { name: 'Other App', author: 'Other Studio', uid: 'abc123' },
+    });
+  });
+
+  it('falls back to the package name', () => {
+    expect(tauriConfig({ name: 'x', version: '2.0.0' })).toEqual({
+      productName: 'x',
+      version: '2.0.0',
+      plugins: { overwolf: { name: 'x' } },
+    });
   });
 });

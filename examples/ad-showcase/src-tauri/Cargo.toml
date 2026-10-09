@@ -1,14 +1,15 @@
-# The ad showcase's Tauri shell: a thin app around tauri-plugin-overwolf. The
-# app code (main process and window) is the same TypeScript the ow-electron
-# build runs; the main process runs in the plugin's hidden main webview.
+# The ad showcase's Tauri app: one window that shows every `<owadview>` ad
+# format, built on tauri-plugin-overwolf. The renderer is the same TypeScript
+# the ow-electron twin runs; the native side (window, restart, exports) is
+# plain Tauri.
 #
-# A standalone Cargo workspace with its own Cargo.lock, like
-# examples/packages-sample; versions match the root `[workspace.dependencies]`.
+# A standalone Cargo workspace with its own Cargo.lock; versions match the
+# root `[workspace.dependencies]`.
 [workspace]
 
 [package]
 name = "ow-tauri-ad-showcase"
-description = "Every Overwolf <owadview> ad format on ow-tauri, with the same app code as on ow-electron."
+description = "Every Overwolf <owadview> ad format in a Tauri 2 app, with tauri-plugin-overwolf."
 version = "1.0.0"
 edition = "2024"
 rust-version = "1.90"
@@ -18,24 +19,34 @@ publish = false
 [[bin]]
 name = "ow-tauri-ad-showcase"
 path = "src/main.rs"
-test = false
 doctest = false
 
 [features]
-# The invisible lab (`e2e/README.md`): the plugin's lab trace and invisible
-# windows, a lab manifest at run time and the driver's commands. Off by
-# default; never enable it in a shipped build.
-lab = ["tauri-plugin-overwolf/lab", "dep:objc2", "dep:block2", "dep:objc2-foundation"]
+# The invisible lab (`e2e/README.md`): the plugin's lab trace, loopback
+# endpoints for analytics and the consent experiment (the plugin's
+# `test-util` hooks), invisible windows and the driver's commands. Off by
+# default; never enable it in a shipped build (the plugin refuses it in
+# release builds).
+lab = [
+  "tauri-plugin-overwolf/lab",
+  "tauri-plugin-overwolf/test-util",
+  "dep:objc2",
+  "dep:block2",
+  "dep:objc2-foundation",
+]
 
 [dependencies]
-tauri = { version = "2.12.1", features = ["unstable"] }
-tauri-plugin-single-instance = "2.5.2"
-# `tauri::generate_context!` expands to `serde_json` calls for `plugins` config.
-serde_json = "1"
+tauri = { version = "2.12.1", features = [] }
 tauri-plugin-overwolf = { path = "../../../crates/tauri-plugin-overwolf" }
+tauri-plugin-log = "2.10.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+# A second launch focuses the running app (registered first).
+tauri-plugin-single-instance = "2.5.2"
 
-# The lab's native probes (src/lab/native.rs, macOS): hit test and
-# in-process stills. Versions as in the plugin; only with the `lab` feature.
+# The lab's native probes (src/lab/native.rs, macOS): invisible windows, hit
+# test and in-process stills. Versions as in the plugin; only with `lab`.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6.5", optional = true }
 block2 = { version = "0.6.2", optional = true }
@@ -43,7 +54,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["s
 
 [build-dependencies]
 tauri-build = { version = "2.7.1", features = [] }
-tauri-plugin-overwolf = { path = "../../../crates/tauri-plugin-overwolf", default-features = false }
+tauri-plugin-overwolf = { path = "../../../crates/tauri-plugin-overwolf", default-features = false, features = ["build"] }
 
 [lints.rust]
 missing_docs = "deny"
@@ -54,6 +65,8 @@ rust_2018_idioms = { level = "warn", priority = -1 }
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+# Tauri commands take their arguments by value.
+needless_pass_by_value = "allow"
 unwrap_used = "warn"
 expect_used = "warn"
 panic = "warn"

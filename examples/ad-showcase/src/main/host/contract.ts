@@ -1,10 +1,8 @@
 /**
- * The per-host adapter the main process imports as `#host`. It is the only
- * code that differs between the two builds: the bundler maps `#host` to
- * `electron.ts` (Node's `fs` exists in ow-electron's main process) or to
- * `tauri.ts` (ow-tauri's main process runs in a webview and uses the scoped
- * `files` API of `ow-tauri/main` instead, MIGRATION.md). This file declares
- * the shape both implement, for the type checker.
+ * The adapter the ow-electron main process imports as `#host` (bundled from
+ * `electron.ts`): file access and the version strings for the top bar. The
+ * Tauri app does the same in Rust (`src-tauri/src/showcase.rs`). This file
+ * declares the shape, for the type checker.
  *
  * @packageDocumentation
  */

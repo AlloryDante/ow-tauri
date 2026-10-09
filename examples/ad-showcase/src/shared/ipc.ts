@@ -1,8 +1,9 @@
 /**
- * The IPC contract between the showcase's main process and its window. The
- * same channel names and payloads are used on ow-electron (real Electron IPC)
- * and on ow-tauri (the `ow-tauri/electron` facade routes them through the
- * plugin), so nothing here knows which host runs it.
+ * The contract between the showcase page and its host. On ow-electron the
+ * preload exposes it over Electron IPC (the `showcase:*` channels); on Tauri
+ * `src/tauri/showcase-api.ts` builds it from tauri-plugin-overwolf-api and
+ * the app's commands. The page only sees {@link ShowcaseApi}, so nothing in
+ * it knows which host runs it.
  *
  * @packageDocumentation
  */
@@ -128,7 +129,7 @@ export interface WindowEvent {
   detail?: Record<string, unknown>;
 }
 
-/** The API the preload exposes as `window.showcase`. */
+/** The API the page uses as `window.showcase` (ow-electron preload, or `src/tauri`). */
 export interface ShowcaseApi {
   /** Host, mode and identity. */
   info(): Promise<HostInfo>;

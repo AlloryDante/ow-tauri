@@ -16,14 +16,20 @@
 //   that count over --live-cap (default 10). The steps never click an ad
 //   and never play a reward video in live mode.
 //
-// --host tauri (default): stages the ow-tauri frontend with the lab driver
+// --host tauri (default): stages the ow-tauri page with the lab driver
 //   (scripts/stage.mjs --lab) and builds the debug app with the `lab`
-//   feature into src-tauri/target/e2e.
+//   feature into src-tauri/target/e2e, under the lab bundle id. The
+//   plugin's analytics and consent experiment go to a loopback sink the
+//   runner starts (sink.jsonl), never to Overwolf.
 // --host electron: stages the ow-electron app and runs it on the parity
 //   harness's ow-electron (scripts/ow-electron.mjs), from a throwaway folder whose main entry
 //   (e2e/electron-main.cjs) keeps every window at opacity 0.
 // --steps smoke (default): start, page 1, wait for display_ad_loaded, quit.
 //   --steps tour: every page and its buttons (no ad is ever clicked).
+//   --steps restart (ow-tauri): start on the parity page (no ad guest),
+//   restart in TEST through the app, and follow the new process (its own
+//   window monitor and front check) until it reports the page it came back
+//   on and quits.
 // --theme dark (default) or light: the showcase theme the steps set before
 //   the first still, so both themes can be recorded.
 //
@@ -46,6 +52,7 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
+import { createServer } from 'node:http';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -89,8 +96,9 @@ const LIVE_STEPS = {
   'live-perf': { route: 'interstitial', loads: 1 },
 };
 if (!['test', 'live'].includes(opts.mode)) fail(`unknown --mode ${opts.mode}`);
-if (opts.mode === 'test' && !['smoke', 'tour'].includes(opts.steps))
-  fail(`--mode test runs smoke or tour, not ${opts.steps}`);
+if (opts.mode === 'test' && !['smoke', 'tour', 'restart'].includes(opts.steps))
+  fail(`--mode test runs smoke, tour or restart, not ${opts.steps}`);
+if (opts.steps === 'restart' && opts.host !== 'tauri') fail('--steps restart is an ow-tauri check');
 if (opts.mode === 'live' && !(opts.steps in LIVE_STEPS))
   fail(`--mode live runs one of ${Object.keys(LIVE_STEPS).join(', ')}`);
 const live = opts.mode === 'live';
@@ -146,12 +154,32 @@ function stage(host, lab) {
 }
 
 // ------------------------------------------------------------------- build
+/** The lab build's bundle id: its data never mixes with a normal build's. */
+const LAB_IDENTIFIER = 'dev.ow-tauri.ad-showcase.lab';
+
+/**
+ * The Tauri config of the lab build: the staged identity, the lab page
+ * (with the driver), the lab bundle id, and a CSP that lets the driver
+ * evaluate its steps in the page (lab builds only).
+ */
+function labTauriConfig() {
+  const identity = JSON.parse(readFileSync(join(stageDir, 'tauri.conf.json'), 'utf8'));
+  const base = JSON.parse(readFileSync(join(exampleDir, 'src-tauri', 'tauri.conf.json'), 'utf8'));
+  const csp = base.app.security.csp.replace("script-src 'self'", "script-src 'self' 'unsafe-eval'");
+  return {
+    ...identity,
+    identifier: LAB_IDENTIFIER,
+    build: { frontendDist: join(stageDir, 'tauri-lab') },
+    app: { security: { csp } },
+  };
+}
+
 function buildTauri() {
   const exe = join(exampleDir, 'src-tauri', 'target', 'e2e', 'debug', 'ow-tauri-ad-showcase');
   if (opts['no-build'] && existsSync(exe)) return exe;
   stage('tauri', true);
-  // generate_context! embeds the frontend when the crate compiles: touch
-  // the lab module so the new stage is picked up.
+  // generate_context! embeds the page when the crate compiles: touch the
+  // lab module so the new stage is picked up.
   const now = new Date();
   utimesSync(join(exampleDir, 'src-tauri', 'src', 'lab.rs'), now, now);
   sh(
@@ -172,13 +200,38 @@ function buildTauri() {
     {
       env: {
         ...process.env,
-        TAURI_CONFIG: JSON.stringify({ build: { frontendDist: join(stageDir, 'tauri-lab') } }),
+        TAURI_CONFIG: JSON.stringify(labTauriConfig()),
         // A separate target directory: skip the incremental cache (gigabytes).
         CARGO_INCREMENTAL: '0',
       },
     },
   );
   return exe;
+}
+
+/**
+ * A loopback sink for the plugin's analytics and consent experiment: it
+ * answers every request with 200 and logs method, path and body size to
+ * `sink.jsonl`. A lab build never reports to Overwolf.
+ */
+async function startSink(dir) {
+  const server = createServer((req, res) => {
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+    });
+    req.on('end', () => {
+      appendFileSync(
+        join(dir, 'sink.jsonl'),
+        JSON.stringify({ at: Date.now(), method: req.method, path: req.url, bytes: size }) + '\n',
+      );
+      const json = req.url && req.url.startsWith('/experiments/');
+      res.writeHead(200, { 'content-type': json ? 'application/json' : 'text/plain' });
+      res.end(json ? '{}' : 'ok');
+    });
+  });
+  await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
+  return { server, url: `http://127.0.0.1:${server.address().port}` };
 }
 
 function prepareElectron() {
@@ -306,7 +359,12 @@ async function main() {
   // Live: the budget, reserved before the launch.
   const plan = live ? LIVE_STEPS[opts.steps] : null;
   const modeArgs = live ? [] : ['--test-ad'];
-  const routeArgs = plan ? [`--showcase-page=${plan.route}`] : [];
+  const restartCheck = opts.steps === 'restart';
+  const routeArgs = plan
+    ? [`--showcase-page=${plan.route}`]
+    : restartCheck
+      ? ['--showcase-page=parity']
+      : [];
   if (plan) {
     const used = liveTotal();
     const cap = Number(opts['live-cap']);
@@ -329,13 +387,15 @@ async function main() {
   }
   let exe;
   let args;
+  let sink = null;
   if (tauri) {
     exe = buildTauri();
+    sink = await startSink(runDir);
     Object.assign(env, {
       HOME: home,
       OW_TAURI_LAB_DIR: runDir,
       OW_TAURI_LAB_INVISIBLE: '1',
-      OW_TAURI_LAB_PACKAGE_JSON: join(stageDir, 'package.json'),
+      OW_SHOWCASE_LAB_SINK: sink.url,
     });
     args = [...modeArgs, ...routeArgs];
     meta.exe = exe;
@@ -452,11 +512,23 @@ async function main() {
   const exit = await exited;
   clearTimeout(ownerProbe);
   clearInterval(frontWatch);
-  killTree(child, 'SIGKILL');
+  // The restarted process is in the first one's process group: keep it.
+  if (!restartCheck) killTree(child, 'SIGKILL');
   running.delete(child);
   await new Promise((ok) => setTimeout(ok, 500));
   killTree(mon, 'SIGTERM');
   running.delete(mon);
+  let restart = null;
+  if (restartCheck) {
+    restart = await followRestart(child.pid, monitor, e2eFile);
+    if (restart.verdict === 'done' && verdict === 'exited-early') verdict = 'done';
+    else if (restart.verdict !== 'done') verdict = `restart-${restart.verdict}`;
+    killTree(child, 'SIGKILL');
+  }
+  if (sink) {
+    sink.server.closeAllConnections();
+    await new Promise((ok) => sink.server.close(ok));
+  }
 
   const monitorEnd = readJsonl(monitorFile).find((r) => r.kind === 'end') ?? null;
   const records = readJsonl(e2eFile);
@@ -491,6 +563,7 @@ async function main() {
     await new Promise((ok) => setTimeout(ok, 500));
   }
   summary.leftProcesses = owned;
+  if (restart) summary.restart = restart;
   summary.stepsRun = steps.length;
   summary.export = records.find((r) => r.kind === 'export') ?? null;
   summary.stills = records.filter((r) => r.kind === 'still').length;
@@ -519,8 +592,89 @@ async function main() {
     !owned.length &&
     summary.started &&
     !summary.fatal.length &&
-    (live || summary.displayAdLoaded);
+    (restart
+      ? restart.everVisible === false && !restart.everFront
+      : live || summary.displayAdLoaded);
   process.exitCode = ok ? 0 : 1;
+}
+
+/**
+ * The restart check's second half: the process the app started for its
+ * restart (the driver record with `restartPhase: 'second'`), under its own
+ * window monitor and front check, until it reports `done` and exits.
+ */
+async function followRestart(firstPid, monitor, e2eFile) {
+  const deadline = Date.now() + 120000;
+  let second = null;
+  while (!second && Date.now() < deadline) {
+    second = readJsonl(e2eFile).find((r) => r.kind === 'driver' && r.restartPhase === 'second');
+    if (!second) await new Promise((ok) => setTimeout(ok, 250));
+  }
+  if (!second || typeof second.pid !== 'number' || second.pid === firstPid) {
+    log('restart: no second process reported');
+    return { verdict: 'no-second-process', firstPid };
+  }
+  const pid = second.pid;
+  log(`restart: second process ${pid}`);
+  const monitorFile = join(runDir, 'window-monitor-restart.jsonl');
+  const mon = spawn(monitor, [String(pid), monitorFile, '25'], { stdio: 'ignore', detached: true });
+  running.add(mon);
+  const alive = () => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  let everFront = false;
+  let safetyKill = null;
+  let doneAt = null;
+  let result = 'timeout';
+  while (Date.now() < deadline) {
+    if (frontPid() === pid) everFront = true;
+    for (const entry of readJsonl(monitorFile)) {
+      if (!safetyKill && (entry.anyVisible === true || entry.everVisible === true)) {
+        safetyKill = { at: new Date().toISOString(), entry };
+        log('SAFETY: a window of the restarted app became visible; killed');
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // gone
+        }
+      }
+    }
+    if (!doneAt && readJsonl(e2eFile).some((r) => r.kind === 'done' && r.restarted)) {
+      doneAt = Date.now();
+    }
+    if (!alive()) {
+      result = safetyKill ? 'safety-kill' : doneAt ? 'done' : 'exited-early';
+      break;
+    }
+    if (doneAt && Date.now() - doneAt > 20000) break;
+    await new Promise((ok) => setTimeout(ok, 250));
+  }
+  if (alive()) {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // gone
+    }
+  }
+  await new Promise((ok) => setTimeout(ok, 500));
+  killTree(mon, 'SIGTERM');
+  running.delete(mon);
+  const end = readJsonl(monitorFile).find((r) => r.kind === 'end') ?? null;
+  const back = readJsonl(e2eFile).find((r) => r.kind === 'step' && r.name === 'restart-second');
+  return {
+    verdict: result,
+    firstPid,
+    secondPid: pid,
+    route: back?.route ?? null,
+    everVisible: end ? end.everVisible : null,
+    everFront,
+    safetyKill,
+  };
 }
 
 /** Live ad loads logged so far (the ledger's `load` lines, else reservations). */

@@ -1,55 +1,73 @@
 # ow-tauri Ad Showcase
 
 One window that shows every `<owadview>` ad format working, in test and in
-live mode, with **the same HTML and JavaScript on ow-electron and on
-ow-tauri**. It is built for a presenter: pick a page, watch the ads load and
-read every event the ad element raises in the timeline on the right.
+live mode, with **the same page on ow-electron and on Tauri with
+`tauri-plugin-overwolf`**. It is built for a presenter: pick a page, watch
+the ads load and read every event the ad element raises in the timeline on
+the right.
 
-- `src/renderer/` is the window: plain TypeScript and CSS, no framework. It
-  talks to the main process only through `window.showcase` (the preload).
-- `src/main/main.ts` is the main process, written against the `electron` API.
-  - On **ow-electron**, `electron` is the real module.
-  - On **ow-tauri**, the bundler aliases `electron` to `ow-tauri/electron`
-    and the main process runs in the hidden main webview, as in
-    [`examples/packages-sample`](../packages-sample/README.md). `src-tauri/`
-    is the same thin shell around `tauri-plugin-overwolf`.
-- One rolldown config ([rolldown.config.mjs](rolldown.config.mjs)) builds both
-  outputs; [scripts/stage.mjs](scripts/stage.mjs) writes them to `.stage/`
+- `src/renderer/` is the page: plain TypeScript and CSS, no framework. It
+  talks to its host only through `window.showcase`
+  ([src/shared/ipc.ts](src/shared/ipc.ts) `ShowcaseApi`).
+- **Tauri** ([src-tauri/](src-tauri/), [src/tauri/](src/tauri/)): a plain
+  Tauri 2 app. `src/tauri/install.ts` builds `window.showcase` from
+  [`tauri-plugin-overwolf-api`](../../packages/api/README.md) (consent, email
+  hashes) and the app's own commands
+  ([src-tauri/src/showcase.rs](src-tauri/src/showcase.rs): host info,
+  exports, the parity report, restart, window actions), and imports
+  `tauri-plugin-overwolf-api/adview` for the `<owadview>` element. The
+  window is a normal `WebviewWindow` labelled `main`; its capability
+  ([src-tauri/capabilities/default.json](src-tauri/capabilities/default.json))
+  grants `overwolf:default` and `overwolf:email-hashes`.
+- **ow-electron** (the twin, for side-by-side comparison):
+  [src/main/main.ts](src/main/main.ts) and
+  [src/preload/preload.ts](src/preload/preload.ts) answer the same API over
+  Electron IPC with `app.overwolf`.
+- One rolldown config ([rolldown.config.mjs](rolldown.config.mjs)) builds
+  both; [scripts/stage.mjs](scripts/stage.mjs) writes them to `.stage/`
   (git-ignored).
 
 ## Prerequisites
 
 - Node 22.12 or newer and the [Tauri 2 prerequisites](https://tauri.app/start/prerequisites/)
   for your OS (Rust, WebView2 on Windows, WebKitGTK on Linux).
-- Install from the repository root, so `ow-tauri` links to `packages/ow-tauri`,
-  and install ow-electron for the twin in `tools/parity-harness` (its own
-  install, outside the workspace):
+- Install from the repository root (the example is an npm workspace, so
+  `tauri-plugin-overwolf-api` links to `packages/api`), and install
+  ow-electron for the twin in `tools/parity-harness` (its own install,
+  outside the workspace):
 
 ```shell
 npm install
-npm run build --workspace ow-tauri
+npm run build --workspace tauri-plugin-overwolf-api
 (cd tools/parity-harness && npm install --workspaces=false)
 ```
 
 The showcase runs ow-electron from there
 ([scripts/ow-electron.mjs](scripts/ow-electron.mjs)) instead of depending on
-it: hoisted into the workspace next to ow-tauri, ow-electron's `electron`
-types would merge with ow-tauri's ambient ones.
+it, so the workspace install stays free of the Electron runtime download;
+[types/electron.d.ts](types/electron.d.ts) types the part of `electron` the
+twin uses.
 
 ## Run both hosts
 
 From `examples/ad-showcase`:
 
-| Script                                | What it does                                                                       |
-| ------------------------------------- | ---------------------------------------------------------------------------------- |
-| `npm run start:electron:test`         | stage, then `ow-electron --test-ad .stage/electron` (test ads)                     |
-| `npm run start:electron`              | the same without `--test-ad` (live ads)                                            |
-| `npm run start:tauri:test`            | stage, then `tauri dev` with `--test-ad` (test ads)                                |
-| `npm run start:tauri`                 | the same without `--test-ad` (live ads)                                            |
-| `npm run build`                       | stage both hosts (`.stage/electron`, `.stage/tauri`)                               |
-| `npm run typecheck` / `lint` / `test` | `tsc`, ESLint, vitest                                                              |
-| `npm run check:rust`                  | `cargo fmt --check`, `cargo clippy -D warnings` with and without the `lab` feature |
-| `npm run lab:smoke`                   | the invisible lab smoke run (macOS, agents; see [e2e/README.md](e2e/README.md))    |
+| Script                                | What it does                                                                                  |
+| ------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `npm run start:tauri:test`            | stage, debug build with the page embedded, run it with `--test-ad` (test ads)                |
+| `npm run start:tauri`                 | the same without `--test-ad` (live ads)                                                       |
+| `npm run dev:tauri:test` / `dev:tauri` | `tauri dev` (hot reload); Restart in TEST/LIVE is refused there with a notice (below)        |
+| `npm run start:electron:test`         | stage, then `ow-electron --test-ad .stage/electron` (test ads)                                |
+| `npm run start:electron`              | the same without `--test-ad` (live ads)                                                       |
+| `npm run build`                       | stage both hosts (`.stage/electron`, `.stage/tauri`)                                          |
+| `npm run typecheck` / `lint` / `test` | `tsc`, ESLint, vitest                                                                         |
+| `npm run check:rust`                  | `cargo fmt --check`, `cargo clippy -D warnings` with and without the `lab` feature            |
+| `npm run lab:smoke`                   | the invisible lab smoke run (macOS, agents; see [e2e/README.md](e2e/README.md))               |
+| `npm run screenshots`                 | the documentation images, in the invisible lab with test ads (see [Screenshots](#screenshots)) |
+
+`start:tauri*` run [scripts/run.mjs](scripts/run.mjs): `tauri build --debug
+--no-bundle` with the staged identity, then the binary (`.exe` on Windows),
+arguments after `--` passed through.
 
 ow-electron downloads its runtime on first use. `src-tauri/` is its own
 Cargo workspace with its own `Cargo.lock`, like the packages sample.
@@ -64,14 +82,18 @@ Cargo workspace with its own `Cargo.lock`, like the packages sample.
   the uid; a house ad fills on no-fill once one is set up. High impact,
   interstitial and reward are demand-gated: they do not fill until Overwolf
   qualifies the uid or attaches a demo campaign.
-- The mode follows the `--test-ad` switch on both hosts. ow-tauri also
-  accepts `OW_TAURI_TEST_AD=1`, but the badge only sees the switch, so use
-  the `:test` scripts.
+- The mode follows the `--test-ad` switch on both hosts (the plugin reads
+  it; `showcase_info` reports it), so use the `:test` scripts.
 - **Restart in TEST / LIVE** in the top bar relaunches the app with or
-  without `--test-ad` (`app.relaunch`) and comes back to the same page and
-  choice (`--showcase-page=<page>[/<choice>]`, e.g. `layouts/tower` or
+  without `--test-ad` and comes back to the same page and choice
+  (`--showcase-page=<page>[/<choice>]`, e.g. `layouts/tower` or
   `sizes/300x250`; the same switch opens the app on that page). Going LIVE
-  asks for an inline confirmation first.
+  asks for an inline confirmation first. On Tauri the new process starts
+  once the old one has exited (`RunEvent::Exit`: the plugin has drained its
+  analytics and the single-instance lock is released). Under `tauri dev`
+  the page comes from the Tauri CLI's dev server, which stops with the first
+  process, so the app refuses the restart and the banner says to use
+  `npm run start:tauri` instead.
 
 ## Identity
 
@@ -88,7 +110,8 @@ For a demo with your own app identity:
    use as is.
 2. Run any start script (or `npm run build`). `scripts/stage.mjs` merges the
    file into `.stage/package.json`, `.stage/electron/package.json` and
-   `.stage/tauri.conf.json`; the Tauri build embeds the staged manifest.
+   `.stage/tauri.conf.json` (product name, version and `plugins.overwolf`
+   author, name and uid), which the Tauri scripts pass as `--config`.
    Nothing tracked changes: `git status` stays clean.
 
 `--identity FILE` (`node scripts/stage.mjs --host all --identity FILE`)
@@ -162,7 +185,9 @@ full on screen only, and timeline exports carry the masked uid.
 
 ## Measured results (lab, macOS, 2026-10-07)
 
-Invisible lab runs (`e2e/`, alpha-0 windows, never frontmost, no process
+These runs used the earlier ow-tauri host (before the app moved to
+`tauri-plugin-overwolf-api`); the current Tauri app passes the lab smoke
+(page 1 fills) and restart checks. Invisible lab runs (`e2e/`, alpha-0 windows, never frontmost, no process
 left), ow-tauri 0.1.0 on Tauri 2.12.1 and ow-electron 42.11.4 on one Mac
 (1280x837 window). TEST is the full tour (47 steps, every page and button);
 LIVE used a lab app identity whose uid is not enabled for live demand.
@@ -242,6 +267,16 @@ known request-header gap, `docs/ARCHITECTURE.md` section 6).
   Linux request shaping.
 - A server-verified reward: none exists.
 - That `performance_ad_no_fill` fires: ow-electron sends `shutdown` only.
+
+## Screenshots
+
+`npm run screenshots` records the documentation images: the lab tour with
+stills in the dark and the light theme, test ads only, with the tracked
+placeholder identity (it refuses to run with `identity.local.json` and checks
+that the window shows the placeholder's formula uid). Output:
+`e2e/out/screenshots/<theme>/` (git-ignored); `--out DIR` copies the page
+images to `DIR/<page>-<dark|light>.png`. See
+[scripts/screenshots.mjs](scripts/screenshots.mjs).
 
 ## Lab
 

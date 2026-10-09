@@ -20,6 +20,7 @@ import type { PageContext, PageDef } from './pages/page.js';
 import { mountParity } from './pages/parity.js';
 import { mountReward } from './pages/reward.js';
 import { mountSizes } from './pages/sizes.js';
+import { restartRefusal } from './restart.js';
 import { TimelineStore } from './timeline-store.js';
 import { TimelineView } from './timeline-view.js';
 
@@ -183,7 +184,23 @@ export function startApp(root: HTMLElement, api: ShowcaseApi, info: HostInfo): v
   banner.hidden = true;
   const restart = (mode: AdMode): void => {
     control('restart', 'app', { mode, route: currentRoute() });
-    void api.restart(mode, currentRoute());
+    // A refused restart (ow-tauri under `tauri dev` needs a built app) says
+    // why in the banner instead of failing silently.
+    api.restart(mode, currentRoute()).catch((error: unknown) => {
+      control('restart-refused', 'app', { mode, reason: String(error) });
+      banner.replaceChildren(
+        h('span', { text: restartRefusal(error) }),
+        button(
+          'OK',
+          'top-restart-dismiss',
+          () => {
+            banner.hidden = true;
+          },
+          'btn-ghost',
+        ),
+      );
+      banner.hidden = false;
+    });
   };
   const restartButton = button(`Restart in ${other.toUpperCase()}`, 'top-restart', () => {
     if (other === 'test') {

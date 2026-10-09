@@ -1,23 +1,22 @@
-// The lab driver on ow-tauri: bundled in front of the main process by
+// The lab driver on ow-tauri: bundled in front of the showcase page by
 // `scripts/stage.mjs --lab` only (the normal build never includes it). It
 // does nothing unless the app was built with the `lab` Cargo feature and
 // launched by the runner, which passes OW_SHOWCASE_E2E_CONFIG.
 //
-// It runs the shared steps (steps.cjs) through the `ow-tauri/electron`
-// facade: the same BrowserWindow / executeJavaScript calls the ow-electron
-// baseline makes.
+// It runs the shared steps (steps.cjs) inside the showcase page itself: the
+// steps' `executeJavaScript` is an indirect eval in this page (the lab build
+// allows it in its CSP), and the lab commands of src-tauri/src/lab.rs give
+// it the records, the window list, the native probes and the quit.
 
-import { app, BrowserWindow } from 'electron';
+import { invoke } from '@tauri-apps/api/core';
 
-import { runSteps } from './steps.cjs';
+import { RESTART_ROUTE, runSteps } from './steps.cjs';
 
-const invoke = (cmd, args) => globalThis.__TAURI_INTERNALS__.invoke(cmd, args);
+/** The route the page started on (read before the page can change it). */
+const startHash = location.hash;
 
-// The showcase's show() runs unchanged: in the invisible lab the plugin
-// itself keeps the app in the background (no activation, the window
-// ordered front without becoming key; tauri-plugin-overwolf `lab`).
-
-const isShowcase = (w) => /renderer\/index\.html/.test(w.webContents.getURL() || '');
+/** Evaluates `code` in the page, as Electron's `executeJavaScript` does. */
+const evaluate = (code) => Promise.resolve((0, eval)(code));
 
 async function start() {
   let config;
@@ -36,33 +35,28 @@ async function start() {
         .catch(() => undefined),
     );
   };
-  record({
-    kind: 'driver',
-    host: 'tauri',
-    versions: globalThis.process && globalThis.process.versions,
-  });
+  const restartPhase = startHash === `#${RESTART_ROUTE}` ? 'second' : 'first';
+  record({ kind: 'driver', host: 'tauri', pid: config.pid, restartPhase, startHash });
+  const page = { webContents: { executeJavaScript: evaluate } };
   const host = {
     name: 'tauri',
     config,
     record,
-    mainWindow: () => BrowserWindow.getAllWindows().find(isShowcase) || null,
+    mainWindow: () => page,
     quit: () => {
-      void chain.then(() => app.quit());
+      void chain.then(() => invoke('e2e_quit'));
     },
     // The window's native hit test and the test-mode click (src-tauri/src/lab.rs).
     nativeProbe: (points, click) => invoke('e2e_native_probe', { points, click }),
     still: (name) => invoke('e2e_still', { name }),
-    probeGuests: (phase) => invoke('e2e_probe_guests', { phase }),
-    windows: () =>
-      BrowserWindow.getAllWindows().map((w) => ({
-        id: w.id,
-        visible: w.isVisible(),
-        url: (w.webContents.getURL() || '').replace(/^.*\/renderer\//, '<app>/renderer/'),
-      })),
+    windows: () => invoke('e2e_windows'),
+    restartPhase,
+    flush: () => chain,
   };
-  app
-    .whenReady()
-    .then(() => runSteps(host).catch((e) => record({ kind: 'fatal', text: String(e && e.stack) })));
+  runSteps(host).catch((e) => {
+    record({ kind: 'fatal', text: String(e && e.stack) });
+    host.quit();
+  });
 }
 
 void start();

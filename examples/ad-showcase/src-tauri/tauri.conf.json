@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "identifier": "dev.ow-tauri.ad-showcase",
   "build": {
+    "beforeDevCommand": { "script": "node scripts/stage.mjs --host tauri", "wait": true },
+    "beforeBuildCommand": "node scripts/stage.mjs --host tauri",
     "frontendDist": "../.stage/tauri"
   },
   "app": {
@@ -23,19 +25,12 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ],
-    "windows": {
-      "nsis": {
-        "installMode": "both",
-        "installerHooks": "windows/hooks.nsh"
-      }
-    }
+    ]
   },
   "plugins": {
     "overwolf": {
-      "main": {
-        "url": "main/main.html"
-      }
+      "author": "Example Studio",
+      "name": "ow-tauri Ad Showcase"
     }
   }
 }

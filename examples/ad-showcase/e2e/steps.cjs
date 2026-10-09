@@ -21,7 +21,15 @@
 //   still?(name),                  // ow-tauri: an in-process still (PNG)
 //   probeGuests?(phase),           // ow-tauri: the lab's guest page probe
 //   windows?(),                    // the app's windows (state only)
+//   restartPhase?,                 // ow-tauri restart check: 'first' | 'second'
+//   flush?(),                      // resolves once every record is written
 // }
+//
+// The `restart` scenario (ow-tauri, test mode) is the one exception to "never
+// press Restart": it starts on the parity page (no ad guest), restarts in
+// TEST onto `parity/restarted` through `window.showcase.restart`, and the
+// second process reports that it came back on that page, invisible (the lab
+// environment is inherited), then quits.
 
 'use strict';
 
@@ -35,7 +43,11 @@ const SCENARIOS = {
   'live-300x250': { route: 'sizes/300x250', loads: 1 },
   'live-reward': { route: 'reward', loads: 2 },
   'live-perf': { route: 'interstitial', loads: 1 },
+  restart: { route: 'parity', loads: 0 },
 };
+
+/** The route the restart check restarts onto. */
+const RESTART_ROUTE = 'parity/restarted';
 
 /** The eight layouts of page 2, in select order. */
 const LAYOUTS = [
@@ -164,6 +176,10 @@ async function runSteps(host) {
   const scenario = cfg.steps in SCENARIOS ? cfg.steps : 'smoke';
   let loaded = false;
 
+  if (scenario === 'restart') {
+    await restartCheck();
+    return;
+  }
   if (scenario === 'smoke' || scenario === 'tour') {
     // 2. Page 1 renders and its ads load (test mode).
     const filled = await waitFor(allFilled, adWaitMs);
@@ -179,6 +195,26 @@ async function runSteps(host) {
 
   record({ kind: 'done', displayAdLoaded: loaded });
   host.quit();
+
+  // --------------------------------------------------------------- restart
+  async function restartCheck() {
+    const route = await exec('location.hash');
+    if (host.restartPhase === 'second') {
+      await step('restart-second', { route, windows: host.windows ? await host.windows() : null });
+      record({ kind: 'done', restarted: true, route });
+      host.quit();
+      return;
+    }
+    await step('restart-first', { route });
+    record({ kind: 'restart-requested', route: RESTART_ROUTE });
+    if (host.flush) await host.flush();
+    const result = await exec(
+      `window.showcase.restart('test', ${JSON.stringify(RESTART_ROUTE)}).then(() => 'requested', (e) => 'refused: ' + String(e))`,
+    );
+    // A granted restart exits this process before the answer arrives.
+    record({ kind: 'fatal', text: `restart did not exit the app (${String(result)})` });
+    host.quit();
+  }
 
   // ------------------------------------------------------------------ tour
   async function tour() {
@@ -488,4 +524,4 @@ async function runSteps(host) {
   }
 }
 
-module.exports = { runSteps, SCENARIOS, LAYOUTS };
+module.exports = { runSteps, SCENARIOS, LAYOUTS, RESTART_ROUTE };

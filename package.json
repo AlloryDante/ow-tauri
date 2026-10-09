@@ -1,12 +1,13 @@
 {
   "name": "ow-tauri-workspace",
   "private": true,
-  "description": "Workspace root for the Overwolf plugin for Tauri 2: the JS API, the CLI and the guest shims.",
+  "description": "Workspace root for the Overwolf plugin for Tauri 2: the JS API, the CLI, the guest shims and the examples.",
   "license": "MIT OR Apache-2.0",
   "author": "ow-tauri contributors",
   "type": "module",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "examples/ad-showcase"
   ],
   "engines": {
     "node": ">=22.12.0"
