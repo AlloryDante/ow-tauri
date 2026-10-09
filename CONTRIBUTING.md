@@ -6,7 +6,8 @@ Thanks for helping. Please read this page before opening a pull request.
 
 1. **The wire comes first.** Overwolf must receive exactly what ow-electron
    sends: the same requests, headers, ids, cookies, state-file bytes and
-   guest messages ([CONTRACT](docs/CONTRACT.md)). A change that could alter
+   guest messages ([CONTRACT](docs/CONTRACT.md)), except the host label and
+   the documented platform gaps (CONTRACT D.8.3). A change that could alter
    any of them needs a parity re-proof (gate G12 below) before it merges.
 2. **Tauri idioms.** The plugin is a Tauri plugin. Use Tauri's own APIs,
    capabilities and events. ow-tauri adds no Electron API.

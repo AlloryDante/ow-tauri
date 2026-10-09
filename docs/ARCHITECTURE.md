@@ -2,7 +2,10 @@
 
 This page is for contributors. It explains how `tauri-plugin-overwolf` hosts
 Overwolf's ad and consent pages inside an ordinary Tauri app, and how it
-keeps every byte Overwolf receives identical to ow-electron.
+sends Overwolf what ow-electron sends. The one deliberate difference is the
+host label (`tauri`). Where a platform cannot reproduce a behaviour, the
+contract names the gap: on macOS, ad subresource requests have no forced
+`Origin` and no `x-ow-*` headers ([CONTRACT D.8.3](CONTRACT.md#d83-per-platform)).
 
 - The wire contract (what Overwolf receives) is in
   [CONTRACT.md](CONTRACT.md).

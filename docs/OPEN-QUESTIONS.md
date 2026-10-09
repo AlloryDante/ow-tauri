@@ -1,7 +1,9 @@
 # Open questions
 
 ow-tauri is Overwolf's ow-electron SDK adapted to Tauri: the app is a plain
-Tauri app, and everything Overwolf receives is identical to ow-electron. This
+Tauri app, and Overwolf receives what ow-electron sends, except the host
+label and the platform gaps that [CONTRACT](CONTRACT.md) names (for example
+the macOS request headers, [OQ-05](#oq-05-request-shaping-for-the-ad-page)). This
 file lists every question that came up while specifying that, with its
 status, the answer and where the answer comes from. Ids are stable; numbers
 are not an order.

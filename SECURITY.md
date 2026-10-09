@@ -8,7 +8,9 @@
 | Older minors and release candidates | No: upgrade to the latest |
 | `main` | Fixes land here first |
 
-Fixes ship as a patch release of the latest minor, for all four packages
+Nothing is released yet: until the first release (1.0.0-rc.1, planned), the
+supported version is the latest commit on `main`. After it, fixes ship as a
+patch release of the latest minor, for all four packages
 together: `tauri-plugin-overwolf`, `tauri-plugin-overwolf-unstable`,
 `tauri-plugin-overwolf-api` and `tauri-plugin-overwolf-cli`.
 
@@ -24,7 +26,9 @@ in your own lockfile: the caret range already accepts the fix.
 
 Report privately through GitHub's private vulnerability reporting: the
 **Security** tab of the repository, then **Report a vulnerability**. Do not
-open a public issue. Include:
+put details in a public issue. If the **Report a vulnerability** button is
+missing, open an issue titled "Security contact request" with no details;
+a maintainer replies there with a private way to send the report. Include:
 
 - the affected package and version, or the commit;
 - the OS and the webview version (WebView2 or macOS);

@@ -44,7 +44,10 @@ ow-tauri is Overwolf's ow-electron SDK adapted to Tauri:
   `plugins.overwolf` block in `tauri.conf.json` (ADR 0021).
 - **The wire stays identical.** Every request, header, id, cookie, state-file
   byte and guest message that Overwolf receives matches what ow-electron
-  sends ([CONTRACT](../CONTRACT.md)). The parity harness proves it.
+  sends ([CONTRACT](../CONTRACT.md)), except the host label (`tauri`) and
+  the platform gaps the contract names (on macOS, ad subresource requests
+  have no forced `Origin` and no `x-ow-*` headers, CONTRACT D.8.3). The
+  parity harness proves the rest.
 
 ## Consequences
 

@@ -48,7 +48,7 @@
 
   <!-- Overwolf -->
   <rect class="panel ow" x="20" y="14" width="920" height="168" rx="10"/>
-  <text class="h owT" x="36" y="40">Overwolf: receives the same bytes as from ow-electron</text>
+  <text class="h owT" x="36" y="40">Overwolf: receives what ow-electron sends (gaps: host label; macOS headers, CONTRACT D.8.3)</text>
   <rect class="box ow" x="36" y="56" width="170" height="110" rx="8"/>
   <text class="t" x="48" y="80">Ad page</text>
   <text class="m code" x="48" y="102">www.overwolf.com</text>
