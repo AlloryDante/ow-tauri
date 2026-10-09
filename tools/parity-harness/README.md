@@ -37,7 +37,7 @@ Each run writes `captures/<run-id>/`. That folder is git-ignored and holds:
 - **No visible windows.** The app hides its dock icon first. `browser-window-created` and guards on every `BrowserWindow` show, focus and fullscreen method keep each window hidden (`--present hidden`) or at opacity 0, ignoring the mouse and not focusable (`--present transparent`). Every call to those methods is logged.
 - **Windows are pinned invisible before they exist on screen.** `browser-window-created` runs before the constructor applies its options (the `cmp` scenario calibrates this first and drops its window actions if it fails). The handler sets opacity 0, ignores the mouse and makes the window not focusable. Later calls to `setOpacity`, `setIgnoreMouseEvents` and `setFocusable` are pinned to those values and logged as `pinned-call`. This is what makes it safe to call `openAdPrivacySettingsWindow()` and `openCMPWindow()`, which show their window from JavaScript.
 - **Proof.** `--window-monitor` (macOS) polls the window server for the app's windows and records `everVisible`. Treat a run with `everVisible: true` as a failure. Under `taskpolicy -b` it samples about every 190 ms.
-- **No clicks.** The harness never sends input to a page.
+- **No clicks on ads.** The harness never sends input to an ad or app page. The one exception is `gesture-timing`: it refuses outside test mode, first replaces the first ad guest's page with a loopback fixture page (`http://127.0.0.1:<port>/fixture`, never an ad), sends `sendInputEvent` clicks and keys only to that page, and the page only ever opens `owparity-canary://` URLs, a scheme with no registered handler. The scenario also sets `stubOpenExternal`, which replaces `shell.openExternal`, `openPath` and `showItemInFolder` with recorders (`open-external.jsonl`) that open nothing.
 - **Live ads are opt-in and capped.** `--mode live` needs `--live-ok`. `--max-live-loads N` lets N loads run (default 10); a load beyond N removes every `<owadview>` as it starts (so a run logs at most N + 1), and every live load is logged in `live-loads.jsonl`.
 - **Offline probes.** `uid-matrix.mjs` and the muid experiment launch with `--proxy-server=127.0.0.1:9`, so throwaway app identities send no analytics.
 - **Isolated home.** By default each run gets a fresh home: `CFFIXED_USER_HOME` on macOS, `HOME` and `XDG_CONFIG_HOME` on Linux. The real profile, consent and cookies are not touched. Windows has no isolation, so use `--home real` there knowingly. `--use-mock-keychain` keeps Chromium out of the login keychain.
@@ -104,6 +104,16 @@ node run.mjs --scenario windows-urls --window-monitor         # names for remote
 node run.mjs --scenario offscreen --window-monitor            # ad window at opacity 0 and off-screen
 node run.mjs --scenario packages                              # package manager surface (offline)
 node run.mjs --scenario introspect                            # own member and listener names
+
+# Record-first observations (TEST mode, hidden; ow-electron).
+node run.mjs --scenario email-hashes-clear --window-monitor   # setUserEmailHashes(undefined | null | {} | '' | no argument) after a set
+node run.mjs --scenario last-window-during-consent --window-monitor  # app window closed while the startup consent window is open
+node run.mjs --scenario last-window-before-consent --window-monitor  # closed before the consent window exists
+node run.mjs --scenario last-window-consent-saved --window-monitor   # closed just after the consent was saved
+node run.mjs --scenario last-window-after-consent --window-monitor   # control: closed after 10 s
+node run.mjs --scenario corrupt-state --home profile:cs --window-monitor   # seed a profile first (normal launch)
+node run.mjs --scenario corrupt-state --home profile:cs --corrupt-state garbage --window-monitor
+node run.mjs --scenario gesture-timing --window-monitor       # click-out gesture timing on a loopback fixture (see Safety)
 nohup taskpolicy -b node run.mjs --scenario long --allow-long --caffeinate --no-cdp &   # 13 h hidden session
 
 # Round-3 ad formats (docs: monetization/advertising/*). Test ads unless --mode live --live-ok.
@@ -203,6 +213,8 @@ It compares two captures of the same scenario after normalising volatile values 
 | `BUG`                 | anything else                                                     |
 
 Ad-format runs are also compared through `lib/adformat-report.mjs` facts: per element the event names, order, counts, payload keys and removal timings, the DOM state (display, pointer-events, inline style) before and after the first `display_ad_loaded`, the ad library options on the wire (as sets, keys sorted at every depth), each guest's mute sequence, the lab hit probes (page routing, ow-tauri native routing, composited colour class, performance pointer-events, clicks) and the front app. A colour at a point that lands on a served creative (`std-slot`) is variance; the red container, the app control and the bare corner carry the transparency and z-order checks.
+
+The ad page asks its host for a reload on its own after it is told `hidden` (about 4.5 s later, depending on its ad state, and not once it is shown again first). Fewer ow-tauri guest loads are variance only when both hosts told the guest the same visibility sequence and ow-tauri loaded the page once plus once per reload request it received (ow-electron's `GUEST_ADVIEW_RELOAD` requests, when recorded, must account for its loads the same way). Each host re-sends `customTracking` after every guest load, so a message sequence that differs only by as many re-sends as the loads differ is variance too.
 
 The results go to `parity-diff.json` and `parity-diff.md` in the Tauri run. The exit status is 1 while a `BUG` remains.
 

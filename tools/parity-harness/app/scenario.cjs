@@ -142,6 +142,8 @@ module.exports = function install(ctx) {
       if (typeof original !== 'function') continue;
       proto[method] = function wcPeek(...args) {
         if (method === 'loadURL') maybeFailLoad(this, args);
+        if (method === 'setWindowOpenHandler' && typeof args[0] === 'function')
+          args[0] = observeOpenHandler(this, args[0]);
         if (!isOwn(args)) {
           record('ipc.jsonl', {
             dir: 'host->page',
@@ -199,6 +201,18 @@ module.exports = function install(ctx) {
         record('wc-events.jsonl', { event: name, ...wcInfo(this) });
       }
       const result = originalEmit.call(this, name, ...args);
+      if (config.gestureFixture && NAVIGATION_EVENTS.has(name)) {
+        // Every listener (ow-electron's included) has run by now, so the
+        // event says whether the host cancelled the navigation.
+        const event = args[0];
+        record('click-outs.jsonl', {
+          kind: name,
+          ...wcInfo(this),
+          navUrl: safeGet(() => event.url) ?? (typeof args[1] === 'string' ? args[1] : undefined),
+          isMainFrame: safeGet(() => event.isMainFrame),
+          prevented: Boolean(event && event.defaultPrevented),
+        });
+      }
       if (entry) {
         const event = args[0];
         if (event && event.returnValue !== undefined)
@@ -208,6 +222,40 @@ module.exports = function install(ctx) {
       return result;
     };
     log('webContents prototype instrumented');
+  }
+
+  // --- Click-out observation (gesture-timing) -------------------------------
+  // The window-open handler a host installs on a webContents is wrapped so
+  // each call is recorded with what the handler answered. main.cjs replaces
+  // shell.openExternal with a recorder when config.stubOpenExternal is set,
+  // and the gesture fixture only ever opens URLs of an unregistered scheme,
+  // so nothing can reach the system browser either way.
+  function observeOpenHandler(wc, handler) {
+    const wcId = safeGet(() => wc.id);
+    return function observedOpenHandler(details) {
+      const entry = {
+        kind: 'window-open-handler',
+        webContentsId: wcId,
+        type: safeGet(() => wc.getType()),
+        url: details && details.url,
+        frameName: details && details.frameName,
+        disposition: details && details.disposition,
+        features: details && details.features,
+        referrer: details && safeGet(() => details.referrer.url),
+        hasPostBody: Boolean(details && details.postBody),
+      };
+      let result;
+      try {
+        result = handler.call(this, details);
+        entry.returned = safe(result);
+      } catch (error) {
+        entry.threw = String(error);
+        record('click-outs.jsonl', entry);
+        throw error;
+      }
+      record('click-outs.jsonl', entry);
+      return result;
+    };
   }
 
   // Page -> host calls that do not surface as webContents '-ipc-*' events
@@ -359,6 +407,9 @@ module.exports = function install(ctx) {
   let featurePort = null;
   let featureHits = 0;
   function startFeatureServer() {
+    return Promise.all([startFeatureStandIn(), startFixtureServer()]);
+  }
+  function startFeatureStandIn() {
     if (!config.features) return Promise.resolve();
     const responses = config.features.responses;
     const server = http.createServer((req, res) => {
@@ -391,6 +442,45 @@ module.exports = function install(ctx) {
       });
     });
   }
+
+  // --- Gesture fixture (loopback page, never an ad) ---------------------------
+  // config.gestureFixture: a local page the gesture-timing scenario loads into
+  // an ad guest in place of the ad page. It opens URLs of an unregistered
+  // scheme only (`owparity-canary://`), so even an open that reached the OS
+  // would find no application to open it.
+  let fixtureOrigin = null;
+  function startFixtureServer() {
+    if (!config.gestureFixture) return Promise.resolve();
+    const server = http.createServer((req, res) => {
+      record('fixture.jsonl', { kind: 'served', url: req.url, headers: req.rawHeaders });
+      if (req.url.startsWith('/landing')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end('<!doctype html><meta charset="utf-8"><title>landing</title>landing\n');
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(GESTURE_FIXTURE);
+    });
+    return new Promise((resolve) => {
+      server.listen(0, '127.0.0.1', () => {
+        fixtureOrigin = `http://127.0.0.1:${server.address().port}`;
+        server.unref();
+        log('gesture fixture listening', { origin: fixtureOrigin });
+        resolve();
+      });
+    });
+  }
+
+  /** The ad guest the gesture fixture was loaded into (by webContents id). */
+  let fixtureGuestId = null;
+  const fixtureGuest = () => {
+    if (fixtureGuestId === null) return null;
+    const wc = webContentsModule.fromId(fixtureGuestId);
+    return wc && !wc.isDestroyed() ? wc : null;
+  };
+  /** True only while the guest shows the loopback fixture (input may be sent). */
+  const onFixture = (wc) =>
+    Boolean(wc && fixtureOrigin && safeGet(() => wc.getURL().startsWith(`${fixtureOrigin}/`)));
 
   /** Rewrites a matching host request URL to the stand-in. Called from main.cjs's net hook. */
   function rewriteUrl(url) {
@@ -456,6 +546,38 @@ module.exports = function install(ctx) {
       url: safeGet(() => win.webContents.getURL()),
       webContentsId: safeGet(() => win.webContents.id),
       listeners: safeGet(() => win.eventNames().map((n) => [String(n), win.listenerCount(n)])),
+    };
+  }
+
+  /** `<stateDir>/ow-electron.json` now: existence, size, hash, text and top-level keys. */
+  function readStateFile() {
+    if (!config.stateDir) return { error: 'no stateDir in config' };
+    const file = path.join(config.stateDir, 'ow-electron.json');
+    let siblings = null;
+    try {
+      siblings = fs.readdirSync(config.stateDir).sort();
+    } catch {
+      siblings = null;
+    }
+    if (!fs.existsSync(file)) return { exists: false, siblings };
+    const bytes = fs.readFileSync(file);
+    const text = bytes.toString('utf8');
+    let keys = null;
+    let parseError = null;
+    try {
+      const parsed = JSON.parse(text);
+      keys = parsed && typeof parsed === 'object' ? Object.keys(parsed) : typeof parsed;
+    } catch (error) {
+      parseError = String(error);
+    }
+    return {
+      exists: true,
+      size: bytes.length,
+      sha256: require('node:crypto').createHash('sha256').update(bytes).digest('hex'),
+      keys,
+      parseError,
+      text: text.length > 20000 ? `${text.slice(0, 20000)}…[${text.length}]` : text,
+      siblings,
     };
   }
 
@@ -570,6 +692,11 @@ module.exports = function install(ctx) {
   const actions = {
     async 'ow-call'({ fn, args = [], label, sync, generateFrom }) {
       const ow = app.overwolf;
+      // JSON has no `undefined`: { $undefined: true } stands for it, so a
+      // scenario can pass `undefined` explicitly (setUserEmailHashes(undefined)).
+      args = args.map((a) =>
+        a && typeof a === 'object' && !Array.isArray(a) && a.$undefined === true ? undefined : a,
+      );
       if (generateFrom !== undefined) {
         // setUserEmailHashes(generateUserEmailHashes(<email>)), as the docs show.
         args = [ow.generateUserEmailHashes(generateFrom)];
@@ -730,6 +857,85 @@ module.exports = function install(ctx) {
     },
     async 'probe-guests'({ label }) {
       await probeAllGuests(label);
+    },
+    async 'state-file'({ label }) {
+      // ow-electron's state file as it is right now (state-file.jsonl).
+      record('state-file.jsonl', { label, ...readStateFile() });
+    },
+    async 'guest-fixture'({ label }) {
+      // gesture-timing: the first ad guest leaves the ad page for the
+      // loopback fixture. From here on no ad is shown in that guest.
+      const wc = guests()[0];
+      const entry = { kind: 'guest-fixture', label, origin: fixtureOrigin };
+      if (!wc || !fixtureOrigin) {
+        record('click-outs.jsonl', { ...entry, refused: 'no ad guest or no fixture server' });
+        return;
+      }
+      fixtureGuestId = wc.id;
+      entry.webContentsId = wc.id;
+      entry.from = safeGet(() => wc.getURL());
+      await wc.loadURL(`${fixtureOrigin}/fixture`).catch((e) => {
+        entry.loadError = String(e);
+      });
+      entry.url = safeGet(() => wc.getURL());
+      entry.ready = await ownExec(wc, 'typeof window.__gc').catch((e) => String(e));
+      record('click-outs.jsonl', entry);
+    },
+    async 'gesture-case'({ id, kind, delay = 0, input = 'mouse', readAfterMs }) {
+      // One click (or key press, or none) in the fixture, then the fixture's
+      // own action after `delay` ms. Input is only ever sent to the loopback
+      // fixture page, never to an ad.
+      const wc = fixtureGuest();
+      const entry = { kind: 'gesture-case', id, caseKind: kind, delay, input };
+      if (config.mode !== 'test') entry.refused = 'not in test mode';
+      else if (!onFixture(wc)) entry.refused = 'the guest does not show the fixture';
+      if (entry.refused) {
+        record('click-outs.jsonl', entry);
+        return;
+      }
+      const url = `owparity-canary://case-${id}`;
+      const armed = await ownExec(
+        wc,
+        `window.__gc.arm(${JSON.stringify({ id, kind, delay, url })})`,
+      ).catch((e) => ({ error: String(e) }));
+      entry.armed = safe(armed);
+      entry.url = url;
+      if (kind === 'no-gesture') {
+        entry.fired = await ownExec(wc, 'window.__gc.fire()').catch((e) => String(e));
+      } else if (kind === 'embedder-click') {
+        // A trusted click in the app's own page (not the guest), then the
+        // guest opens 200 ms later from script.
+        const main = ctx.getMainWindow();
+        if (main && !main.isDestroyed()) {
+          const at = { x: 2, y: 2, button: 'left', clickCount: 1 };
+          main.webContents.sendInputEvent({ type: 'mouseDown', ...at });
+          main.webContents.sendInputEvent({ type: 'mouseUp', ...at });
+          entry.embedderClick = at;
+        }
+        await new Promise((r) => setTimeout(r, 200));
+        entry.fired = await ownExec(wc, 'window.__gc.fire()').catch((e) => String(e));
+      } else if (input === 'key') {
+        entry.focused = await ownExec(wc, 'window.__gc.focusTarget()').catch((e) => String(e));
+        wc.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
+        wc.sendInputEvent({ type: 'char', keyCode: 'Return' });
+        wc.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
+      } else if (armed && armed.point) {
+        const at = { ...armed.point, button: 'left', clickCount: 1 };
+        wc.sendInputEvent({ type: 'mouseDown', ...at });
+        wc.sendInputEvent({ type: 'mouseUp', ...at });
+        entry.click = at;
+      }
+      record('click-outs.jsonl', entry);
+      setTimeout(
+        async () => {
+          const live = fixtureGuest();
+          const log = onFixture(live)
+            ? await ownExec(live, 'window.__gc.log.splice(0)').catch((e) => ({ error: String(e) }))
+            : { error: 'the guest left the fixture', url: safeGet(() => live.getURL()) };
+          record('click-outs.jsonl', { kind: 'fixture-log', id, log: safe(log) });
+        },
+        readAfterMs ?? delay + 1500,
+      );
     },
     async introspect({ label }) {
       // Names only: which own members and IPC listeners exist on the guests.
@@ -896,6 +1102,84 @@ module.exports = function install(ctx) {
     describeWindow,
   };
 };
+
+// The gesture-timing fixture (served on loopback, loaded into an ad guest in
+// place of the ad page; never an ad). `__gc.arm(case)` prepares one case and
+// returns the point to click; the click (or Return on the focused button)
+// runs the case's action after `delay` ms: window.open, two opens, a script
+// top-level navigation, or the default action of a target=_blank link. Every
+// URL uses the unregistered `owparity-canary` scheme. `__gc.log` collects
+// what the page saw: the trigger's isTrusted, navigator.userActivation
+// before and after, and whether window.open returned a window.
+const NAVIGATION_EVENTS = new Set(['will-navigate', 'will-frame-navigate', 'will-redirect']);
+
+const GESTURE_FIXTURE = `<!doctype html>
+<meta charset="utf-8">
+<title>gesture fixture</title>
+<style>
+  html, body { margin: 0; background: #1d2733; }
+  #b, #a { position: fixed; left: 0; width: 300px; height: 120px; display: block; }
+  #b { top: 0; }
+  #a { top: 125px; background: #2f3d4d; color: #fff; }
+</style>
+<button id="b">fixture button</button>
+<a id="a" target="_blank" href="#">fixture link</a>
+<script>
+  const g = (window.__gc = { log: [], armed: null });
+  const b = document.getElementById('b');
+  const a = document.getElementById('a');
+  const act = () => {
+    try { return { isActive: navigator.userActivation.isActive, hasBeenActive: navigator.userActivation.hasBeenActive }; }
+    catch (e) { return null; }
+  };
+  g.arm = (c) => {
+    g.armed = c;
+    const el = c.kind === 'anchor' ? a : b;
+    if (c.kind === 'anchor') a.href = c.url;
+    const r = el.getBoundingClientRect();
+    return { point: { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }, act: act() };
+  };
+  g.focusTarget = () => { b.focus(); return document.activeElement === b; };
+  const perform = (c, t0, trigger) => {
+    const r = { id: c.id, ev: 'action', kind: c.kind, trigger, sinceTriggerMs: Math.round(performance.now() - t0), actBefore: act() };
+    try {
+      if (c.kind === 'open-twice') {
+        const w1 = window.open(c.url + '-1', '_blank');
+        const w2 = window.open(c.url + '-2', '_blank');
+        r.result = [w1 === null ? 'null' : 'window', w2 === null ? 'null' : 'window'];
+      } else if (c.kind === 'top') {
+        location.href = c.url;
+        r.result = 'assigned';
+      } else {
+        const w = window.open(c.url, '_blank');
+        r.result = w === null ? 'null' : 'window';
+      }
+    } catch (e) { r.error = String(e); }
+    r.actAfter = act();
+    g.log.push(r);
+  };
+  const onTrigger = (ev) => {
+    const c = g.armed;
+    if (!c) return;
+    g.armed = null;
+    g.log.push({ id: c.id, ev: ev.type, target: ev.currentTarget.id, trusted: ev.isTrusted, act: act() });
+    if (c.kind === 'anchor') return;
+    ev.preventDefault();
+    const t0 = performance.now();
+    if (c.delay > 0) setTimeout(() => perform(c, t0, ev.type), c.delay);
+    else perform(c, t0, ev.type);
+  };
+  b.addEventListener('click', onTrigger);
+  a.addEventListener('click', onTrigger);
+  g.fire = () => {
+    const c = g.armed;
+    g.armed = null;
+    if (!c) return 'not armed';
+    perform(c, performance.now(), 'script');
+    return 'fired';
+  };
+</script>
+`;
 
 // Installed by the 'hook-guest-frames' action: every same-origin frame below
 // the ad guest's top frame gets a capturing 'message' listener (re-checked

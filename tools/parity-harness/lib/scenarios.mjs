@@ -127,6 +127,16 @@ const w = (key, at, options, extra = {}) => ({
 });
 const wx = (key, at, method, args) => ({ at, do: 'extra-window', key, method, args });
 
+/**
+ * setUserEmailHashes(...args) at `at`, the state file 1 s later and a guest
+ * probe 2 s later (email-hashes-clear).
+ */
+const emailHashCall = (at, name, args) => [
+  { at, do: 'ow-call', fn: 'setUserEmailHashes', args, label: `setUserEmailHashes(${name})` },
+  { at: at + 1000, do: 'state-file', label: `after-${name}` },
+  { at: at + 2000, do: 'probe-guests', label: `after-${name.replace(/\W+/g, '') || 'empty'}` },
+];
+
 /** @type {Record<string, {describe: string, defaults: Record<string, unknown>, config?: Record<string, unknown>}>} */
 export const SCENARIOS = {
   messages: {
@@ -1122,6 +1132,128 @@ export const SCENARIOS = {
         { at: 900, do: 'pkg-call', fn: 'hasPendingUpdates', args: [] },
         { at: 1200, do: 'pkg-call', fn: 'relaunch', args: ['gep'] },
         { at: 1500, do: 'listeners', label: 'packages' },
+      ],
+    },
+  },
+
+  // --- W3 record-first observations (DESIGN-v2 §5.2 #12, #14, #17, #18) ------
+  'email-hashes-clear': {
+    describe:
+      'SEC-M9: setUserEmailHashes with a hash set, then with undefined, no argument, null and {} (each after a fresh set). The state file after every call (state-file.jsonl), the eHashes messages each guest gets, a slot reloaded and a new slot added after the undefined call.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 62 },
+    config: {
+      actions: [
+        { at: 8000, do: 'state-file', label: 'start' },
+        { at: 10000, do: 'ow-call', fn: 'setUserEmailHashes', generateFrom: TEST_EMAIL },
+        { at: 11000, do: 'state-file', label: 'after-set-1' },
+        ...emailHashCall(13000, 'undefined', [{ $undefined: true }]),
+        {
+          at: 17000,
+          do: 'page-eval',
+          label: 'reload the first slot',
+          code: `document.querySelector('owadview').reload(); 'ok'`,
+        },
+        {
+          at: 19000,
+          do: 'page-eval',
+          label: 'add a slot after the undefined call',
+          code: `window.__parityAddAd({ layout: '300x250', cid: 'parity_after_clear' }); 'ok'`,
+        },
+        { at: 27000, do: 'probe-guests', label: 'after-undefined-new-slot' },
+        { at: 28000, do: 'state-file', label: 'after-undefined+15s' },
+        { at: 30000, do: 'ow-call', fn: 'setUserEmailHashes', generateFrom: TEST_EMAIL },
+        { at: 31000, do: 'state-file', label: 'after-set-2' },
+        ...emailHashCall(33000, 'no argument', []),
+        { at: 36000, do: 'ow-call', fn: 'setUserEmailHashes', generateFrom: TEST_EMAIL },
+        { at: 37000, do: 'state-file', label: 'after-set-3' },
+        ...emailHashCall(39000, 'null', [null]),
+        { at: 42000, do: 'ow-call', fn: 'setUserEmailHashes', generateFrom: TEST_EMAIL },
+        { at: 43000, do: 'state-file', label: 'after-set-4' },
+        ...emailHashCall(45000, '{}', [{}]),
+        { at: 48000, do: 'ow-call', fn: 'setUserEmailHashes', generateFrom: TEST_EMAIL },
+        { at: 49000, do: 'state-file', label: 'after-set-5' },
+        ...emailHashCall(51000, "''", ['']),
+        { at: 56000, do: 'probe-guests', label: 'end-of-calls' },
+      ],
+    },
+  },
+
+  'last-window-during-consent': {
+    describe:
+      'PAR-M10, first launch: the app quits when its last window closes (window-all-closed -> app.quit()). Its only window is created at ready without waiting for isCMPRequired() and closes 450 ms later, while the startup consent window is open and its page has not saved yet. When the app exits, the windows still open at before-quit, whether the consent page sent its Counter, and the cmp bytes written.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 40 },
+    config: {
+      quitOnAllClosed: true,
+      skipStartupCalls: true,
+      closeMainWindowAtMs: 450,
+      actions: [],
+    },
+  },
+
+  'last-window-before-consent': {
+    describe:
+      'PAR-M10, first launch: as last-window-during-consent, but the only window closes as soon as it is created, before the startup consent window exists.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 40 },
+    config: { quitOnAllClosed: true, skipStartupCalls: true, closeMainWindowAtMs: 0, actions: [] },
+  },
+
+  'last-window-consent-saved': {
+    describe:
+      'PAR-M10, first launch: the app waits for isCMPRequired() as usual, then closes its only window 200 ms after creating it: the consent page has saved, its window is still open.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 40 },
+    config: { quitOnAllClosed: true, closeMainWindowAtMs: 200, actions: [] },
+  },
+
+  'last-window-after-consent': {
+    describe:
+      'Control for last-window-during-consent: the same app closes its only window 10 s after creating it, after the startup consent has finished.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 40 },
+    config: { quitOnAllClosed: true, closeMainWindowAtMs: 10000, actions: [] },
+  },
+
+  'corrupt-state': {
+    describe:
+      'V13/RK15: a launch on a profile whose ow-electron.json run.mjs --corrupt-state replaced before launch (garbage, truncated, empty, array, null, wrong-types, missing). The state file at startup and later (state-file.jsonl), whether the startup consent window opens, isCMPRequired(), first-launch analytics and the consent messages guests get. Without --corrupt-state it seeds the profile.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 30 },
+    config: {
+      actions: [
+        { at: 0, do: 'state-file', label: 'window-loaded' },
+        { at: 2000, do: 'ow-call', fn: 'isCMPRequired', label: 'isCMPRequired+2s' },
+        { at: 10000, do: 'state-file', label: '+10s' },
+        { at: 12000, do: 'probe-guests', label: '+12s' },
+        { at: 25000, do: 'state-file', label: '+25s' },
+      ],
+    },
+  },
+
+  'gesture-timing': {
+    describe:
+      'PAR-M11, SEC-M2: the first ad guest is switched to a loopback fixture page (never an ad; test mode only) that opens owparity-canary:// URLs (an unregistered scheme). A trusted click (sendInputEvent) in the fixture, then window.open after 0, 0.5, 2, 4, 5, 6 s; no click; a click in the app page instead; two opens from one click; a target=_blank link; Return on the focused button; a script top-level navigation 0, 0.25, 0.5, 1, 1.5, 2, 6 s after a click. Records what the host window-open handler and navigation events saw and answered (click-outs.jsonl). shell.openExternal is replaced by a recorder.',
+    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 165 },
+    config: {
+      gestureFixture: true,
+      stubOpenExternal: true,
+      actions: [
+        { at: 6000, do: 'guest-fixture', label: 'fixture' },
+        { at: 10000, do: 'gesture-case', id: 1, kind: 'open', delay: 0 },
+        { at: 19000, do: 'gesture-case', id: 2, kind: 'open', delay: 500 },
+        { at: 28000, do: 'gesture-case', id: 3, kind: 'open', delay: 2000 },
+        { at: 37000, do: 'gesture-case', id: 4, kind: 'open', delay: 4000 },
+        { at: 46000, do: 'gesture-case', id: 5, kind: 'open', delay: 6000 },
+        { at: 56000, do: 'gesture-case', id: 6, kind: 'no-gesture' },
+        { at: 61000, do: 'gesture-case', id: 7, kind: 'embedder-click' },
+        { at: 67000, do: 'gesture-case', id: 8, kind: 'open-twice', delay: 0 },
+        { at: 74000, do: 'gesture-case', id: 9, kind: 'anchor' },
+        { at: 81000, do: 'gesture-case', id: 10, kind: 'open', delay: 0, input: 'key' },
+        { at: 88000, do: 'gesture-case', id: 11, kind: 'open', delay: 5000 },
+        { at: 98000, do: 'gesture-case', id: 12, kind: 'top', delay: 0 },
+        { at: 106000, do: 'gesture-case', id: 13, kind: 'top', delay: 2000 },
+        { at: 115000, do: 'gesture-case', id: 14, kind: 'top', delay: 6000 },
+        { at: 124000, do: 'gesture-case', id: 15, kind: 'top', delay: 250 },
+        { at: 131000, do: 'gesture-case', id: 16, kind: 'top', delay: 500 },
+        { at: 138000, do: 'gesture-case', id: 17, kind: 'top', delay: 1000 },
+        { at: 145000, do: 'gesture-case', id: 18, kind: 'top', delay: 1500 },
+        { at: 155000, do: 'probe-guests', label: 'gesture-end' },
       ],
     },
   },

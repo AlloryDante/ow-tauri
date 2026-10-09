@@ -159,6 +159,33 @@ function enforceHidden(win) {
 
 app.on('browser-window-created', (_event, win) => enforceHidden(win));
 
+// --- 2b. External opens never leave the harness ------------------------------
+// shell.openExternal and friends are replaced by recorders that open
+// nothing, so a click-out a scenario provokes (gesture-timing) is observed,
+// never performed. Electron looks these up on the shared `shell` binding at
+// call time; whether ow-electron's own click-out path reaches them is itself
+// recorded (open-external.jsonl stays empty if it does not).
+if (config.stubOpenExternal) {
+  const { shell } = require('electron');
+  for (const method of ['openExternal', 'openPath', 'showItemInFolder']) {
+    if (typeof shell[method] !== 'function') continue;
+    shell[method] = function stubbedOpen(...args) {
+      record('open-external.jsonl', { method, args: safe(args), stack: callerStack() });
+      return method === 'showItemInFolder' ? undefined : Promise.resolve('');
+    };
+  }
+}
+
+/** The first few frames of the current stack, without this file's frames. */
+function callerStack() {
+  return String(new Error().stack)
+    .split('\n')
+    .slice(1)
+    .filter((line) => !line.includes(__filename))
+    .slice(0, 6)
+    .map((line) => line.trim());
+}
+
 // --- 3. Main-process JS network hooks (passive wrappers) ---------------------
 // If ow-electron sends analytics through Electron's JS `net`/`fetch`, these
 // wrappers see the request including its body. If it uses native code, the
@@ -992,8 +1019,36 @@ for (const name of [
   app.on(name, () => record('events.jsonl', { kind: 'app', event: name }));
 }
 app.on('window-all-closed', () => {
-  // Keep running until the timed quit, like an app with a tray icon would.
+  // Keep running until the timed quit, like an app with a tray icon would,
+  // unless the scenario asks for the usual "quit when the last window
+  // closes" app (last-window-during-consent).
+  if (config.quitOnAllClosed) {
+    record('events.jsonl', {
+      kind: 'quit-on-all-closed',
+      windows: BrowserWindow.getAllWindows().map((w) => ({
+        windowId: w.id,
+        url: w.isDestroyed() ? null : safeUrl(w.webContents),
+      })),
+    });
+    app.quit();
+  }
 });
+for (const name of ['before-quit', 'will-quit']) {
+  app.on(name, () => {
+    if (!config.quitOnAllClosed) return;
+    // Which windows are still open when the quit starts.
+    record('events.jsonl', {
+      kind: 'open-windows',
+      at: name,
+      windows: BrowserWindow.getAllWindows().map((w) => ({
+        windowId: w.id,
+        destroyed: w.isDestroyed(),
+        url: w.isDestroyed() ? null : safeUrl(w.webContents),
+      })),
+    });
+  });
+}
+process.on('exit', (code) => record('events.jsonl', { kind: 'process-exit', code }));
 
 async function probeOnly() {
   snapshotOverwolf('ready');
@@ -1053,6 +1108,22 @@ async function startWindowAndActions() {
     focusable: false,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
+  if (typeof config.closeMainWindowAtMs === 'number') {
+    // last-window-during-consent: the app's only window closes this long
+    // after it was created, whatever the consent window is doing.
+    const win = mainWindow;
+    setTimeout(() => {
+      if (win.isDestroyed()) return;
+      record('events.jsonl', {
+        kind: 'main-window-close',
+        afterCreateMs: config.closeMainWindowAtMs,
+        otherWindows: BrowserWindow.getAllWindows()
+          .filter((w) => w !== win)
+          .map((w) => ({ windowId: w.id, url: w.isDestroyed() ? null : safeUrl(w.webContents) })),
+      });
+      win.close();
+    }, config.closeMainWindowAtMs);
+  }
   if (config.present === 'transparent') {
     makeInvisible(mainWindow);
     BrowserWindow.prototype.showInactive.call(mainWindow);
@@ -1072,7 +1143,17 @@ async function startWindowAndActions() {
     ...(config.elementAttrs ? { attrs: JSON.stringify(config.elementAttrs) } : {}),
     ...(config.elementSpec ? { spec: JSON.stringify(config.elementSpec) } : {}),
   });
-  await mainWindow.loadFile(path.join(__dirname, 'index.html'), { search: query.toString() });
+  const loading = mainWindow.loadFile(path.join(__dirname, 'index.html'), {
+    search: query.toString(),
+  });
+  if (typeof config.closeMainWindowAtMs === 'number') {
+    // The window may close before its page has loaded.
+    await loading.catch((error) =>
+      record('events.jsonl', { kind: 'main-load-aborted', error: String(error) }),
+    );
+  } else {
+    await loading;
+  }
   scenario.runActions();
 
   for (const at of [30_000, 120_000, 300_000]) {

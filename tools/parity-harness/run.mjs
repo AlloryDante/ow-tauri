@@ -10,7 +10,8 @@
 // Output: captures/<run-id>/ (git-ignored).
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +45,26 @@ const DEFAULTS = {
   home: 'isolated',
   packages: '',
   'quit-style': 'close-then-quit',
+};
+
+/**
+ * State-file corruptions for the corrupt-state scenario. Each returns the
+ * bytes to write, or null to remove the file (it is moved into the run
+ * folder, not deleted).
+ * @type {Record<string, (previous: Buffer | null) => Buffer | null>}
+ */
+const CORRUPTIONS = {
+  garbage: () => Buffer.from('this is not json\n'),
+  truncated: (previous) =>
+    previous && previous.length > 2
+      ? previous.subarray(0, Math.floor(previous.length / 2))
+      : Buffer.from('{"firstLaunch":fal'),
+  empty: () => Buffer.alloc(0),
+  array: () => Buffer.from('[]'),
+  null: () => Buffer.from('null'),
+  'wrong-types': () =>
+    Buffer.from(JSON.stringify({ firstLaunch: 'no', cmp: 42, eHashes: 'x', utmParams: [] })),
+  missing: () => null,
 };
 
 const USAGE = `Usage: node run.mjs [options]
@@ -95,6 +116,9 @@ const USAGE = `Usage: node run.mjs [options]
   --caffeinate            macOS: hold an idle-sleep assertion while the app runs
   --screencapture         macOS: let 'screencapture' actions capture the main display
                           (may raise a system screen-recording prompt)
+  --corrupt-state KIND    before launch, replace the ow-electron state file of the
+                          --home profile with: ${Object.keys(CORRUPTIONS).join(', ')}
+                          (corrupt-state scenario; needs a profile from an earlier run)
   --run-id ID             capture folder name (default: timestamp + mode)
   --no-wait               do not wait for a quiet machine before launching
   --help`;
@@ -131,6 +155,7 @@ function parseCli() {
       host: { type: 'string', default: 'electron' },
       'no-build': { type: 'boolean', default: false },
       'ci-visible': { type: 'boolean', default: false },
+      'corrupt-state': { type: 'string' },
       help: { type: 'boolean', default: false },
     },
   });
@@ -170,6 +195,12 @@ function parseCli() {
   if (values['ci-visible'] && process.env.GITHUB_ACTIONS !== 'true')
     fail('--ci-visible is for GitHub Actions runners only (GITHUB_ACTIONS=true)');
   if (values.mode === 'live' && !values['live-ok']) fail('--mode live needs --live-ok');
+  if (values['corrupt-state'] !== undefined) {
+    if (!(values['corrupt-state'] in CORRUPTIONS))
+      fail(`--corrupt-state must be one of ${Object.keys(CORRUPTIONS).join(', ')}`);
+    if (!values.home.startsWith('profile:'))
+      fail('--corrupt-state needs --home profile:NAME (a state file from an earlier run)');
+  }
   if (!['hidden', 'transparent'].includes(values.present))
     fail('--present must be hidden or transparent');
   if (!['close-then-quit', 'quit'].includes(values['quit-style'])) fail('bad --quit-style');
@@ -290,6 +321,9 @@ async function main() {
     'ow-electron': join(appData, 'ow-electron', expectedUid),
     userData: join(appData, displayName(pkg)),
   };
+  const corruption = opts['corrupt-state']
+    ? corruptStateFile(watched['ow-electron'], opts['corrupt-state'], runDir)
+    : null;
   const before = Object.fromEntries(
     Object.entries(watched).map(([k, dir]) => [
       k,
@@ -328,6 +362,7 @@ async function main() {
     windowTitle: displayName(pkg),
     windowName: opts['window-name'],
     host: opts.host,
+    stateDir: watched['ow-electron'],
   };
   const configPath = join(runDir, 'config.json');
   writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
@@ -356,6 +391,7 @@ async function main() {
     home: opts.home,
     switches,
     options: opts,
+    ...(corruption ? { corruption } : {}),
   };
   writeJson(join(runDir, 'meta.json'), meta);
 
@@ -438,6 +474,35 @@ async function main() {
   };
   writeJson(join(runDir, 'meta.json'), result);
   console.log(JSON.stringify({ runDir, exit, front, netlogSummary }, null, 2));
+}
+
+/**
+ * Replaces `<stateDir>/ow-electron.json` with corruption `kind` and returns
+ * what was there and what was written.
+ */
+function corruptStateFile(stateDir, kind, runDir) {
+  const file = join(stateDir, 'ow-electron.json');
+  const previous = existsSync(file) ? readFileSync(file) : null;
+  const next = CORRUPTIONS[kind](previous);
+  const info = {
+    kind,
+    file: 'ow-electron.json',
+    previousSize: previous ? previous.length : null,
+    previousSha256: previous ? sha256(previous) : null,
+  };
+  if (next === null) {
+    if (previous) renameSync(file, join(runDir, 'ow-electron.json.removed'));
+    info.written = null;
+  } else {
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(file, next);
+    info.written = { size: next.length, sha256: sha256(next) };
+  }
+  return info;
+}
+
+function sha256(bytes) {
+  return createHash('sha256').update(bytes).digest('hex');
 }
 
 /**
