@@ -99,6 +99,9 @@ have. The page does not fake them.
 - [src-tauri/src/sample.rs](src-tauri/src/sample.rs): single instance first,
   logging, the Overwolf plugin, one window shown once its page has loaded,
   and on macOS the hook that lets the plugin recover a crashed ad page.
+- [.env.example](.env.example): the signing credentials `ow-tauri sign`
+  reads from the environment for a Windows release build; copy it to `.env`
+  (git-ignored) and never commit values.
 
 ## Based on
 
@@ -107,16 +110,5 @@ This app is based on Overwolf's
 (commit `8a27053`, MIT, Copyright Overwolf Ltd.; [LICENSE](LICENSE)). From
 it come the page structure (logger, ads tester, settings, packages), the
 ads tester's layouts and slot sizes, the log view (search, expandable JSON
-values) and the dark theme. It differs from upstream in these ways:
-
-- It is a Tauri app, not an Electron app: no main process, no preload, no
-  IPC channels. The page calls `tauri-plugin-overwolf-api` directly, and the
-  plugin's permissions in the capability decide what it may call.
-- The GEP, overlay, recorder and utility packages are shown as not
-  available instead of being driven, since Tauri has no package runtime.
-- The updater uses the plugin's updater (Overwolf's feed, Windows) instead
-  of `electron-updater`.
-- Webpack, Electron Builder and their configuration are replaced by Vite and
-  the Tauri CLI; the TypeScript is strict and the ESLint rules are typed.
-- New: the CMP & Settings page's identity card and switches, the updater
-  page, unit tests for every module, and the invisible lab smoke run.
+values) and the dark theme. What changed against upstream is listed in
+[CHANGES-FROM-UPSTREAM.md](CHANGES-FROM-UPSTREAM.md).
