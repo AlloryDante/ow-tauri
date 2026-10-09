@@ -17,9 +17,23 @@
 //! `TAURI_CONFIG`, each an RFC 7396 merge patch; DESIGN §3.1), validates
 //! `plugins.overwolf` with the release-only rules, and resolves the app
 //! identity the plugin resolves at run time, so the uid the installer
-//! records always equals the runtime uid. The installer hooks, the
-//! capability lint and the signed-build resource are added in a later
-//! release of this step.
+//! records always equals the runtime uid. Then:
+//!
+//! - it lints the capabilities (a remote URL covering Overwolf pages fails
+//!   the build; a `windows` selector while `ads` is on warns; SEC-B1);
+//! - for a Windows target it writes `gen/overwolf/overwolf-hooks.nsh`
+//!   (macros `OW_TAURI_HOOK_POSTINSTALL` and `OW_TAURI_HOOK_POSTUNINSTALL`:
+//!   the install record `Software\OverwolfElectron\<uid>`, and on a real
+//!   uninstall, never for `/UPDATE`, the uninstall Counter and the state
+//!   folder removal; CONTRACT I.6) and `gen/overwolf/installer-hooks.nsh`
+//!   (the `NSIS_HOOK_*` macros from those), for
+//!   `bundle.windows.nsis.installerHooks`. With
+//!   `bundle.windows.nsis.installMode` `perMachine` or `both`, the record
+//!   goes under `HKLM` for an all-users install, as Overwolf's builder does;
+//! - with `signing.enabled`, a Windows release build links the
+//!   `OWEINTEGRITY/OWE` resource after checking the `ow-tauri sign` output
+//!   against the merged uid, and fails without that output when
+//!   `signing.requireSigning` (the default).
 
 use std::path::{Path, PathBuf};
 
@@ -28,6 +42,10 @@ use tauri_utils::platform::Target;
 
 use crate::app_identity::AppIdentity;
 use crate::config::{Config, ConfigError, Validation};
+
+mod lint;
+mod nsis;
+mod owe;
 
 /// Why [`run`] failed.
 #[derive(Debug, thiserror::Error)]
@@ -54,6 +72,12 @@ pub enum BuildError {
     /// Cargo package name.
     #[error("tauri-plugin-overwolf: set plugins.overwolf.name or productName in tauri.conf.json")]
     NoName,
+    /// A capability lets Overwolf ad pages call the app (SEC-B1).
+    #[error("tauri-plugin-overwolf: {0}")]
+    Capability(String),
+    /// The signed build cannot be completed.
+    #[error("tauri-plugin-overwolf: signing: {0}")]
+    Signing(String),
 }
 
 /// The identity a build resolves (DESIGN §3.1).
@@ -221,13 +245,121 @@ fn env(key: &'static str) -> Result<String, BuildError> {
 /// feature (`DEP_TAURI_PLUGIN_OVERWOLF_UPDATER`, emitted by this crate's
 /// own build script).
 const UPDATER_METADATA: &str = "DEP_TAURI_PLUGIN_OVERWOLF_UPDATER";
+/// As [`UPDATER_METADATA`], for the `ads` feature.
+const ADS_METADATA: &str = "DEP_TAURI_PLUGIN_OVERWOLF_ADS";
+
+/// Whether the build is optimised: `PROFILE=release`, or an `OPT_LEVEL`
+/// other than `0` (a custom release profile).
+fn is_release(profile: Option<&str>, opt_level: Option<&str>) -> bool {
+    profile == Some("release") || opt_level.is_some_and(|o| o != "0")
+}
+
+/// What one build step decided, for [`run`] to print (and the tests to
+/// read).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Plan {
+    /// `cargo:rerun-if-changed` paths.
+    rerun: Vec<PathBuf>,
+    /// `cargo:warning` lines.
+    warnings: Vec<String>,
+    /// The resource script to link.
+    owe_rc: Option<PathBuf>,
+}
+
+/// The inputs of one build step.
+struct Inputs<'a> {
+    dir: &'a Path,
+    target: Target,
+    tauri_config: Option<&'a str>,
+    release: bool,
+    updater: bool,
+    ads: bool,
+    cargo_name: Option<&'a str>,
+    cargo_version: Option<&'a str>,
+    out_dir: Option<&'a Path>,
+}
+
+/// The build step without the environment: reads, validates, lints and
+/// writes; returns what to print.
+fn plan(inputs: &Inputs<'_>) -> Result<Plan, BuildError> {
+    let mut out = Plan::default();
+    let merged = merged_config(inputs.dir, inputs.target, inputs.tauri_config)?;
+    out.rerun.extend(merged.files.iter().cloned());
+    let mut config = plugin_config(&merged.config)?;
+    out.warnings.extend(config.normalize());
+    config.validate(Validation::build_step(inputs.release, inputs.updater))?;
+    let identity = resolve_identity(
+        &merged.config,
+        &config,
+        inputs.dir,
+        inputs.cargo_name,
+        inputs.cargo_version,
+    )?;
+    if config.author.as_deref().is_none_or(str::is_empty) {
+        out.warnings.push(
+            "plugins.overwolf.author is not set; the uid uses \"unknown\" (debug builds only, a release build fails)"
+                .into(),
+        );
+    }
+    out.rerun.push(inputs.dir.join("capabilities"));
+    let mut errors = Vec::new();
+    for finding in lint::lint_capabilities(inputs.dir, &merged.config, inputs.ads) {
+        if finding.error {
+            errors.push(finding.message);
+        } else {
+            out.warnings.push(finding.message);
+        }
+    }
+    if !errors.is_empty() {
+        return Err(BuildError::Capability(errors.join("; ")));
+    }
+    let windows = inputs.target == Target::Windows;
+    if windows {
+        let written = nsis::write_hooks(inputs.dir, &identity, &config.analytics.host_label)?;
+        out.rerun.extend(written);
+        out.warnings
+            .extend(nsis::hooks_config_warning(inputs.dir, &merged.config));
+    }
+    if config.signing.enabled {
+        // Only watched when signing is on: cargo re-runs a build script on
+        // every build while a watched file is missing.
+        let signed = inputs.dir.join(owe::SIGNED_DIR);
+        out.rerun.push(signed.join(owe::SIGN_RESULT_FILE));
+        if windows && inputs.release {
+            match owe::check_signed(&signed, &identity)? {
+                owe::Signed::Ready { warnings } => {
+                    out.warnings.extend(warnings);
+                    let out_dir = inputs.out_dir.ok_or(BuildError::Env("OUT_DIR"))?;
+                    out.owe_rc = Some(owe::owe_resource(&identity.uid, out_dir)?);
+                    if !owe::ships_integrity_dll(&merged.config) {
+                        out.warnings.push(
+                            "bundle.resources does not ship ../signed/integrity.dll; add it next to the app executable (CONTRACT G.4)"
+                                .into(),
+                        );
+                    }
+                }
+                owe::Signed::Missing(why) if config.signing.require_signing => {
+                    return Err(BuildError::Signing(why));
+                }
+                owe::Signed::Missing(why) => {
+                    out.warnings.push(format!(
+                        "{why} (signing.requireSigning is off: building unsigned)"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(out)
+}
 
 /// The build step (DESIGN §4.15): reads the merged configuration of the
 /// app's Tauri folder (`CARGO_MANIFEST_DIR`) for the build's target,
 /// validates `plugins.overwolf` (with the release-only rules in a release
-/// build) and resolves the app identity. Prints `cargo:rerun-if-changed` for
-/// every configuration file read and `cargo:rerun-if-env-changed` for
-/// `TAURI_CONFIG`, and one `cargo:warning` per defaulted input.
+/// build), resolves the app identity, lints the capabilities, writes the
+/// Windows installer hooks and, for a signed Windows release, links the
+/// `OWEINTEGRITY/OWE` resource. Prints `cargo:rerun-if-changed` for every
+/// file read or written, `cargo:rerun-if-env-changed` for `TAURI_CONFIG`,
+/// and one `cargo:warning` per finding.
 ///
 /// ```no_run
 /// // src-tauri/build.rs
@@ -237,7 +369,9 @@ const UPDATER_METADATA: &str = "DEP_TAURI_PLUGIN_OVERWOLF_UPDATER";
 /// # Errors
 ///
 /// A missing build-script variable, an unreadable configuration file, an
-/// invalid `TAURI_CONFIG`, an invalid `plugins.overwolf`, or no app name.
+/// invalid `TAURI_CONFIG`, an invalid `plugins.overwolf`, no app name, a
+/// capability that covers Overwolf pages, or a signed Windows release
+/// without matching `ow-tauri sign` output.
 #[expect(
     clippy::print_stdout,
     reason = "cargo reads a build script's instructions from stdout"
@@ -247,37 +381,31 @@ pub fn run() -> Result<(), BuildError> {
     let target = Target::from_triple(&env("TARGET")?);
     println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
     let tauri_config = std::env::var("TAURI_CONFIG").ok();
-    let merged = merged_config(&dir, target, tauri_config.as_deref())?;
-    for file in &merged.files {
-        println!("cargo:rerun-if-changed={}", file.display());
-    }
-    let mut config = plugin_config(&merged.config)?;
-    for warning in config.normalize() {
-        println!("cargo:warning={warning}");
-    }
-    let release = std::env::var("PROFILE").is_ok_and(|p| p == "release");
-    let updater = std::env::var_os(UPDATER_METADATA).is_some();
-    config.validate(Validation::build_step(release, updater))?;
     let cargo_name = std::env::var("CARGO_PKG_NAME").ok();
     let cargo_version = std::env::var("CARGO_PKG_VERSION").ok();
-    // The installer hooks (W3) are written from this identity.
-    let _identity = resolve_identity(
-        &merged.config,
-        &config,
-        &dir,
-        cargo_name.as_deref(),
-        cargo_version.as_deref(),
-    )?;
-    if config.author.as_deref().is_none_or(str::is_empty) {
-        println!(
-            "cargo:warning=plugins.overwolf.author is not set; the uid uses \"unknown\" (debug builds only, a release build fails)"
-        );
+    let out_dir = std::env::var_os("OUT_DIR").map(PathBuf::from);
+    let plan = plan(&Inputs {
+        dir: &dir,
+        target,
+        tauri_config: tauri_config.as_deref(),
+        release: is_release(
+            std::env::var("PROFILE").ok().as_deref(),
+            std::env::var("OPT_LEVEL").ok().as_deref(),
+        ),
+        updater: std::env::var_os(UPDATER_METADATA).is_some(),
+        ads: std::env::var_os(ADS_METADATA).is_some(),
+        cargo_name: cargo_name.as_deref(),
+        cargo_version: cargo_version.as_deref(),
+        out_dir: out_dir.as_deref(),
+    })?;
+    for path in &plan.rerun {
+        println!("cargo:rerun-if-changed={}", path.display());
     }
-    if config.signing.enabled {
-        // `ow-tauri sign` writes it next to the Tauri folder; only watched
-        // when signing is on (cargo re-runs a build script on every build
-        // while a watched file is missing).
-        println!("cargo:rerun-if-changed=../signed/sign-result.json");
+    for warning in &plan.warnings {
+        println!("cargo:warning={warning}");
+    }
+    if let Some(rc) = &plan.owe_rc {
+        owe::link(rc)?;
     }
     Ok(())
 }
@@ -349,6 +477,271 @@ mod tests {
             cases += 1;
         }
         assert!(cases >= 9, "every fixture ran ({cases})");
+    }
+
+    /// NSIS golden over every `fixtures/config-merge` case: the install
+    /// record, the uninstall Counter and the removed state folder all name
+    /// the merged-config uid (the uid the CLI merge resolves), and the
+    /// uninstall work sits under `$UpdateMode <> 1`, so `/UPDATE` skips it.
+    #[test]
+    fn nsis_goldens_use_the_merged_uid() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/config-merge");
+        if !root.is_dir() {
+            return;
+        }
+        let mut cases = 0;
+        for entry in std::fs::read_dir(&root).unwrap() {
+            let dir = entry.unwrap().path();
+            if !dir.join("case.json").is_file() {
+                continue;
+            }
+            let read = |name: &str| -> Value {
+                serde_json::from_str(&std::fs::read_to_string(dir.join(name)).unwrap()).unwrap()
+            };
+            let case = read("case.json");
+            let want = read("expected.json")["identity"].clone();
+            let merged = merged_config(
+                &dir,
+                target(case["target"].as_str().unwrap()),
+                case.get("tauriConfig").and_then(Value::as_str),
+            )
+            .unwrap();
+            let (cargo_name, cargo_version) =
+                cargo_package(&std::fs::read_to_string(dir.join("Cargo.toml")).unwrap());
+            let config = plugin_config(&merged.config).unwrap();
+            let id = resolve_identity(
+                &merged.config,
+                &config,
+                &dir,
+                cargo_name.as_deref(),
+                cargo_version.as_deref(),
+            )
+            .unwrap();
+            let uid = want["uid"].as_str().unwrap();
+            let nsh = nsis::overwolf_hooks(&id, &config.analytics.host_label);
+            let key = format!(r"Software\OverwolfElectron\{uid}");
+            let post = nsis::tests::macro_body(&nsh, "OW_TAURI_HOOK_POSTINSTALL");
+            assert_eq!(post.matches(&key).count(), 3, "{}", dir.display());
+            let version = want["version"].as_str().unwrap_or_default();
+            assert!(
+                post.contains(&format!(r#""version" "{version}""#)),
+                "{}",
+                dir.display()
+            );
+            let un = nsis::tests::macro_body(&nsh, "OW_TAURI_HOOK_POSTUNINSTALL");
+            let guarded = un.split_once("${If} $UpdateMode <> 1\n").map_or_else(
+                || panic!("no /UPDATE guard: {}", dir.display()),
+                |(_, rest)| &rest[..rest.rfind("${EndIf}").unwrap()],
+            );
+            assert!(guarded.contains(&format!("DeleteRegKey SHCTX \"{key}\"")));
+            assert!(guarded.contains(&format!(r#"RMDir /r "$APPDATA\ow-electron\{uid}""#)));
+            assert!(guarded.contains(&format!("%22app_id%22%3A%22{uid}%22")));
+            assert!(guarded.contains("Name=ow_tauri_app_uninstall"));
+            // Header comment, three record values, the key removal, the
+            // state folder and the Counter: no other uid.
+            assert_eq!(nsh.matches(uid).count(), 7, "{}", dir.display());
+            cases += 1;
+        }
+        assert!(cases >= 9, "every fixture ran ({cases})");
+    }
+
+    /// A copy of the `windows-overlay` fixture in a fresh temp folder.
+    fn project(name: &str) -> Option<PathBuf> {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/config-merge/windows-overlay");
+        if !src.is_dir() {
+            return None;
+        }
+        let dir = std::env::temp_dir()
+            .join(format!("ow-tauri-plan-{}-{name}", std::process::id()))
+            .join("src-tauri");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+        std::fs::create_dir_all(&dir).unwrap();
+        for file in ["Cargo.toml", "tauri.conf.json", "tauri.windows.conf.json"] {
+            std::fs::copy(src.join(file), dir.join(file)).unwrap();
+        }
+        Some(dir)
+    }
+
+    fn inputs<'a>(
+        dir: &'a Path,
+        target: Target,
+        tauri_config: Option<&'a str>,
+        release: bool,
+        out_dir: &'a Path,
+    ) -> Inputs<'a> {
+        Inputs {
+            dir,
+            target,
+            tauri_config,
+            release,
+            updater: false,
+            ads: true,
+            cargo_name: None,
+            cargo_version: None,
+            out_dir: Some(out_dir),
+        }
+    }
+
+    const WINDOWS_OVERLAY_UID: &str = "aejkligdodglhcjinbhdcnlohocenfkpdihjacdg";
+
+    #[test]
+    fn plan_writes_the_windows_hooks() {
+        let Some(dir) = project("hooks") else { return };
+        let out = dir.join("out");
+        let plan = plan(&inputs(&dir, Target::Windows, None, false, &out)).unwrap();
+        let gen_dir = dir.join(nsis::GEN_DIR);
+        let macros = gen_dir.join(nsis::OVERWOLF_HOOKS_FILE);
+        let wrapper = gen_dir.join(nsis::INSTALLER_HOOKS_FILE);
+        // rerun-if-changed on the outputs (a deleted or edited file is
+        // written again) and on the inputs.
+        for path in [
+            &macros,
+            &wrapper,
+            &dir.join("capabilities"),
+            &dir.join("tauri.conf.json"),
+        ] {
+            assert!(
+                plan.rerun.contains(path),
+                "{} in {:?}",
+                path.display(),
+                plan.rerun
+            );
+        }
+        assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+        assert_eq!(plan.owe_rc, None);
+        let nsh = std::fs::read_to_string(&macros).unwrap();
+        assert!(nsh.contains(WINDOWS_OVERLAY_UID));
+        assert_eq!(
+            std::fs::read_to_string(&wrapper).unwrap(),
+            nsis::INSTALLER_HOOKS
+        );
+        // Another target writes nothing.
+        std::fs::remove_dir_all(&gen_dir).unwrap();
+        let plan = super::plan(&inputs(&dir, Target::Linux, None, false, &out)).unwrap();
+        assert!(!gen_dir.exists());
+        assert!(!plan.rerun.contains(&macros));
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn plan_fails_on_a_capability_that_covers_overwolf() {
+        let Some(dir) = project("caps") else { return };
+        let out = dir.join("out");
+        std::fs::create_dir_all(dir.join("capabilities")).unwrap();
+        std::fs::write(
+            dir.join("capabilities/default.json"),
+            r#"{ "identifier": "main", "windows": ["*"], "permissions": ["overwolf:default"] }"#,
+        )
+        .unwrap();
+        let plan = plan(&inputs(&dir, Target::Windows, None, false, &out)).unwrap();
+        assert_eq!(plan.warnings.len(), 1, "{:?}", plan.warnings);
+        std::fs::write(
+            dir.join("capabilities/web.json"),
+            r#"{ "identifier": "web", "webviews": ["main"], "remote": { "urls": ["https://*.overwolf.com/*"] } }"#,
+        )
+        .unwrap();
+        let err = super::plan(&inputs(&dir, Target::Windows, None, false, &out)).unwrap_err();
+        assert!(matches!(err, BuildError::Capability(_)), "{err}");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn plan_links_the_owe_resource_for_a_signed_release() {
+        let Some(dir) = project("signed") else { return };
+        let out = dir.join("out");
+        let signed_config = r#"{ "plugins": { "overwolf": { "name": "Parity Harness", "signing": { "enabled": true } } } }"#;
+        let optional = r#"{ "plugins": { "overwolf": { "name": "Parity Harness", "signing": { "enabled": true, "requireSigning": false } } } }"#;
+        // No `ow-tauri sign` output: a failed build, or a warning.
+        let err = plan(&inputs(
+            &dir,
+            Target::Windows,
+            Some(signed_config),
+            true,
+            &out,
+        ))
+        .unwrap_err();
+        assert!(matches!(err, BuildError::Signing(_)), "{err}");
+        let soft = plan(&inputs(&dir, Target::Windows, Some(optional), true, &out)).unwrap();
+        assert!(
+            soft.warnings
+                .iter()
+                .any(|w| w.contains("building unsigned")),
+            "{:?}",
+            soft.warnings
+        );
+        assert_eq!(soft.owe_rc, None);
+        // A debug build and another target do not check.
+        assert!(
+            plan(&inputs(
+                &dir,
+                Target::Windows,
+                Some(signed_config),
+                false,
+                &out
+            ))
+            .is_ok()
+        );
+        assert!(
+            plan(&inputs(
+                &dir,
+                Target::MacOS,
+                Some(signed_config),
+                true,
+                &out
+            ))
+            .is_ok()
+        );
+
+        let signed = dir.join(owe::SIGNED_DIR);
+        std::fs::create_dir_all(&signed).unwrap();
+        let write_result = |uid: &str| {
+            std::fs::write(
+                signed.join(owe::SIGN_RESULT_FILE),
+                serde_json::json!({ "uid": uid, "version": "1.0.0" }).to_string(),
+            )
+            .unwrap();
+        };
+        write_result(WINDOWS_OVERLAY_UID);
+        let ready = plan(&inputs(
+            &dir,
+            Target::Windows,
+            Some(signed_config),
+            true,
+            &out,
+        ))
+        .unwrap();
+        assert!(ready.rerun.contains(&signed.join(owe::SIGN_RESULT_FILE)));
+        assert_eq!(ready.owe_rc, Some(out.join(owe::OWE_RC_FILE)));
+        assert!(
+            ready.warnings.iter().any(|w| w.contains("integrity.dll")),
+            "{:?}",
+            ready.warnings
+        );
+        assert_eq!(
+            std::fs::read_to_string(out.join(owe::OWE_JSON_FILE)).unwrap(),
+            format!(r#"{{"appUid":"{WINDOWS_OVERLAY_UID}"}}"#)
+        );
+        // The console signed another uid (PAR-B2): fail, naming the fix.
+        write_result("abcdefghijklmnopabcdefghijklmnop");
+        let err = plan(&inputs(
+            &dir,
+            Target::Windows,
+            Some(signed_config),
+            true,
+            &out,
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("--write-uid"), "{err}");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    #[test]
+    fn release_detection() {
+        assert!(is_release(Some("release"), Some("0")));
+        assert!(is_release(Some("debug"), Some("3")));
+        assert!(!is_release(Some("debug"), Some("0")));
+        assert!(!is_release(None, None));
     }
 
     #[test]

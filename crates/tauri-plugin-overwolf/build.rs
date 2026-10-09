@@ -21,11 +21,15 @@ const ALLOW_DEV_FEATURES_ENV: &str = "OW_TAURI_ALLOW_DEV_FEATURES_IN_RELEASE";
 const ADS_CFG: &str = "ow_tauri_ads";
 
 /// Tells an app's build step (`build::run`, through the links metadata
-/// `DEP_TAURI_PLUGIN_OVERWOLF_UPDATER`) that the app enabled `updater`, so
-/// it applies the updater's release rules.
-fn updater_metadata() {
+/// `DEP_TAURI_PLUGIN_OVERWOLF_UPDATER` and `DEP_TAURI_PLUGIN_OVERWOLF_ADS`)
+/// which features the app enabled: `updater` applies the updater's release
+/// rules, `ads` the capability lint's `windows` selector warning.
+fn feature_metadata() {
     if std::env::var_os("CARGO_FEATURE_UPDATER").is_some() {
         println!("cargo::metadata=updater=1");
+    }
+    if std::env::var_os("CARGO_FEATURE_ADS").is_some() {
+        println!("cargo::metadata=ads=1");
     }
 }
 
@@ -92,7 +96,7 @@ fn embed_test_manifest() -> Result<(), String> {
 fn main() -> Result<(), String> {
     release_guard();
     ads_cfg();
-    updater_metadata();
+    feature_metadata();
     embed_test_manifest()?;
     tauri_plugin::Builder::new(COMMANDS)
         .global_api_script_path("./api-iife.js")
