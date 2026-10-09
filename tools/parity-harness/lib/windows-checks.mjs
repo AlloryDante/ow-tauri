@@ -32,7 +32,13 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { colourClass, compositeAt } from './adformat-report.mjs';
+import {
+  colourClass,
+  compositeAt,
+  embedderLabels,
+  guestMuted,
+  webviewOwner,
+} from './adformat-report.mjs';
 
 function readJsonl(file) {
   if (!existsSync(file)) return [];
@@ -94,6 +100,7 @@ export function labLayersChecks(electronDir, tauriDir) {
   const e = probesOf(electronDir);
   const t = probesOf(tauriDir);
   const perf = performanceGuests(tauriDir);
+  const embedders = embedderLabels(readJsonl(join(tauriDir, 'wc-events.jsonl')));
   const checks = [];
 
   // L1-W: the ready reward slot is transparent over its red container,
@@ -117,7 +124,7 @@ export function labLayersChecks(electronDir, tauriDir) {
         tauriScreen: screen ? colourClass(screen.rgba) : null,
         guestBackgrounds: Object.fromEntries(
           Object.entries(t[label]?.native?.webviews ?? {})
-            .filter(([l]) => !/^bw-/.test(l))
+            .filter(([l]) => webviewOwner(l, embedders) === 'ad')
             .map(([l, f]) => [l, f.backgroundArgb ?? null]),
         ),
       },
@@ -151,7 +158,7 @@ export function labLayersChecks(electronDir, tauriDir) {
     probe: 'perf-loading',
     pass: loading
       ? region('perf-loading') === 'empty' &&
-        /^bw-/.test(nativeHit(loading, 'control') ?? '') &&
+        webviewOwner(nativeHit(loading, 'control'), embedders) === 'app' &&
         loading.native?.click?.sent === true &&
         clicks >= 1
       : null,
@@ -193,12 +200,8 @@ export function labLayersChecks(electronDir, tauriDir) {
 export function audioChecks(electronDir, tauriDir) {
   const e = probesOf(electronDir);
   const t = probesOf(tauriDir);
-  const tauriMuted = (p) => {
-    const states = Object.entries(p?.native?.webviews ?? {})
-      .filter(([label]) => !/^bw-/.test(label))
-      .map(([, f]) => f.muted);
-    return states.length && states.every((m) => typeof m === 'boolean') ? states.sort() : null;
-  };
+  const embedders = embedderLabels(readJsonl(join(tauriDir, 'wc-events.jsonl')));
+  const tauriMuted = (p) => (p ? guestMuted({ ...p, host: 'tauri' }, embedders) : null);
   return ['mute-initial', 'mute-after-unmute', 'mute-after-mute'].map((label) => {
     const want = Array.isArray(e[label]?.guestMuted) ? [...e[label].guestMuted].sort() : null;
     const got = tauriMuted(t[label]);
@@ -212,20 +215,30 @@ export function audioChecks(electronDir, tauriDir) {
   });
 }
 
+/** The label of the Tauri harness app's ad window (`driver.rs`). */
+export const APP_WINDOW_LABEL = 'main';
+
 /**
- * The app window's `did-finish-load` record of a run: the harness page's
- * `index.html` from the app's own origin (`file:` on ow-electron, the Tauri
- * asset origin on ow-tauri). ow-electron's own internal windows also load an
- * `index.html` (`owepm://index.html/`, a 32 x 31 window, after the app's),
- * which is not the app window.
+ * The app window's `did-finish-load` record of a run. ow-tauri's records
+ * name their window: the app window is the one labelled
+ * {@link APP_WINDOW_LABEL}. ow-electron's records have no label: the app
+ * window is the one that loaded the harness page's `index.html` from the
+ * app's own origin (`file:`); ow-electron's own internal windows also load
+ * an `index.html` (`owepm://index.html/`, a 32 x 31 window, after the
+ * app's), which is not the app window.
+ * @param {string} runDir
  */
-function appWindowLoaded(runDir) {
+export function appWindowLoaded(runDir) {
   const loads = readJsonl(join(runDir, 'windows.jsonl')).filter(
-    (r) =>
-      r.kind === 'did-finish-load' &&
-      /^(file|tauri|https?):\/\/[^?#]*\/index\.html(?:[?#]|$)/.test(String(r.url ?? '')),
+    (r) => r.kind === 'did-finish-load',
   );
-  return loads.length ? loads[loads.length - 1] : null;
+  const labelled = loads.filter((r) => typeof r.label === 'string');
+  const app = labelled.length
+    ? labelled.filter((r) => r.label === APP_WINDOW_LABEL)
+    : loads.filter((r) =>
+        /^(file|tauri|https?):\/\/[^?#]*\/index\.html(?:[?#]|$)/.test(String(r.url ?? '')),
+      );
+  return app.length ? app[app.length - 1] : null;
 }
 
 const sameRect = (a, b) =>

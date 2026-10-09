@@ -14,10 +14,17 @@ import {
   shard,
   stateDirs,
 } from './ci/windows-lab.mjs';
-import { adformatFacts, compositeAt, guestMuted } from './lib/adformat-report.mjs';
+import {
+  adformatFacts,
+  compositeAt,
+  embedderLabels,
+  guestMuted,
+  webviewOwner,
+} from './lib/adformat-report.mjs';
 import { isTransientFsError, snapshotDir } from './lib/fs-snapshot.mjs';
 import { labRequests, windowsDebugger } from './lib/tauri-host.mjs';
 import {
+  appWindowLoaded,
   audioChecks,
   geometryChecks,
   labLayersChecks,
@@ -467,4 +474,120 @@ test('a state folder WebView2 still holds is removed after ending WebView2', () 
       kill: () => assert.fail('no kill'),
     }),
   );
+});
+
+test("the app's webviews are the embedders the plugin's trace names, guests are owad-*", () => {
+  const wc = [
+    { kind: 'created', label: 'owad-1', type: 'owadview', embedder: 'main' },
+    { kind: 'created', label: 'ow-cmp', type: 'cmp' },
+    { kind: 'armed', label: 'owad-1' },
+  ];
+  const embedders = embedderLabels(wc);
+  assert.deepEqual([...embedders], ['main']);
+  assert.equal(webviewOwner('main', embedders), 'app');
+  assert.equal(webviewOwner('owad-1', embedders), 'ad');
+  assert.equal(webviewOwner(null, embedders), null);
+  // A label the trace never names as an embedder is not taken for the app.
+  assert.equal(webviewOwner('settings', embedders), 'ad');
+  // Captures of the facade era keep their reading.
+  assert.equal(webviewOwner('bw-1'), 'app');
+  assert.equal(webviewOwner('owad-bw-1-1'), 'ad');
+  // Mute states skip the embedders, whatever their label.
+  const probe = {
+    host: 'tauri',
+    native: { webviews: { main: { muted: false }, 'owad-1': { muted: true } } },
+  };
+  assert.deepEqual(guestMuted(probe, embedders), [true]);
+  assert.deepEqual(guestMuted(probe), [false, true]);
+});
+
+test('a Tauri-native hit probe names the app and the ad by the trace labels', () => {
+  const dir = run('facts-native', {
+    'wc-events.jsonl': [{ kind: 'created', label: 'owad-2', type: 'owadview', embedder: 'main' }],
+    'events.jsonl': [
+      {
+        ...tProbe('perf-loading', {}),
+        dom: {
+          points: [
+            { name: 'control', x: 1, y: 1, target: { kind: 'app' } },
+            { name: 'reward-slot', x: 2, y: 2, target: { kind: 'ad' } },
+          ],
+        },
+        native: {
+          webviews: { main: { muted: false }, 'owad-2': { muted: true } },
+          hits: [
+            { name: 'control', target: { label: 'main' } },
+            { name: 'reward-slot', target: { label: 'owad-2' } },
+          ],
+        },
+      },
+    ],
+  });
+  const probe = adformatFacts(dir).probes['perf-loading'];
+  assert.equal(probe.points.control.native, 'app');
+  assert.equal(probe.points['reward-slot'].native, 'ad');
+  assert.deepEqual(probe.guestMuted, [true]);
+  // L3-W reads the same owner: a hit on `main` reaches the app.
+  const t = run('t-l3-native', {
+    'wc-events.jsonl': [{ kind: 'created', label: 'owad-2', type: 'owadview', embedder: 'main' }],
+    'events.jsonl': [
+      {
+        ...tProbe('perf-loading', {}),
+        native: {
+          webviews: { main: {}, 'owad-2': { region: { kind: 'empty' } } },
+          order: [{ label: 'main' }, { label: 'owad-2' }],
+          hits: [{ name: 'control', target: { label: 'main' } }],
+          click: { sent: true },
+        },
+      },
+    ],
+    'page-events.jsonl': [{ kind: 'app-click' }],
+  });
+  const e = run('e-l3-native', { 'events.jsonl': [] });
+  const loading = labLayersChecks(e, t).find((c) => c.id === 'L3-W' && c.probe === 'perf-loading');
+  assert.equal(loading.detail.hit, 'main');
+});
+
+test('the Tauri app window is found by its label, an ow-electron one by its page', () => {
+  const rect = (x, y, width, height) => ({ x, y, width, height });
+  const t = run('t-app-window', {
+    'windows.jsonl': [
+      {
+        kind: 'did-finish-load',
+        label: 'x-1',
+        url: 'tauri://localhost/index.html',
+        bounds: rect(0, 0, 400, 300),
+      },
+      {
+        kind: 'did-finish-load',
+        label: 'main',
+        url: 'tauri://localhost/index.html?layouts=none',
+        bounds: rect(0, 0, 1000, 720),
+      },
+      {
+        kind: 'did-finish-load',
+        label: 'x-2',
+        url: 'tauri://localhost/settings.html',
+        bounds: rect(0, 0, 400, 300),
+      },
+    ],
+  });
+  assert.equal(appWindowLoaded(t).label, 'main');
+  const none = run('t-app-window-none', {
+    'windows.jsonl': [
+      { kind: 'did-finish-load', label: 'x-1', url: 'tauri://localhost/index.html' },
+    ],
+  });
+  assert.equal(appWindowLoaded(none), null);
+  const e = run('e-app-window', {
+    'windows.jsonl': [
+      {
+        kind: 'did-finish-load',
+        url: 'file:///x/index.html?layouts=none',
+        bounds: rect(0, 0, 1000, 720),
+      },
+      { kind: 'did-finish-load', url: 'owepm://index.html/', bounds: rect(944, 500, 32, 31) },
+    ],
+  });
+  assert.deepEqual(appWindowLoaded(e).bounds, rect(0, 0, 1000, 720));
 });

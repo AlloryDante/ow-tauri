@@ -144,19 +144,51 @@ export function compositeAt(probe) {
   return out;
 }
 
+/** ow-tauri's ad guest webview labels (the plugin's `owad-` prefix). */
+export const GUEST_LABEL = /^owad-/;
+
+/**
+ * The labels of the app's webviews that embed ad guests, as the plugin's
+ * lab trace names them (`wc-events.jsonl` `created` records' `embedder`).
+ * @param {Array<{embedder?: string}>} wcEvents
+ * @returns {Set<string>}
+ */
+export function embedderLabels(wcEvents) {
+  const out = new Set();
+  for (const e of wcEvents) if (typeof e.embedder === 'string' && e.embedder) out.add(e.embedder);
+  return out;
+}
+
+/**
+ * Whose webview a native hit names: `app` for an embedder of the trace,
+ * `ad` for an ad guest, null for none. A label that is neither keeps the
+ * reading of captures from before the Tauri-native harness app, whose
+ * windows' webviews were `bw-<id>`.
+ * @param {string | null | undefined} label
+ * @param {Set<string>} [embedders]
+ * @returns {'app' | 'ad' | null}
+ */
+export function webviewOwner(label, embedders = new Set()) {
+  if (!label) return null;
+  if (embedders.has(label)) return 'app';
+  if (GUEST_LABEL.test(label)) return 'ad';
+  return /^bw-/.test(label) ? 'app' : 'ad';
+}
+
 /**
  * L5: the ad guests' mute states at a hit probe, sorted (ow-electron:
  * `webContents.isAudioMuted()` of each guest; ow-tauri on Windows: each
  * guest webview's `ICoreWebView2_8::IsMuted`), or null when the probe has
  * no such reading (ow-tauri on macOS).
  * @param {{host?: string, guestMuted?: boolean[], native?: {webviews?: Record<string, {muted?: boolean | null}>}}} probe
+ * @param {Set<string>} [embedders] the run's embedder labels ({@link embedderLabels})
  * @returns {boolean[] | null}
  */
-export function guestMuted(probe) {
+export function guestMuted(probe, embedders = new Set()) {
   if (probe.host !== 'tauri')
     return Array.isArray(probe.guestMuted) ? [...probe.guestMuted].sort() : null;
   const states = Object.entries(probe.native?.webviews ?? {})
-    .filter(([label]) => !/^bw-/.test(label))
+    .filter(([label]) => webviewOwner(label, embedders) === 'ad')
     .map(([, facts]) => facts?.muted);
   if (!states.length || states.some((m) => typeof m !== 'boolean')) return null;
   return states.sort();
@@ -308,9 +340,10 @@ export function adformatFacts(runDir) {
 
   // Lab hit probes.
   const probes = {};
+  const embedders = embedderLabels(wcEvents);
   for (const e of events) {
     if (e.kind !== 'hit-probe') continue;
-    const embedder = (label) => (label && /^bw-/.test(label) ? 'app' : label ? 'ad' : null);
+    const embedder = (label) => webviewOwner(label, embedders);
     const composite = compositeAt(e);
     probes[e.label] = {
       t: e.t,
@@ -333,7 +366,7 @@ export function adformatFacts(runDir) {
       ),
       performance: e.dom?.performance ?? [],
       click: e.native?.click ?? e.click ?? null,
-      guestMuted: guestMuted(e),
+      guestMuted: guestMuted(e, embedders),
     };
   }
   // When the first performance modal loaded, on the clock of the probes.
