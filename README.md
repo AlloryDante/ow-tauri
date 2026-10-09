@@ -1,8 +1,8 @@
 # ow-tauri
 
 Overwolf ads, consent and app analytics for Tauri 2 apps. ow-tauri is for
-developers who build an Overwolf app on Tauri, or who move an ow-electron
-app to Tauri. It is also the project the Overwolf team can review.
+developers who build an Overwolf app on Tauri or move an ow-electron app to
+Tauri, and for the Overwolf team reviewing how it works.
 
 `tauri-plugin-overwolf` gives a Tauri app what ow-electron gives an Electron
 app: the `<owadview>` ad element, Overwolf's consent flow, email hashes, the
@@ -38,6 +38,7 @@ Edge cases and platform gaps are listed in
 | If you want to | Go to |
 |---|---|
 | see it running on your machine | [Try it](#try-it) below |
+| present the demo to someone | [Showing it to someone](examples/ad-showcase/README.md#showing-it-to-someone) in the ad-showcase README |
 | evaluate it for Overwolf | [For the Overwolf team](#for-the-overwolf-team) below |
 | add ads to a Tauri app | [Quick start](#quick-start) below, then [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) |
 | move an ow-electron app | [docs/MIGRATION.md](docs/MIGRATION.md) |
@@ -53,9 +54,9 @@ This runs the [ad-showcase](examples/ad-showcase) example on Tauri with
 Overwolf test ads only. Ads show on Windows and macOS; on Linux the app runs
 but ads report `unsupported`.
 
-You need Node 22.12 or newer and the
+You need Node.js 22.12 or newer, Rust 1.90 or newer and the rest of the
 [Tauri 2 prerequisites](https://tauri.app/start/prerequisites/) for your OS
-(Rust, and WebView2 on Windows). From a fresh clone:
+(WebView2 on Windows). Then run:
 
 ```sh
 git clone https://github.com/AlloryDante/ow-tauri
@@ -72,8 +73,8 @@ tracked identity is a placeholder, so a clean clone runs in test mode with
 the placeholder's uid.
 
 The [example's README](examples/ad-showcase/README.md) covers live mode,
-hot reload, the ow-electron twin for side-by-side runs and using your own
-app identity.
+hot reload, the ow-electron twin for side-by-side runs, using your own app
+identity and how to present the demo.
 
 ## See it working
 
@@ -192,8 +193,8 @@ The [index of open questions](docs/OPEN-QUESTIONS.md#index) has every
 question with its status.
 
 Release status: nothing is published to crates.io or npm, and there are no
-tags or GitHub releases. The first release is planned as 1.0.0-rc.1
-([docs/RELEASING.md](docs/RELEASING.md)).
+tags or GitHub releases. [docs/RELEASING.md](docs/RELEASING.md) describes
+how a release will be made.
 
 ## Packages
 
@@ -204,8 +205,7 @@ tags or GitHub releases. The first release is planned as 1.0.0-rc.1
 | `tauri-plugin-overwolf-cli` | npm | the `ow-tauri` command: `init`, `migrate`, `doctor`, `sign`, `sign-exe` |
 | `tauri-plugin-overwolf-unstable` | crates.io | a helper the plugin uses to turn on Tauri's `unstable` feature; you never add it yourself |
 
-Until the first release, the crates come from this Git repository and you
-pack the npm packages from a clone of it.
+[Quick start](#quick-start) shows how to install them from this repository.
 
 ## Platforms
 
@@ -215,9 +215,10 @@ pack the npm packages from a clone of it.
 | macOS 14 or newer, Apple Silicon | supported |
 | Windows arm64, Intel Macs, macOS before 14 | best effort |
 | Linux | builds and runs; ads report `unsupported` |
+| Android, iOS | builds; every command answers `unsupported` |
 
-The `tauri` crate must be 2.12.1 or newer, below 3. See
-[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+You need Rust 1.90 or newer and the `tauri` crate 2.12.1 or newer, below 3.
+See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
 ## Quick start
 
@@ -310,9 +311,11 @@ Two rules apply from the start:
 
 ## Coming from ow-electron
 
-Your `<owadview>` HTML stays. `ow-tauri migrate` writes the
-`plugins.overwolf` block that keeps your app's uid, so Overwolf and your
-users see the same app, with the same consent and first-launch state. Your
+Your `<owadview>` HTML stays. `ow-tauri migrate` reads your ow-electron
+`package.json` and prints the `plugins.overwolf` block that keeps your app's
+uid; with `--write` it merges the block into your `tauri.conf.json`. With the
+same uid, Overwolf and your users see the same app, with the same consent
+answer and first-launch state. Your
 main-process code moves to Rust and Tauri plugins. See
 [docs/MIGRATION.md](docs/MIGRATION.md).
 

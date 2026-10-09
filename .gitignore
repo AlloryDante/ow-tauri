@@ -37,8 +37,12 @@ Thumbs.db
 /examples/ad-showcase/src-tauri/gen/
 /examples/ad-showcase/src-tauri/windows/hooks.nsh
 
-# Editors and local tools
-# (.vscode/ is not listed: the quickstart examples track .vscode/extensions.json)
+# npm pack output (the install steps pack the npm packages in a clone)
+*.tgz
+
+# Editors and local tools (the quickstart examples track .vscode/extensions.json)
+.vscode/*
+!.vscode/extensions.json
 .claude/
 .idea/
 *.swp

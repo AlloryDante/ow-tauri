@@ -1,7 +1,8 @@
 # Documentation
 
-Every page in `docs/`, grouped by what you are doing. Each line says the
-question the page answers. If you are new, start with
+Every page in `docs/`, plus the CLI reference and the example READMEs,
+grouped by what you are doing. Each line says the question the page
+answers. If you are new, start with
 [GETTING-STARTED.md](GETTING-STARTED.md); if you come from ow-electron,
 start with [MIGRATION.md](MIGRATION.md).
 
@@ -27,6 +28,16 @@ start with [MIGRATION.md](MIGRATION.md).
 | [api/rust.md](api/rust.md) | How do I register and configure the plugin in Rust, and what does the crate export? |
 | [api/permissions.md](api/permissions.md) | Which permission set do I grant to which webview? |
 | [api/testing.md](api/testing.md) | How do I unit-test app code that uses the API without a running app? |
+| [packages/cli/README.md](../packages/cli/README.md) | Which commands and options does `ow-tauri` have? |
+
+### Examples
+
+| Example | Answers |
+|---|---|
+| [quickstart-vanilla](../examples/quickstart-vanilla/README.md) | What does the GETTING-STARTED app look like when it is done? |
+| [quickstart-react](../examples/quickstart-react/README.md) | What does the same app look like in React 19? |
+| [ad-showcase](../examples/ad-showcase/README.md) | How does every ad format behave, and how do I present the demo? |
+| [packages-sample](../examples/packages-sample/README.md) | What does Overwolf's ow-electron sample look like on Tauri? |
 
 ## Ship it
 
