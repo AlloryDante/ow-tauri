@@ -47,7 +47,7 @@ ow-tauri is Overwolf's ow-electron SDK adapted to Tauri:
   sends ([CONTRACT](../CONTRACT.md)), except the host label (`tauri`) and
   the platform gaps the contract names (on macOS, ad subresource requests
   have no forced `Origin` and no `x-ow-*` headers, CONTRACT D.8.3). The
-  parity harness proves the rest.
+  parity harness is the check for the rest.
 
 ## Consequences
 
