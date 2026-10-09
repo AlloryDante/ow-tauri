@@ -6,10 +6,10 @@ pages of a Tauri 2 app that uses the plugin: Overwolf ads (`<owadview>`),
 consent, email hashes, the analytics switches, identity and the Windows
 updater.
 
-It is a thin layer over Tauri's IPC. The Rust plugin produces everything
-Overwolf receives; this package calls its commands and runs the `<owadview>`
-element in your page. It is ESM only, has no Node dependencies, and runs in
-your app's webviews.
+The Rust plugin produces everything Overwolf receives. This package calls
+its commands over Tauri's IPC and runs the `<owadview>` element in your page.
+It is ESM only, runs in your app's webviews, and depends only on
+`@tauri-apps/api`.
 
 This project is not affiliated with or endorsed by Overwolf.
 
@@ -41,7 +41,7 @@ that names the window would also cover the ad. The opt-in sets are
 
 | Import | What it is |
 |---|---|
-| `tauri-plugin-overwolf-api` | `getInfo()`, consent, email hashes, analytics switches, window name, errors |
+| `tauri-plugin-overwolf-api` | `getInfo()`, `getMachineIds()`, consent, email hashes, analytics switches, `setWindowName()`, `OverwolfError` |
 | `tauri-plugin-overwolf-api/adview` | the `<owadview>` element (a side-effect import) |
 | `tauri-plugin-overwolf-api/updater` | `check()` and `Update`, in the shape of `@tauri-apps/plugin-updater` |
 | `tauri-plugin-overwolf-api/jsx` | types only: `<owadview>` as a React JSX element |
@@ -49,7 +49,8 @@ that names the window would also cover the ad. The opt-in sets are
 
 ## Show an ad
 
-Import the element once, then put it in a sized container:
+Import the element once in each page that shows ads, then put it in a sized
+container:
 
 ```ts
 import 'tauri-plugin-overwolf-api/adview';
@@ -62,13 +63,18 @@ import 'tauri-plugin-overwolf-api/adview';
 ```
 
 Each element gets a native ad webview over its box while it is in the
-document. Ad events (`display_ad_loaded`, `impression`, ...) are dispatched
-on the element as plain DOM events, as in ow-electron. Size the container,
-not the element. The ad always paints above your page.
+document. Size the container, not the element. The ad always paints above
+your page, so a menu that must cover an ad has to hide the element.
+
+Ad events (`display_ad_loaded`, `impression`, ...) are plain DOM events on
+the element. The element, its attributes, members and events are the same as
+in ow-electron, so you can keep an ow-electron app's ad HTML and add the
+import
+([migration guide](https://github.com/AlloryDante/ow-tauri/blob/main/docs/MIGRATION.md#4-keep-the-ad-html)).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/AlloryDante/ow-tauri/main/docs/images/showcase/sizes-dark.webp">
-  <img alt="The Sizes page of the ad showcase example: 160x600, 336x280, 400x300 video and 300x250 test ads, each in its own owadview element." src="https://raw.githubusercontent.com/AlloryDante/ow-tauri/main/docs/images/showcase/sizes-light.webp">
+  <img alt="The Sizes page of the ad showcase example: Overwolf test ads in 160x600, 400x600, 400x300 and 300x250 containers, each an owadview element with its load state above it." src="https://raw.githubusercontent.com/AlloryDante/ow-tauri/main/docs/images/showcase/sizes-light.webp">
 </picture>
 
 ## Call the plugin
@@ -85,6 +91,11 @@ A failed call rejects with an `OverwolfError` whose `code` is one of
 `unsupported`, `invalid-argument`, `not-found`, `forbidden` (including a
 command the webview's capability does not allow), `io`, `network`,
 `verification`, `backend`, `config` or `tauri`.
+
+The `app.overwolf` calls of an ow-electron main process map to these
+functions as the
+[migration guide](https://github.com/AlloryDante/ow-tauri/blob/main/docs/MIGRATION.md#6-move-the-appoverwolf-calls)
+lists.
 
 ## Check for updates
 
@@ -117,6 +128,7 @@ overwolf.restore();
 - [`<owadview>` reference](https://github.com/AlloryDante/ow-tauri/blob/main/docs/api/owadview.md)
 - [Ad formats](https://github.com/AlloryDante/ow-tauri/blob/main/docs/AD-FORMATS.md)
 - [Test helpers](https://github.com/AlloryDante/ow-tauri/blob/main/docs/api/testing.md)
+- [Migrating from ow-electron](https://github.com/AlloryDante/ow-tauri/blob/main/docs/MIGRATION.md)
 - [Troubleshooting](https://github.com/AlloryDante/ow-tauri/blob/main/docs/TROUBLESHOOTING.md)
 
 ## License

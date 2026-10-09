@@ -5,18 +5,19 @@ shows Overwolf ads.
 
 The plugin gives a Tauri app what ow-electron gives an Electron app: the
 `<owadview>` ad element, Overwolf's consent flow, email hashes, the anonymous
-app analytics, the app uid and machine ids, and Overwolf's update feed on
-Windows. Overwolf receives the same data it receives from an ow-electron app,
-with two differences in normal use: the analytics host label says `tauri`
-where ow-electron says `electron`, and on macOS ad subresource requests do
-not carry ow-electron's `Origin` and `x-ow-*` headers
+app analytics, the app uid and machine ids, and an update client for
+Overwolf's update feed on Windows. Overwolf receives the same data it
+receives from an ow-electron app, with two differences in normal use: the
+analytics host label says `tauri` where ow-electron says `electron`, and on
+macOS ad subresource requests do not carry ow-electron's `Origin` and
+`x-ow-*` headers
 ([CONTRACT D.8.3](https://github.com/AlloryDante/ow-tauri/blob/main/docs/CONTRACT.md#d83-per-platform)).
 Edge cases and platform gaps are listed in
 [PARITY](https://github.com/AlloryDante/ow-tauri/blob/main/docs/PARITY.md#deviations).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/AlloryDante/ow-tauri/main/docs/images/showcase/sizes-dark.webp">
-  <img alt="The Sizes page of the ad showcase example: 160x600, 336x280, 400x300 video and 300x250 test ads, each in its own owadview element." src="https://raw.githubusercontent.com/AlloryDante/ow-tauri/main/docs/images/showcase/sizes-light.webp">
+  <img alt="The Sizes page of the ad showcase example: Overwolf test ads in 160x600, 400x600, 400x300 and 300x250 containers, each an owadview element with its load state above it." src="https://raw.githubusercontent.com/AlloryDante/ow-tauri/main/docs/images/showcase/sizes-light.webp">
 </picture>
 
 The JavaScript half is the npm package `tauri-plugin-overwolf-api`, in
@@ -24,6 +25,9 @@ The JavaScript half is the npm package `tauri-plugin-overwolf-api`, in
 Your pages use it for the ad element and the plugin's calls. To see both
 working before you add anything, run the
 [ad showcase example](https://github.com/AlloryDante/ow-tauri/tree/main/examples/ad-showcase).
+If you are moving an ow-electron app, start with the
+[migration guide](https://github.com/AlloryDante/ow-tauri/blob/main/docs/MIGRATION.md):
+`ow-tauri migrate` keeps the app's uid.
 
 This project is not affiliated with or endorsed by Overwolf.
 
@@ -34,13 +38,15 @@ newer), and macOS 14 or newer on Apple Silicon. Windows arm64, Intel Macs and
 older macOS are best effort. Linux builds, but ads report `unsupported`.
 Mobile builds answer `unsupported` to every command.
 
-The crate needs `tauri` 2.12.1 or newer (below 3) and Rust 1.90.
+The crate needs `tauri` 2.12.1 or newer (below 3) and Rust 1.90 or newer.
 
 ## Install
 
 Not on crates.io or npm yet. The planned crates.io name is
 `tauri-plugin-overwolf`. Until then, add the crate from GitHub in
-`src-tauri/Cargo.toml`, optionally pinned with `rev = "<commit>"`:
+`src-tauri/Cargo.toml`. You can pin it with `rev = "<commit>"`; use the
+commit you build the npm packages from, so the Rust and JavaScript halves
+match:
 
 ```toml
 [dependencies]
@@ -124,7 +130,11 @@ Grant the permission in `src-tauri/capabilities/default.json`:
 ```
 
 Select webviews, not windows. An ad is a child webview inside your window, so
-a capability that names the window would also cover the ad.
+a capability that names the window would also cover the ad. `default` leaves
+out machine ids, email hashes, the external payment user id, the persisted
+analytics preferences and the updater. Their opt-in sets are `overwolf:machine-id`,
+`overwolf:email-hashes`, `overwolf:analytics` and `overwolf:updater`
+([permissions](https://github.com/AlloryDante/ow-tauri/blob/main/docs/api/permissions.md)).
 
 Read the plugin's state from Rust:
 

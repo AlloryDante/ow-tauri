@@ -56,6 +56,11 @@ defaults to the app's `productName`. `init` writes:
 You can run it again. It never changes an existing `author` or `name`,
 because that would change the uid.
 
+`init` does not touch `Cargo.toml`, `build.rs` or your Rust code. Add the
+crate, its build step and the plugin as the
+[getting started guide](https://github.com/AlloryDante/ow-tauri/blob/main/docs/GETTING-STARTED.md)
+shows.
+
 ## migrate
 
 ```sh
@@ -89,11 +94,12 @@ npm exec --no -- ow-tauri sign --dry-run
 
 Options: `--main <file>`, `--out <dir>`, `--write-uid` and `--dry-run`.
 
-Overwolf signing, run after the frontend build. It is off until
-`plugins.overwolf.signing.enabled` is `true` (or `OW_REQUIRE_SIGNING` is set).
-It reads `OW_CLI_EMAIL`, `OW_CLI_API_KEY` and `OW_BUILD_KEY` from the
-environment (and `OW_CLI_API_URL`, default `https://console-be.overwolf.com`),
-and writes `signed/` in the project folder: `package.json`, `_metadata.json`,
+Run `sign` after the frontend build. It is off until
+`plugins.overwolf.signing.enabled` is `true`, or `OW_REQUIRE_SIGNING` is set
+to a value other than empty, `0` or `false`. It reads `OW_CLI_EMAIL`,
+`OW_CLI_API_KEY` and `OW_BUILD_KEY` from the environment (and
+`OW_CLI_API_URL`, default `https://console-be.overwolf.com`), and writes
+`signed/` in the project folder: `package.json`, `_metadata.json`,
 `integrity.dll`, `owe.json` and `sign-result.json`.
 
 When the uid Overwolf signed differs from the app's uid, it stops:
@@ -120,10 +126,11 @@ Tauri calls it for each file it signs. Set it as the sign command in
 Options: `--app-exe <name.exe>`, `--signed-dir <dir>` and
 `--fallback "<cmd %1>"`.
 
-When Overwolf certificate signing is on (`signing.owCertSigning`), Overwolf
-signs the app's exe. Every other file, and every file when Overwolf signing
-is off, goes to the `--fallback` command (your own signing), or stays
-unsigned when there is none.
+When the last `ow-tauri sign` run recorded that the app asked for Overwolf
+certificate signing (`signing.owCertSigning` or `OW_ENABLE_CERT_SIGNING`) and
+the signing service enabled it, Overwolf signs the app's exe. Every other
+file, and every file when Overwolf signing is off, goes to the `--fallback`
+command (your own signing), or stays unsigned when there is none.
 
 ## Configuration options
 
