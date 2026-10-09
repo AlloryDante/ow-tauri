@@ -161,6 +161,11 @@ Both timeouts must be 1 to 600000. ow-electron has no timeout on the "is
 consent required" request; the 60 s bound is a documented difference that
 only shows when the request hangs.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/consent/privacy-settings-dark.png">
+  <img alt="Overwolf's ad privacy settings window on the Purposes tab: one consent switch per purpose, all off, and the Reject All Purposes, Accept All Purposes and Save & Exit buttons." src="images/consent/privacy-settings-light.png">
+</picture>
+
 ## `emailHashes`
 
 | Key | Type | Default | Meaning |

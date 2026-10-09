@@ -9,7 +9,10 @@ app on Windows, macOS and Linux, so every file below is known to compile. A
 React version of the same app is in
 [examples/quickstart-react](../examples/quickstart-react).
 
-<!-- image: docs/images/quickstart/window -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/quickstart/window-dark.png">
+  <img alt="The finished app: the My Game App heading, the line about test ads, a 400x300 video test ad and the Ad privacy settings button." src="images/quickstart/window-light.png">
+</picture>
 
 ## Contents
 

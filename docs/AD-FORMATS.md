@@ -137,6 +137,11 @@ Put an `<owadview>` in a container of one of the documented sizes:
 | 970x90 | the 728x90 set plus 970x90 | no |
 | 400x60 | 400x60 | no |
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/ad-formats/standard-display-dark.png">
+  <img alt="The ad showcase's Sizes page in test mode: test ads in 160x600, 400x600, 400x300 and 300x250 containers, each with its cid and load state above it." src="images/ad-formats/standard-display-light.png">
+</picture>
+
 Overwolf's recommended layouts (Combo Classic, Tall Duo, Tower Plus, Studio
 Tower, Tower, Studio, Studio Plus, PopUp Studio Plus) combine these; the
 showcase's Layouts page builds all eight.
@@ -162,6 +167,11 @@ later with the test creative. The guest starts muted; call
 `setAudioMuted(false)` to let the user hear it. Keep one video-capable
 container per page in live mode.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/ad-formats/standard-video-dark.png">
+  <img alt="The ad showcase's Controls page in test mode: a video test ad plays in a 400x300 slot next to the customTracking and visibility controls, and the event timeline lists player_loaded, play and impression." src="images/ad-formats/standard-video-light.png">
+</picture>
+
 ## House ads
 
 Your own promotions, shown when no paid ad fills. There is nothing to add in
@@ -175,6 +185,11 @@ Test mode does not serve house ads (the configuration request goes out and
 returns nothing for an app with none set up; whether test mode can ever serve
 one is [OQ-A4](OPEN-QUESTIONS.md#oq-a4-house-ads-in-test-mode)). House ads
 do not show while an ad blocker is active.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/ad-formats/house-dark.png">
+  <img alt="The ad showcase's House page in test mode: the 400x300 slot plays a video test ad, and the house_ad_action panel shows no action yet." src="images/ad-formats/house-light.png">
+</picture>
 
 ## High impact
 
@@ -198,6 +213,11 @@ big.addEventListener('high-impact-ad-removed', () => {
   bannerContainer.style.display = '';
 });
 ```
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/ad-formats/high-impact-dark.png">
+  <img alt="The ad showcase's High impact page in test mode: the takeover test ad fills the 440 px ad zone, and the event timeline ends with high-impact-ad-loaded." src="images/ad-formats/high-impact-light.png">
+</picture>
 
 Events: `display_ad_loaded` twice, then `high-impact-ad-loaded`
 (`sourceIsOwAdIframe`, `isOwAdOrigin`, `ad_uid`), then
@@ -228,6 +248,11 @@ document.body.appendChild(ad);
 ad.addEventListener('performance_ad_loaded', () => pauseTheApp());
 ad.addEventListener('shutdown', () => resumeTheApp()); // the element is removed right after
 ```
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/ad-formats/interstitial-dark.png">
+  <img alt="The ad showcase's Interstitial page in test mode: a full-window test ad with a close button covers the dimmed page, and the event timeline ends with performance_ad_loaded." src="images/ad-formats/interstitial-light.png">
+</picture>
 
 What happens:
 
@@ -275,6 +300,11 @@ slot.setAttribute('cid', 'reward');
 slot.setAttribute('adstyle', 'rewarded-ad;');
 rewardContainer.appendChild(slot); // 400x300 or larger, visible
 ```
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/ad-formats/reward-dark.png">
+  <img alt="The ad showcase's Reward page in test mode after video_ad_ready: the shop shows the reward as ready, the 400x300 rewarded slot waits hidden until the player asks for the video, and the 300x250 slot is marked unavailable." src="images/ad-formats/reward-light.png">
+</picture>
 
 Events: `video_ad_ready` (`readyAds`, `ad_uid`) once a video is preloaded,
 then `player_loaded`. **Nothing plays while the slot just stays visible.**

@@ -74,6 +74,11 @@ parameters) and `isCMPRequired()`. Every API call made on the other pages appear
 arguments and its result or error code, and so does every ad event. Values are expandable JSON
 trees, and the search box filters by message and value.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/packages-sample/logger-dark.png">
+  <img alt="The Logger page: getInfo() and isCMPRequired() logged at launch, each with its result as an expandable value, under the search box." src="../../docs/images/packages-sample/logger-light.png">
+</picture>
+
 ### Ads tester
 
 Fifteen layouts, each with two ad slots, inside a mock game window. The display sizes are 160x600,
@@ -83,6 +88,11 @@ layout grows its 400x600 slot when the ad asks.
 Each slot can be started, removed, recreated (a new `<owadview>`) and muted (`setAudioMuted`). The
 Performance ad button shows an interstitial (`<owadview performance>`) and removes it when it ends.
 The page's ad events are listed under the slots.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/packages-sample/ads-tester-dark.png">
+  <img alt="The Ads tester page with the Tall Duo (right) layout in the mock game window: a tall test ad on the left, a display test ad and a video test ad on the right, and the Performance ad button above." src="../../docs/images/packages-sample/ads-tester-light.png">
+</picture>
 
 The `<owadview>` runtime is installed once by `import 'tauri-plugin-overwolf-api/adview'` in
 [src/main.tsx](src/main.tsx). [src/pages/ads/AdSlot.tsx](src/pages/ads/AdSlot.tsx) attaches the
@@ -102,6 +112,11 @@ The "CMP & Settings" page shows whether consent rules apply and opens the ad pri
   the page. It needs a built app (`npm start` or `npm run start:test`): under `tauri dev` the new
   process would lose the dev server, so the card says so instead.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/packages-sample/settings-dark.png">
+  <img alt="The CMP & Settings page: the consent card with isCMPRequired() and the privacy window buttons, the e-mail hashes card, the identity card with a placeholder uid, and the restart card." src="../../docs/images/packages-sample/settings-light.png">
+</picture>
+
 ### Updater
 
 The page runs `check()` against Overwolf's update feed, then `downloadAndInstall()` with its
@@ -110,11 +125,21 @@ plugin's `updater` feature for Windows targets, and on macOS and Linux the page 
 `unsupported` error as it is. A check only finds an update once a version of the app is published in
 the Overwolf console.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/packages-sample/updater-dark.png">
+  <img alt="The Updater page before a check: the Overwolf update feed card with a Check for updates button and the status Not checked yet." src="../../docs/images/packages-sample/updater-light.png">
+</picture>
+
 ### Packages
 
 The page lists GEP, overlay, recorder and utility, says what each does on ow-electron, and
 explains why it is not available on Tauri. These packages run inside ow-electron's package runtime and patched Electron, which Tauri does not
 have. The page does not fake them.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/packages-sample/packages-dark.png">
+  <img alt="The Packages page: cards for GEP, overlay, recorder and utility, each marked not available on Tauri with the reason." src="../../docs/images/packages-sample/packages-light.png">
+</picture>
 
 ## Where the plugin is wired in
 

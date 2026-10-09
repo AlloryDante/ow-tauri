@@ -19,6 +19,11 @@ button appears only when `isCMPRequired()` says consent rules apply, and it call
 `openAdPrivacySettingsWindow()`. The page logs the uid and the test ad state from `getInfo()` to the
 console, and logs `display_ad_loaded` and `impression` when the ad sends them.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/quickstart/window-dark.png">
+  <img alt="The quickstart window: the My Game App heading, the line about test ads, a 400x300 video test ad and the Ad privacy settings button." src="../../docs/images/quickstart/window-light.png">
+</picture>
+
 ## Run it
 
 You need Node.js 22.12 or newer, Rust 1.90 or newer and the

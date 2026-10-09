@@ -202,6 +202,16 @@ the timeline.
 the identity table (uid, cuid and muid masked; host, version, platform and
 test flag).
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/consent/consent-page-dark.png">
+  <img alt="The Consent & identity page in test mode: isCMPRequired() returns true, the Open ad privacy settings button, and the hashes that generateUserEmailHashes() returns for player@example.com." src="../../docs/images/consent/consent-page-light.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/consent/privacy-settings-dark.png">
+  <img alt="Overwolf's ad privacy settings window on the Purposes tab: one consent switch per purpose, all off, and the Reject All Purposes, Accept All Purposes and Save & Exit buttons." src="../../docs/images/consent/privacy-settings-light.png">
+</picture>
+
 ### 9. Parity
 
 The parity harness's report, or the commands that make it. Copy a
