@@ -2,21 +2,37 @@
  * The invisible lab's driver (e2e/README.md). Bundled only into the lab
  * build (`vite build --mode lab`, see `main.tsx`) and inert unless the app
  * was built with the `lab` Cargo feature and launched by `e2e/run.mjs`,
- * which passes `OW_SAMPLE_E2E_CONFIG`.
+ * which passes `OW_SAMPLE_E2E_CONFIG`. It presses the sample's own buttons
+ * only, never an ad.
  *
- * The smoke run opens the ads tester, presses "Start ad" on both slots of
- * the default layout (buttons of the sample's own page, never an ad), waits
- * for `display_ad_loaded`, records what happened through the lab commands
- * of `src-tauri/src/lab.rs` and quits the app.
+ * - `smoke` (default): opens the ads tester, presses "Start ad" on both
+ *   slots of the default layout, waits for `display_ad_loaded`, records
+ *   what happened and quits.
+ * - `restart`: the restart check. The first process opens the CMP &
+ *   settings page (no ad guest) and presses "Restart with live ads"; the
+ *   second (LIVE, on the same page) presses "Restart with test ads"; the
+ *   third (TEST, same page) records `done` and quits. Each process records
+ *   its phase and pid.
+ * - `tour`: a still of every page (`e2e_still`; in-process, no screen
+ *   capture), the ads tester with both test ads loaded, and the ad privacy
+ *   settings window the plugin opens (put on screen at alpha 0 for the
+ *   still), then quits.
+ *
+ * Every run also records page visibility changes and a heartbeat every
+ * {@link BEAT_MS}, so the runner can tell a stalled page (WebKit stops the
+ * timers of a page it considers hidden) from a slow step.
  *
  * @packageDocumentation
  */
 import { invoke } from '@tauri-apps/api/core';
 
 import type { LogStore } from '../log/store';
+import { restartApp, type AdMode } from '../restart';
 
 /** The runner's configuration (`OW_SAMPLE_E2E_CONFIG` plus the app's pid). */
 export interface DriverConfig {
+  /** What to run (default `smoke`). */
+  steps?: 'smoke' | 'restart' | 'tour';
   /** How long to wait for `display_ad_loaded`, ms (default 60000). */
   adWaitMs?: number;
   /** The app process id (added by `e2e_config`). */
@@ -38,6 +54,14 @@ export interface DriverHost {
   quit: () => Promise<void>;
   /** Waits `ms` milliseconds. */
   sleep: (ms: number) => Promise<void>;
+  /** Writes a still of a window (default the sample's) named `name`. */
+  still?: (name: string, window?: string) => Promise<unknown>;
+  /** Puts a consent window the plugin keeps hidden in the lab on screen at alpha 0. */
+  reveal?: (label: string) => Promise<unknown>;
+  /** Restarts the app; answers why it refused, or `null`. */
+  restart?: (mode: AdMode) => Promise<string | null>;
+  /** Calls `tick` every `ms` until the returned function is called. */
+  every?: (ms: number, tick: () => void) => () => void;
 }
 
 /** The lab commands of the app. */
@@ -61,10 +85,47 @@ export const tauriHost: DriverHost = {
     new Promise((resolve) => {
       setTimeout(resolve, ms);
     }),
+  still: (name, window) => invoke('e2e_still', { name, window: window ?? null }),
+  reveal: (label) => invoke('e2e_reveal', { label }),
+  restart: (mode) => restartApp(mode),
+  every: (ms, tick) => {
+    const id = setInterval(tick, ms);
+    return () => {
+      clearInterval(id);
+    };
+  },
 };
 
 /** How often the driver polls the page, ms. */
 const POLL_MS = 100;
+/** How often the driver records a heartbeat, ms. */
+export const BEAT_MS = 5000;
+/** The tour's pages, in navigation order, and the still of each. */
+export const TOUR = [
+  { page: 'logger', still: 'logger' },
+  { page: 'ads', still: 'ads-tester' },
+  { page: 'settings', still: 'settings' },
+  { page: 'updater', still: 'updater' },
+  { page: 'packages', still: 'packages' },
+] as const;
+/** The page the restart check restarts on (no ad guest). */
+export const RESTART_PAGE = 'settings';
+/** The label of the ad privacy settings window the plugin opens. */
+const PRIVACY_WINDOW = 'ow-cmp';
+
+/**
+ * The restart check's phase of this process: 1 when it started without a
+ * page (the runner's launch), else 2 in LIVE mode and 3 in TEST mode (the
+ * two restarts keep the page).
+ *
+ * @param startHash - `location.hash` when the driver started
+ * @param mode - the ad mode the page shows
+ * @returns the phase
+ */
+export function restartPhase(startHash: string, mode: AdMode): 1 | 2 | 3 {
+  if (startHash === '' || startHash === '#') return 1;
+  return mode === 'live' ? 2 : 3;
+}
 
 /**
  * Waits until `found()` returns a value, or `ms` milliseconds have passed.
@@ -80,10 +141,24 @@ async function waitFor<T>(host: DriverHost, ms: number, found: () => T | null): 
   }
 }
 
+/** The first enabled button under `root` whose text is `text`, if rendered. */
+function buttonNamed(root: ParentNode, text: string): HTMLButtonElement | null {
+  const buttons = root.querySelectorAll<HTMLButtonElement>('button');
+  return [...buttons].find((b) => b.textContent === text && !b.disabled) ?? null;
+}
+
 /** The "Start ad" button of slot `name` on the ads tester, if rendered. */
 function startButton(doc: Document, name: string): HTMLButtonElement | null {
-  const buttons = doc.querySelectorAll<HTMLButtonElement>(`[data-slot="${name}"] button`);
-  return [...buttons].find((b) => b.textContent === 'Start ad') ?? null;
+  const slot = doc.querySelector(`[data-slot="${name}"]`);
+  return slot ? buttonNamed(slot, 'Start ad') : null;
+}
+
+/** The ad mode the settings page shows, once it has loaded. */
+function shownMode(doc: Document): AdMode | null {
+  const text = doc.querySelector('[data-testid="ad-mode"]')?.textContent;
+  if (text === 'test ads') return 'test';
+  if (text === 'live ads') return 'live';
+  return null;
 }
 
 /** The page's view of the ad slots, for the run record. */
@@ -102,13 +177,20 @@ function viewOf(doc: Document): Record<string, unknown> {
   };
 }
 
+/** The `display_ad_loaded` log lines of the ad slots. */
+function loadedAds(log: LogStore): number {
+  return log.entries().filter((e) => e.source === 'ad' && e.message.endsWith(': display_ad_loaded'))
+    .length;
+}
+
 /**
- * Runs the smoke steps.
+ * Runs the configured steps.
  *
  * @param log - the app's log store (the ad events are read from it)
  * @param host - the lab commands (default: the app's)
  * @param doc - the page (default: `document`)
- * @returns resolves once the run is recorded and the quit requested
+ * @returns resolves once the run is recorded and the quit (or restart)
+ *   requested
  */
 export async function startDriver(
   log: LogStore,
@@ -117,15 +199,29 @@ export async function startDriver(
 ): Promise<void> {
   const config = await host.config();
   if (!config) return;
-  try {
-    await host.record({ kind: 'driver', pid: config.pid ?? null });
-    await host.record({ kind: 'step', name: 'started' });
-    // A user presses "Start ad" in a shown window: wait for the page to be.
+  const steps = config.steps ?? 'smoke';
+  const startHash = doc.defaultView?.location.hash ?? '';
+  const visibility = (): void => {
+    void host.record({ kind: 'visibility', state: doc.visibilityState }).catch(() => undefined);
+  };
+  doc.addEventListener('visibilitychange', visibility);
+  const stopBeat = host.every?.(BEAT_MS, () => {
+    void host.record({ kind: 'beat', visibility: doc.visibilityState }).catch(() => undefined);
+  });
+  const go = (page: string): void => {
+    doc.defaultView?.location.assign(`#${page}`);
+  };
+
+  const shownStep = async (): Promise<void> => {
+    // A user presses buttons in a shown window: wait for the page to be.
     const shown = await waitFor(host, 10_000, () =>
       doc.visibilityState === 'visible' ? true : null,
     );
     await host.record({ kind: 'step', name: 'shown', shown: shown ?? false });
-    doc.defaultView?.location.assign('#ads');
+  };
+
+  const smoke = async (): Promise<void> => {
+    go('ads');
     const started: string[] = [];
     for (const slot of ['ad1', 'ad2']) {
       const button = await waitFor(host, 10_000, () => startButton(doc, slot));
@@ -135,12 +231,8 @@ export async function startDriver(
       }
     }
     await host.record({ kind: 'step', name: 'ads-started', slots: started });
-    const loaded = await waitFor(
-      host,
-      config.adWaitMs ?? 60_000,
-      () =>
-        log.entries().find((e) => e.source === 'ad' && e.message.endsWith(': display_ad_loaded')) ??
-        null,
+    const loaded = await waitFor(host, config.adWaitMs ?? 60_000, () =>
+      loadedAds(log) > 0 ? true : null,
     );
     const events = log
       .entries()
@@ -159,11 +251,98 @@ export async function startDriver(
         .map((e) => e.message),
     });
     await host.record({ kind: 'done', displayAdLoaded: loaded !== null });
+  };
+
+  const restart = async (): Promise<void> => {
+    if (!host.restart) throw new Error('the host cannot restart the app');
+    go(RESTART_PAGE);
+    const mode = await waitFor(host, 15_000, () => shownMode(doc));
+    if (!mode) throw new Error('the settings page never showed the ad mode');
+    const phase = restartPhase(startHash, mode);
+    await host.record({
+      kind: 'step',
+      name: `restart-${String(phase)}`,
+      phase,
+      pid: config.pid ?? null,
+      mode,
+      startHash,
+      page: doc.defaultView?.location.hash ?? null,
+    });
+    if (phase === 3) {
+      await host.record({ kind: 'done', restarted: true, mode, page: RESTART_PAGE });
+      return;
+    }
+    const next: AdMode = phase === 1 ? 'live' : 'test';
+    const button = buttonNamed(doc, `Restart with ${next} ads`);
+    if (!button) throw new Error(`no "Restart with ${next} ads" button`);
+    await host.record({ kind: 'restart-requested', phase, mode: next });
+    // The sample's own button (it calls `sample_restart`, which exits this
+    // process once the plugins are done; the new one starts at exit).
+    button.click();
+    const notice = await waitFor(
+      host,
+      15_000,
+      () => doc.querySelector('.notice')?.textContent ?? null,
+    );
+    throw new Error(`the restart did not exit the app (${notice ?? 'no answer'})`);
+  };
+
+  const tour = async (): Promise<void> => {
+    if (!host.still) throw new Error('the host takes no stills');
+    for (const { page, still } of TOUR) {
+      go(page);
+      await host.sleep(1500);
+      if (page === 'ads') {
+        for (const slot of ['ad1', 'ad2']) {
+          const button = await waitFor(host, 10_000, () => startButton(doc, slot));
+          button?.click();
+        }
+        const loaded = await waitFor(host, config.adWaitMs ?? 60_000, () =>
+          loadedAds(log) >= 2 ? true : null,
+        );
+        await host.record({ kind: 'step', name: 'ads-loaded', loaded: loaded !== null });
+        // `display_ad_loaded` fires before the creative has painted.
+        await host.sleep(3000);
+      }
+      if (page === 'settings') await waitFor(host, 15_000, () => shownMode(doc));
+      const out = await host.still(still);
+      await host.record({ kind: 'still', name: still, page, out });
+      if (page === 'settings') await privacyWindow();
+    }
+    await host.record({ kind: 'done', stills: TOUR.length + 1 });
+  };
+
+  /** Opens the ad privacy settings window and records a still of it. */
+  const privacyWindow = async (): Promise<void> => {
+    const open = buttonNamed(doc, 'openAdPrivacySettingsWindow()');
+    if (!open || !host.reveal || !host.still) throw new Error('cannot open the privacy window');
+    open.click();
+    let revealed: unknown = null;
+    for (let i = 0; i < 50 && revealed === null; i += 1) {
+      revealed = await host.reveal(PRIVACY_WINDOW).catch(() => null);
+      if (revealed === null) await host.sleep(200);
+    }
+    if (revealed === null) throw new Error('the privacy settings window never opened');
+    // The consent page loads from Overwolf's CDN and lays itself out.
+    await host.sleep(8000);
+    const out = await host.still('privacy-settings', PRIVACY_WINDOW);
+    await host.record({ kind: 'still', name: 'privacy-settings', window: revealed, out });
+  };
+
+  try {
+    await host.record({ kind: 'driver', pid: config.pid ?? null });
+    await host.record({ kind: 'step', name: 'started' });
+    await shownStep();
+    if (steps === 'restart') await restart();
+    else if (steps === 'tour') await tour();
+    else await smoke();
   } catch (error) {
     await host.record({
       kind: 'fatal',
       text: String(error instanceof Error ? error.stack : error),
     });
   }
+  stopBeat?.();
+  doc.removeEventListener('visibilitychange', visibility);
   await host.quit();
 }

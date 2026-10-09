@@ -3,6 +3,7 @@ import type { CMPTab, MachineIds, OverwolfInfo } from 'tauri-plugin-overwolf-api
 
 import { useLog } from '../../log/context';
 import type { Outcome } from '../../log/logged';
+import { restartApp, type AdMode } from '../../restart';
 import {
   PERMISSIONS,
   looksLikeEmail,
@@ -121,6 +122,7 @@ export function Settings(): ReactElement {
   const [hashes, setHashes] = useState({ sha1: '', md5: '', sha256: '' });
   const [machineIds, setMachineIds] = useState<MachineIds | null>(null);
   const [reveal, setReveal] = useState(false);
+  const [restartNotice, setRestartNotice] = useState<string | null>(null);
   const loaded = useRef(false);
 
   const note = (call: SettingsCall, outcome: Outcome<unknown>): void => {
@@ -164,6 +166,14 @@ export function Settings(): ReactElement {
     if (o.ok) setMachineIds(o.value);
   };
   const shownId = (id: string): string => (reveal ? id : mask(id));
+  const restart = async (mode: AdMode): Promise<void> => {
+    setRestartNotice(null);
+    log.push('info', 'app', `Restarting with ${mode} ads`);
+    const refused = await restartApp(mode);
+    if (refused === null) return;
+    log.push('warn', 'app', `Restart refused: ${refused}`);
+    setRestartNotice(refused);
+  };
 
   return (
     <section className="page settings">
@@ -311,6 +321,41 @@ export function Settings(): ReactElement {
                 </label>
               </dd>
             </dl>
+          )}
+        </Card>
+
+        <Card title="Restart" permission="app command sample_restart">
+          <p className="status">
+            Running with{' '}
+            <strong data-testid="ad-mode">
+              {info ? (info.testAd ? 'test ads' : 'live ads') : '…'}
+            </strong>
+            . A restart keeps this page.
+          </p>
+          <div className="call">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                void restart('test');
+              }}
+            >
+              Restart with test ads
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                void restart('live');
+              }}
+            >
+              Restart with live ads
+            </button>
+          </div>
+          {restartNotice !== null && (
+            <p className="notice" role="status">
+              {restartNotice}
+            </p>
           )}
         </Card>
 

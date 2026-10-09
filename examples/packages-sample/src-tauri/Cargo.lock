@@ -2745,7 +2745,10 @@ dependencies = [
 name = "ow-tauri-packages-sample"
 version = "1.0.0"
 dependencies = [
+ "block2",
+ "log",
  "objc2",
+ "objc2-foundation",
  "serde_json",
  "tauri",
  "tauri-build",

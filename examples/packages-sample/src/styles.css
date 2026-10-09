@@ -1,4 +1,8 @@
-/* The upstream sample's dark theme (its theme tokens), as plain CSS. */
+/*
+ * The upstream sample's dark theme (its theme tokens), as plain CSS, and a
+ * light theme from the same tokens. The page follows the system appearance;
+ * `data-theme="dark"` or `"light"` on <html> picks one.
+ */
 :root {
   --color-brand: #d34037;
   --color-brand-hover: #f05c48;
@@ -16,6 +20,18 @@
   --color-warn: #ffa726;
   --color-err: #ef5350;
   --color-info: #64b5f6;
+  --color-log-text: #cccccc;
+  --color-log-rule: #252525;
+  --color-log-indent: #333333;
+  --color-log-dim: #666666;
+  --color-json-punct: #888888;
+  --color-json-text: #cccccc;
+  --color-json-key: #9cdcfe;
+  --color-json-string: #ce9178;
+  --color-json-number: #b5cea8;
+  --color-json-literal: #569cd6;
+  --color-json-muted: #808080;
+  --color-hover: rgba(255, 255, 255, 0.16);
   --space-100: 4px;
   --space-200: 8px;
   --space-300: 12px;
@@ -34,6 +50,72 @@
   line-height: 20px;
   color: var(--color-text);
   background-color: var(--color-bg);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --color-brand: #c0362e;
+    --color-brand-hover: #d34037;
+    --color-brand-focus: rgba(211, 64, 55, 0.16);
+    --color-bg: #ffffff;
+    --color-surface-1: #f6f6f6;
+    --color-surface-2: #ececec;
+    --color-surface-3: #e0e0e0;
+    --color-surface-4: #d4d4d4;
+    --color-border: rgba(0, 0, 0, 0.14);
+    --color-text: #1a1a1a;
+    --color-text-2: #555555;
+    --color-text-3: #767676;
+    --color-ok: #2e7d32;
+    --color-warn: #b45f06;
+    --color-err: #c62828;
+    --color-info: #1565c0;
+    --color-log-text: #2b2b2b;
+    --color-log-rule: #e6e6e6;
+    --color-log-indent: #cfcfcf;
+    --color-log-dim: #8a8a8a;
+    --color-json-punct: #6e6e6e;
+    --color-json-text: #2b2b2b;
+    --color-json-key: #0451a5;
+    --color-json-string: #a31515;
+    --color-json-number: #098658;
+    --color-json-literal: #0000ff;
+    --color-json-muted: #767676;
+    --color-hover: rgba(0, 0, 0, 0.08);
+    color-scheme: light;
+  }
+}
+
+:root[data-theme='light'] {
+  --color-brand: #c0362e;
+  --color-brand-hover: #d34037;
+  --color-brand-focus: rgba(211, 64, 55, 0.16);
+  --color-bg: #ffffff;
+  --color-surface-1: #f6f6f6;
+  --color-surface-2: #ececec;
+  --color-surface-3: #e0e0e0;
+  --color-surface-4: #d4d4d4;
+  --color-border: rgba(0, 0, 0, 0.14);
+  --color-text: #1a1a1a;
+  --color-text-2: #555555;
+  --color-text-3: #767676;
+  --color-ok: #2e7d32;
+  --color-warn: #b45f06;
+  --color-err: #c62828;
+  --color-info: #1565c0;
+  --color-log-text: #2b2b2b;
+  --color-log-rule: #e6e6e6;
+  --color-log-indent: #cfcfcf;
+  --color-log-dim: #8a8a8a;
+  --color-json-punct: #6e6e6e;
+  --color-json-text: #2b2b2b;
+  --color-json-key: #0451a5;
+  --color-json-string: #a31515;
+  --color-json-number: #098658;
+  --color-json-literal: #0000ff;
+  --color-json-muted: #767676;
+  --color-hover: rgba(0, 0, 0, 0.08);
+  color-scheme: light;
 }
 
 *,
@@ -153,7 +235,7 @@ button:disabled {
 }
 
 .main-menu a:hover {
-  background-color: rgba(255, 255, 255, 0.16);
+  background-color: var(--color-hover);
 }
 
 .main-menu .is-active a {
@@ -288,7 +370,7 @@ button:disabled {
 
 .log-entry {
   padding: 3px 0;
-  border-bottom: 1px solid #252525;
+  border-bottom: 1px solid var(--color-log-rule);
   white-space: pre-wrap;
   word-break: break-all;
 }
@@ -300,11 +382,11 @@ button:disabled {
 .log-entry-arg {
   margin: 2px 0 0 12px;
   padding: 2px 6px;
-  border-left: 2px solid #333;
+  border-left: 2px solid var(--color-log-indent);
 }
 
 .log-entry.info {
-  color: #cccccc;
+  color: var(--color-log-text);
 }
 .log-entry.warn {
   color: var(--color-warn);
@@ -320,7 +402,7 @@ button:disabled {
   color: var(--color-info);
 }
 .log-entry.dim {
-  color: #666666;
+  color: var(--color-log-dim);
 }
 
 .jv-node,
@@ -338,31 +420,31 @@ button:disabled {
   padding: 0 2px;
   border: none;
   background: none;
-  color: #888888;
+  color: var(--color-json-punct);
   font-size: 10px;
 }
 .jv-brace,
 .jv-colon,
 .jv-comma {
-  color: #cccccc;
+  color: var(--color-json-text);
 }
 .jv-preview-more {
-  color: #888888;
+  color: var(--color-json-punct);
 }
 .jv-key {
-  color: #9cdcfe;
+  color: var(--color-json-key);
 }
 .jv-string {
-  color: #ce9178;
+  color: var(--color-json-string);
 }
 .jv-number {
-  color: #b5cea8;
+  color: var(--color-json-number);
 }
 .jv-boolean {
-  color: #569cd6;
+  color: var(--color-json-literal);
 }
 .jv-null {
-  color: #808080;
+  color: var(--color-json-muted);
 }
 
 /* Ads tester */
@@ -519,6 +601,14 @@ button:disabled {
 .call output {
   font-size: 12px;
   word-break: break-word;
+}
+
+.notice {
+  padding: var(--space-200) var(--space-300);
+  border-left: 3px solid var(--color-warn);
+  border-radius: 4px;
+  background-color: var(--color-surface-1);
+  color: var(--color-text);
 }
 
 .field {

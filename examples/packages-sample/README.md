@@ -46,12 +46,12 @@ TypeScript sources directly, so `npm test` does not need the build.
 
 From `examples/packages-sample`:
 
-| Script               | What it does                                                                                        |
-| -------------------- | --------------------------------------------------------------------------------------------------- |
+| Script               | What it does                                                                                                |
+| -------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `npm run start:test` | Builds a debug app with the page embedded and runs it with `--test-ad` ([scripts/run.mjs](scripts/run.mjs)) |
-| `npm start`          | The same without `--test-ad`                                                                        |
-| `npm run dev:test`   | `tauri dev` with hot reload and `--test-ad`                                                         |
-| `npm run dev`        | `tauri dev` with hot reload                                                                         |
+| `npm start`          | The same without `--test-ad`                                                                                |
+| `npm run dev:test`   | `tauri dev` with hot reload and `--test-ad`                                                                 |
+| `npm run dev`        | `tauri dev` with hot reload                                                                                 |
 
 The sample's configuration does not turn test ads on, so `npm start` and `npm run dev` request
 live ads. Use `start:test` or `dev:test` while you develop. Live ad inventory is for the published
@@ -97,7 +97,10 @@ The "CMP & Settings" page shows whether consent rules apply and opens the ad pri
 - e-mail hashes (the address itself is never logged);
 - the app identity and UTM parameters;
 - the machine ids, masked unless you check "Show in full";
-- the analytics and ads switches.
+- the analytics and ads switches;
+- a restart with test or live ads. It starts the app again with or without `--test-ad` and keeps
+  the page. It needs a built app (`npm start` or `npm run start:test`): under `tauri dev` the new
+  process would lose the dev server, so the card says so instead.
 
 ### Updater
 
@@ -147,16 +150,16 @@ and the plugin's permissions in the capability decide which calls it may make.
 
 These are for working on the sample itself. Run them from `examples/packages-sample`.
 
-| Script                | What it does                                                                          |
-| --------------------- | ------------------------------------------------------------------------------------- |
-| `npm run build`       | Vite production build of the page (`dist/`)                                           |
-| `npm run tauri build` | Release bundle (NSIS on Windows)                                                      |
-| `npm run typecheck`   | `tsc` in strict mode                                                                  |
-| `npm run lint`        | Typed ESLint (React hooks rules included)                                             |
-| `npm test`            | Vitest with happy-dom and the API's `mockOverwolf`                                    |
-| `npm run check:rust`  | `cargo fmt --check` and `clippy -D warnings`, with and without the `lab` feature      |
-| `npm run lab:smoke`   | The invisible lab smoke run (macOS, see [e2e/README.md](e2e/README.md))               |
-| `npm run doctor`      | `ow-tauri doctor`: checks the project's Overwolf setup                                |
+| Script                | What it does                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------------- |
+| `npm run build`       | Vite production build of the page (`dist/`)                                                 |
+| `npm run tauri build` | Release bundle (NSIS on Windows)                                                            |
+| `npm run typecheck`   | `tsc` in strict mode                                                                        |
+| `npm run lint`        | Typed ESLint (React hooks rules included)                                                   |
+| `npm test`            | Vitest with happy-dom and the API's `mockOverwolf`                                          |
+| `npm run check:rust`  | `cargo fmt --check` and `clippy -D warnings`, with and without the `lab` feature            |
+| `npm run lab:smoke`   | The invisible lab smoke run (macOS; restart check and tour: [e2e/README.md](e2e/README.md)) |
+| `npm run doctor`      | `ow-tauri doctor`: checks the project's Overwolf setup                                      |
 
 ## Based on
 

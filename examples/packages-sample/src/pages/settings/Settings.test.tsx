@@ -1,8 +1,11 @@
 import { mockOverwolf, type MockOverwolf } from 'tauri-plugin-overwolf-api/testing';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { restartApp } from '../../restart';
 import { button, click, flush, render } from '../../test/render';
 import { Settings } from './Settings';
+
+vi.mock('../../restart', () => ({ restartApp: vi.fn() }));
 
 let overwolf: MockOverwolf;
 beforeEach(() => {
@@ -79,6 +82,26 @@ describe('Settings', () => {
     expect(overwolf.callsOf('disable_ads_fpd')).toHaveLength(1);
     expect(overwolf.callsOf('set_analytics_user_enabled')).toEqual([{ enabled: false }]);
     expect(row.textContent).toContain('unsupported: userSwitch is off');
+    await view.unmount();
+  });
+
+  it('restarts in the chosen mode and shows a refusal inline', async () => {
+    const restart = vi.mocked(restartApp);
+    restart.mockResolvedValueOnce(null).mockResolvedValueOnce('Restart needs a built app');
+    const view = await render(<Settings />);
+    await flush();
+    expect(view.container.querySelector('[data-testid="ad-mode"]')?.textContent).toBe('test ads');
+    await click(button(view.container, 'Restart with live ads'));
+    await flush();
+    expect(restart).toHaveBeenLastCalledWith('live');
+    expect(view.container.querySelector('.notice')).toBeNull();
+    await click(button(view.container, 'Restart with test ads'));
+    await flush();
+    expect(restart).toHaveBeenLastCalledWith('test');
+    expect(view.container.querySelector('.notice')?.textContent).toBe('Restart needs a built app');
+    expect(view.log.entries().map((e) => e.message)).toContain(
+      'Restart refused: Restart needs a built app',
+    );
     await view.unmount();
   });
 });

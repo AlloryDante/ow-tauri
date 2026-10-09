@@ -12,19 +12,40 @@
 //!   analytics and the consent experiment go. Without it they go to a
 //!   closed loopback port: a lab build never reports to Overwolf.
 //! - `OW_SAMPLE_E2E_CONFIG=<json>`: the driver's run configuration
-//!   ([`e2e_config`]); without it the driver stays inert.
+//!   ([`e2e_config`]); without it the driver stays inert. Its `stillsDir` is
+//!   where [`e2e_still`] writes.
+//! - `OW_SAMPLE_LAB_APPEARANCE=dark|light`: the system appearance of the
+//!   app's pages (macOS), so the light and dark themes can both be recorded.
+//! - `OW_SAMPLE_LAB_WINDOW=<width>x<height>`: the window's size (logical).
+//! - `OW_SAMPLE_LAB_STILL=<file.png>`: page-host mode, for a page without the
+//!   driver (the quickstart's, built into this shell by `e2e/run.mjs --page
+//!   quickstart`): `OW_SAMPLE_LAB_STILL_AFTER_MS` (default 15000) after the
+//!   page has loaded, a still of the window goes to that file, a `done`
+//!   record to `e2e.jsonl`, and the app quits.
+//!
+//! On macOS the driver also gets in-process stills of a window
+//! ([`e2e_still`]; no screen capture) and can put a consent window the
+//! plugin keeps hidden in the lab on screen at alpha 0 ([`e2e_reveal`]), so
+//! its page renders for a still.
 
 use std::io::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde_json::{Value, json};
-use tauri::{Manager, Runtime, Webview, Window};
+use tauri::{AppHandle, Manager, Runtime, Webview, Window};
 
 use crate::sample::MAIN;
 
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code, reason = "Objective-C calls of the invisible lab")]
 mod native;
+
+/// How long a snapshot of the window may take.
+#[cfg(target_os = "macos")]
+const PROBE_WAIT: Duration = Duration::from_secs(10);
+/// How long page-host mode waits after the page has loaded, by default.
+const STILL_AFTER: Duration = Duration::from_secs(15);
 
 /// Where the plugin's host requests go without `OW_SAMPLE_LAB_SINK`: the
 /// discard port on loopback (nothing listens, nothing leaves the machine).
@@ -77,9 +98,14 @@ pub fn hold_app_back() {
     }
 }
 
-/// After the window is built, before it is shown: alpha 0 and
-/// click-through in the invisible lab.
+/// After the window is built, before it is shown (main thread): the
+/// appearance the run asks for, and in the invisible lab alpha 0,
+/// click-through and above other apps' windows.
 pub fn prepare_window<R: Runtime>(window: &Window<R>) {
+    #[cfg(target_os = "macos")]
+    if let Ok(theme) = std::env::var("OW_SAMPLE_LAB_APPEARANCE") {
+        native::set_appearance(theme.trim());
+    }
     if !invisible() {
         return;
     }
@@ -89,6 +115,53 @@ pub fn prepare_window<R: Runtime>(window: &Window<R>) {
     if let Ok(ns_window) = window.ns_window() {
         native::prepare_invisible(ns_window as usize);
     }
+}
+
+/// A window size `<width>x<height>` (logical pixels, each 200 to 4000).
+fn parse_size(text: &str) -> Option<(f64, f64)> {
+    let (w, h) = text.trim().split_once('x')?;
+    let (w, h): (u16, u16) = (w.parse().ok()?, h.parse().ok()?);
+    let ok = |v: u16| (200..=4000).contains(&v);
+    (ok(w) && ok(h)).then(|| (f64::from(w), f64::from(h)))
+}
+
+/// The window size of `OW_SAMPLE_LAB_WINDOW`, if set and valid.
+#[must_use]
+pub fn window_size() -> Option<(f64, f64)> {
+    parse_size(&std::env::var("OW_SAMPLE_LAB_WINDOW").ok()?)
+}
+
+/// Page-host mode's wait (`OW_SAMPLE_LAB_STILL_AFTER_MS`, else
+/// [`STILL_AFTER`]).
+fn still_after(value: Option<&str>) -> Duration {
+    value
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map_or(STILL_AFTER, Duration::from_millis)
+}
+
+/// Once the sample window's page has loaded: in page-host mode
+/// (`OW_SAMPLE_LAB_STILL`), wait, write a still of the window, record
+/// `done` and quit.
+pub fn page_shown<R: Runtime>(app: &AppHandle<R>) {
+    let Some(path) = std::env::var_os("OW_SAMPLE_LAB_STILL").filter(|p| !p.is_empty()) else {
+        return;
+    };
+    let wait = still_after(
+        std::env::var("OW_SAMPLE_LAB_STILL_AFTER_MS")
+            .ok()
+            .as_deref(),
+    );
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(wait);
+        let path = PathBuf::from(path);
+        let entry = match still(&app, MAIN, &path) {
+            Ok(out) => json!({ "kind": "done", "still": out }),
+            Err(error) => json!({ "kind": "fatal", "text": format!("still: {error}") }),
+        };
+        let _ = record(&entry);
+        app.exit(0);
+    });
 }
 
 /// Puts the (alpha 0) window on screen without making it key or activating
@@ -117,6 +190,14 @@ fn main_only(label: &str, command: &str) -> Result<(), String> {
     } else {
         Err(format!("{command} is for the sample webview only"))
     }
+}
+
+/// The run configuration, or `Null`.
+fn config() -> Value {
+    std::env::var("OW_SAMPLE_E2E_CONFIG")
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or(Value::Null)
 }
 
 /// The run configuration `text` with `pid` added, or `null` for none.
@@ -156,10 +237,16 @@ pub fn e2e_config<R: Runtime>(webview: Webview<R>) -> Result<Value, String> {
 #[tauri::command]
 pub fn e2e_record<R: Runtime>(webview: Webview<R>, entry: Value) -> Result<(), String> {
     main_only(webview.label(), "e2e_record")?;
+    record(&entry)
+}
+
+/// Appends `entry` to `<OW_TAURI_LAB_DIR>/e2e.jsonl` (nothing without a lab
+/// directory).
+fn record(entry: &Value) -> Result<(), String> {
     let Some(dir) = std::env::var_os("OW_TAURI_LAB_DIR").filter(|d| !d.is_empty()) else {
         return Ok(());
     };
-    let mut line = serde_json::to_string(&entry).map_err(|e| e.to_string())?;
+    let mut line = serde_json::to_string(entry).map_err(|e| e.to_string())?;
     line.push('\n');
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -196,6 +283,178 @@ pub fn e2e_quit<R: Runtime>(webview: Webview<R>) -> Result<(), String> {
     main_only(webview.label(), "e2e_quit")?;
     webview.app_handle().exit(0);
     Ok(())
+}
+
+/// A still name: 1 to 60 of letters, digits and `-`.
+fn plain_name(name: &str) -> bool {
+    (1..=60).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// A consent window of the plugin (`ow-cmp`, `ow-cmp-startup-2`, …): the
+/// only windows [`e2e_reveal`] and [`e2e_still`] take besides the sample's.
+fn consent_window(label: &str) -> bool {
+    label == "ow-cmp" || label.starts_with("ow-cmp-")
+}
+
+/// Writes a still of window `window` (default the sample window; else a
+/// consent window) to `<stillsDir>/<name>.png` (macOS): every webview of the
+/// window renders its own content (`WKWebView` snapshots, no screen
+/// capture), drawn bottom to top at its frame into one PNG. Answers the path
+/// and each webview's frame. Other platforms answer `{unsupported: true}`.
+///
+/// # Errors
+///
+/// Called from another webview, no `stillsDir` in the run configuration, a
+/// name that is not plain, a window that is not the sample's or a consent
+/// window, or the snapshot failed.
+#[tauri::command]
+pub async fn e2e_still<R: Runtime>(
+    webview: Webview<R>,
+    name: String,
+    window: Option<String>,
+) -> Result<Value, String> {
+    main_only(webview.label(), "e2e_still")?;
+    if !plain_name(&name) {
+        return Err("name must be 1 to 60 letters, digits and '-'".to_owned());
+    }
+    let label = window.unwrap_or_else(|| MAIN.to_owned());
+    if label != MAIN && !consent_window(&label) {
+        return Err("only the sample window or a consent window".to_owned());
+    }
+    let dir: PathBuf = config()
+        .get("stillsDir")
+        .and_then(Value::as_str)
+        .ok_or("no stillsDir in the run configuration")?
+        .into();
+    let app = webview.app_handle().clone();
+    let path = dir.join(format!("{name}.png"));
+    tauri::async_runtime::spawn_blocking(move || still(&app, &label, &path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Puts the consent window `label`, which the plugin keeps hidden in the
+/// lab, on screen at alpha 0 like the sample window (never key, the app not
+/// activated), so its page renders for [`e2e_still`]. Answers its page URL
+/// without the query (which carries ids).
+///
+/// # Errors
+///
+/// Called from another webview, not a consent window, or no such window
+/// yet.
+#[tauri::command]
+pub fn e2e_reveal<R: Runtime>(webview: Webview<R>, label: String) -> Result<Value, String> {
+    main_only(webview.label(), "e2e_reveal")?;
+    if !consent_window(&label) {
+        return Err("only a consent window".to_owned());
+    }
+    let window = webview
+        .app_handle()
+        .get_window(&label)
+        .ok_or_else(|| format!("no window {label}"))?;
+    let url = window
+        .webviews()
+        .first()
+        .and_then(|w| w.url().ok())
+        .map(|mut u| {
+            u.set_query(None);
+            u.to_string()
+        });
+    if invisible() {
+        #[cfg(target_os = "macos")]
+        if let Ok(ns_window) = window.ns_window() {
+            let address = ns_window as usize;
+            window
+                .run_on_main_thread(move || {
+                    native::prepare_invisible(address);
+                    native::order_front(address);
+                })
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(json!({ "label": label, "url": url }))
+}
+
+/// The still of window `label` written to `path` (see [`e2e_still`]).
+#[cfg(target_os = "macos")]
+fn still<R: Runtime>(app: &AppHandle<R>, label: &str, path: &Path) -> Result<Value, String> {
+    let window = app
+        .get_window(label)
+        .ok_or_else(|| format!("no window {label}"))?;
+    let ns_window = window.ns_window().map_err(|e| e.to_string())? as usize;
+    let webviews = window.webviews();
+    let (tx, rx) = std::sync::mpsc::channel();
+    for webview in &webviews {
+        let tx = tx.clone();
+        let label = webview.label().to_owned();
+        webview
+            .with_webview(move |pw| {
+                let _ = tx.send((native::address(pw.inner()), label));
+            })
+            .map_err(|e| e.to_string())?;
+    }
+    drop(tx);
+    let mut views = native::Views::new();
+    while views.len() < webviews.len() {
+        let (address, label) = rx.recv_timeout(PROBE_WAIT).map_err(|e| e.to_string())?;
+        views.insert(address, label);
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    for (address, label) in &views {
+        let (tx, address, label) = (tx.clone(), *address, label.clone());
+        app.run_on_main_thread(move || {
+            native::shot(ns_window, address, label, move |s| {
+                let _ = tx.send(s);
+            });
+        })
+        .map_err(|e| e.to_string())?;
+    }
+    drop(tx);
+    let mut shots = Vec::new();
+    while shots.len() < views.len() {
+        shots.push(
+            rx.recv_timeout(PROBE_WAIT)
+                .map_err(|_| "a webview snapshot did not finish in time".to_owned())?,
+        );
+    }
+    let frames: Vec<Value> = shots
+        .iter()
+        .map(|s| {
+            json!({
+                "label": s.label, "rect": s.rect, "z": s.z, "hidden": s.hidden,
+                "bytes": s.png.len(), "error": s.error,
+            })
+        })
+        .collect();
+    if !shots.iter().any(|s| !s.png.is_empty()) {
+        return Err(format!("no webview of {label} rendered: {frames:?}"));
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(native::composite(
+            ns_window,
+            &shots,
+            native::scale(ns_window),
+        ));
+    })
+    .map_err(|e| e.to_string())?;
+    let png = rx.recv_timeout(PROBE_WAIT).map_err(|e| e.to_string())??;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, png).map_err(|e| e.to_string())?;
+    Ok(json!({ "path": path, "webviews": frames }))
+}
+
+/// Stills are macOS only.
+#[cfg(not(target_os = "macos"))]
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "the same signature as the macOS still"
+)]
+fn still<R: Runtime>(app: &AppHandle<R>, label: &str, path: &Path) -> Result<Value, String> {
+    let _ = (app, label, path);
+    Ok(json!({ "unsupported": true }))
 }
 
 #[cfg(test)]
@@ -245,6 +504,51 @@ mod tests {
             main_only("owad-1", "e2e_quit"),
             Err("e2e_quit is for the sample webview only".to_owned())
         );
+    }
+
+    #[test]
+    fn window_sizes_are_width_by_height_in_range() {
+        assert_eq!(parse_size("1200x800"), Some((1200.0, 800.0)));
+        assert_eq!(parse_size(" 800x600 "), Some((800.0, 600.0)));
+        for bad in [
+            "",
+            "1200",
+            "x800",
+            "1200x",
+            "100x800",
+            "1200x5000",
+            "a x b",
+            "-1x800",
+        ] {
+            assert_eq!(parse_size(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn page_host_waits_15_s_unless_told() {
+        assert_eq!(still_after(None), STILL_AFTER);
+        assert_eq!(still_after(Some("2500")), Duration::from_millis(2500));
+        assert_eq!(still_after(Some("soon")), STILL_AFTER);
+    }
+
+    #[test]
+    fn stills_take_plain_names_of_the_sample_or_consent_windows() {
+        assert!(plain_name("settings-dark"));
+        assert!(plain_name("p1"));
+        for bad in ["", "../x", "a/b", "a.png", "a b", &"x".repeat(61)] {
+            assert!(!plain_name(bad), "{bad}");
+        }
+        for ok in [
+            "ow-cmp",
+            "ow-cmp-startup",
+            "ow-cmp-startup-2",
+            "ow-cmp-default",
+        ] {
+            assert!(consent_window(ok), "{ok}");
+        }
+        for bad in ["main", "owad-1", "ow-cmpx", "settings"] {
+            assert!(!consent_window(bad), "{bad}");
+        }
     }
 
     #[test]

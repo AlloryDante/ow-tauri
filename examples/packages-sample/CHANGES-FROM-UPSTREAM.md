@@ -14,5 +14,7 @@ differs from it in these ways:
   of `electron-updater`.
 - Webpack, Electron Builder and their configuration are replaced by Vite and
   the Tauri CLI; the TypeScript is strict and the ESLint rules are typed.
-- New: the CMP & Settings page's identity card and switches, the updater
-  page, unit tests for every module, and the invisible lab smoke run.
+- New: the CMP & Settings page's identity card, switches and restart
+  (test or live ads, keeping the page), the updater page, a light theme
+  next to the dark one (it follows the system appearance), unit tests for
+  every module, and the invisible lab runs (smoke, restart, page tour).
