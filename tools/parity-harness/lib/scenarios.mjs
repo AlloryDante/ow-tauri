@@ -1552,7 +1552,7 @@ export const SCENARIOS = {
 
   'local-frame': {
     describe:
-      "§5.2 #22, SEC-B1: an ad guest adds frames to the app's own origins (tauri://localhost, http://tauri.localhost, http://asset.localhost, a dev server on localhost, the app's file:// page) and probes the core IPC; none may load and no command may answer. The Windows half (http://tauri.localhost) runs in the Windows CI lab.",
+      "§5.2 #22, SEC-B1: an ad guest adds frames to the app's own origins (tauri://localhost, http://tauri.localhost, http://asset.localhost, a dev server on localhost, the app's file:// page) and probes the core IPC; none may load and no command may answer (core and app commands through the guest's IPC). The Windows half (http://tauri.localhost) runs in the Windows CI lab.",
     defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 40 },
     config: {
       actions: [
@@ -1587,6 +1587,28 @@ export const SCENARIOS = {
             frame.remove();
             return { url, loads, href, ipc };
           }))()`,
+        },
+        {
+          at: 20000,
+          do: 'guest-eval',
+          label: 'core commands',
+          code: `(() => {
+            const ipc = window.__TAURI_INTERNALS__;
+            if (!ipc || typeof ipc.invoke !== 'function') return 'no ipc';
+            window.__parityCore = {};
+            for (const cmd of ['plugin:app|version', 'plugin:window|get_all_windows', 'plugin:event|emit', 'plugin:webview|get_all_webviews', 'harness_config']) {
+              Promise.resolve()
+                .then(() => ipc.invoke(cmd, cmd === 'plugin:event|emit' ? { event: 'parity', payload: null } : {}))
+                .then(() => { window.__parityCore[cmd] = 'answered'; }, (error) => { window.__parityCore[cmd] = 'refused: ' + String(error).slice(0, 120); });
+            }
+            return 'sent';
+          })()`,
+        },
+        {
+          at: 24000,
+          do: 'guest-eval',
+          label: 'core command answers',
+          code: `window.__parityCore || null`,
         },
       ],
     },

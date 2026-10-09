@@ -99,6 +99,15 @@ test('a per-document or strict name one host does not send is a BUG', () => {
   );
 });
 
+test('oam_fpid is compared by presence only', () => {
+  const fpid = (n) => Array.from({ length: n }, () => counter('oam_fpid'));
+  assert.deepEqual(diff(run(documents(7, fpid(2))), run(documents(7, fpid(3)))), []);
+  assert.deepEqual(
+    diff(run(documents(2, fpid(1))), run(documents(2))).map((r) => [r.key, r.field, r.cls]),
+    [['oam_fpid', 'missing', 'BUG']],
+  );
+});
+
 test('ad-driven counts are variance', () => {
   const rows = diff(
     run(documents(1, [counter('oam_provider_loaded')])),

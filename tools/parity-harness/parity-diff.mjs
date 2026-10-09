@@ -2474,8 +2474,14 @@ export const GUEST_PER_LOAD = new Set([
   'owads_oam_path',
   'oam_first_load',
   'oam_app_subdomain',
-  'oam_fpid',
 ]);
+
+/**
+ * The ad page's analytics sent for some documents only, on both hosts
+ * (`oam_fpid`: ow-electron 2 of 4 and 2 of 7 documents in two runs): only
+ * whether a host sends them at all is compared.
+ */
+export const GUEST_SOMETIMES = new Set(['oam_fpid']);
 
 /**
  * The ad page's analytics driven by the ads served and their playback (the
@@ -2700,6 +2706,8 @@ export function compareGuestRequests(e, t, out) {
         tauri: y,
         ...(docsFollow ? { followsLoads: true } : {}),
       });
+    } else if (GUEST_SOMETIMES.has(name)) {
+      // Both hosts sent it; how often is the page's choice.
     } else if (GUEST_PER_LOAD.has(name)) {
       if (perLoad(x, a.loads) !== perLoad(y, b.loads))
         push({
