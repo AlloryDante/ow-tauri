@@ -176,22 +176,6 @@ difference from ow-electron is in
 [PARITY: Deviations](docs/PARITY.md#deviations), with the platform gaps
 listed below it.
 
-These questions need an answer from Overwolf:
-
-- [OQ-20](docs/OPEN-QUESTIONS.md#oq-20-live-ads-from-a-tauri-host): how an app on ow-tauri gets live ads enabled in production.
-- [OQ-18](docs/OPEN-QUESTIONS.md#oq-18-updates-and-the-console): whether the console accepts and serves a Tauri NSIS `setup.exe`.
-- [OQ-05](docs/OPEN-QUESTIONS.md#oq-05-request-shaping-for-the-ad-page): whether the macOS request-header gap is acceptable for fill and attribution.
-- [OQ-03](docs/OPEN-QUESTIONS.md#oq-03-host-labelling-owver-owversion-extra-fields): whether dashboards or the ad and consent pages depend on the `electron` host label.
-- [OQ-09](docs/OPEN-QUESTIONS.md#oq-09-signing-and-integrity-for-tauri-builds): what Overwolf signing should cover in a Tauri build.
-- [OQ-43](docs/OPEN-QUESTIONS.md#oq-43-installer-signing-expectations): whether Overwolf re-signs installers served from the console, and with which certificate.
-- [OQ-41](docs/OPEN-QUESTIONS.md#oq-41-the-install-record-of-a-per-machine-install): where a per-machine install should write its install record.
-- [OQ-42](docs/OPEN-QUESTIONS.md#oq-42-a-uid-override-and-attribution): whether Overwolf checks that traffic for a uid comes from that uid's app.
-- [OQ-A1](docs/OPEN-QUESTIONS.md#oq-a1-reward-ads): the supported way to request a reward ad, and the grant signal.
-- [OQ-A10](docs/OPEN-QUESTIONS.md#oq-a10-live-demand-for-demand-gated-formats): whether a demo app can get live high impact, interstitial and reward demand.
-
-The [index of open questions](docs/OPEN-QUESTIONS.md#index) has every
-question with its status.
-
 Release status: nothing is published to crates.io or npm, and there are no
 tags or GitHub releases. [docs/RELEASING.md](docs/RELEASING.md) describes
 how a release will be made.

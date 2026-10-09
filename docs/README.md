@@ -60,10 +60,10 @@ start with [MIGRATION.md](MIGRATION.md).
 |---|---|
 | [CONTRACT.md](CONTRACT.md) | What exactly does Overwolf receive from an app on the plugin? |
 | [PARITY.md](PARITY.md) | How is the plugin compared with ow-electron, where does each behaviour stand, and what differs? |
-| [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) | Which questions are settled, and which still need an answer from Overwolf? |
+| [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) | Which questions about Overwolf's services are settled, and what does the plugin do in the meantime? |
 
 The root README has a [section for the Overwolf team](../README.md#for-the-overwolf-team)
-with a reading order and the open questions in one line each.
+with a reading order and how to rerun the proof.
 
 ## Work on the plugin
 
