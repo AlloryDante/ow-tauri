@@ -21,15 +21,17 @@
 //   still?(name),                  // ow-tauri: an in-process still (PNG)
 //   probeGuests?(phase),           // ow-tauri: the lab's guest page probe
 //   windows?(),                    // the app's windows (state only)
-//   restartPhase?,                 // ow-tauri restart check: 'first' | 'second'
+//   restartPhase?,                 // ow-tauri restart check: 'first' | 'second' | 'third'
 //   flush?(),                      // resolves once every record is written
 // }
 //
 // The `restart` scenario (ow-tauri, test mode) is the one exception to "never
-// press Restart": it starts on the parity page (no ad guest), restarts in
-// TEST onto `parity/restarted` through `window.showcase.restart`, and the
-// second process reports that it came back on that page, invisible (the lab
-// environment is inherited), then quits.
+// press Restart": it starts on the parity page (no ad guest) in TEST,
+// restarts in LIVE onto `parity/restarted`, then in TEST onto
+// `parity/restarted-again`, both through `window.showcase.restart`. Each
+// process reports its ad mode and the page it came back on, invisible (the
+// lab environment is inherited); the third one quits. No phase mounts an ad
+// guest, so the LIVE phase loads no ad.
 
 'use strict';
 
@@ -46,8 +48,29 @@ const SCENARIOS = {
   restart: { route: 'parity', loads: 0 },
 };
 
-/** The route the restart check restarts onto. */
+/** The route the restart check restarts onto first (in LIVE). */
 const RESTART_ROUTE = 'parity/restarted';
+/** The route of the restart check's second restart (back to TEST). */
+const RESTART_AGAIN_ROUTE = 'parity/restarted-again';
+
+/**
+ * The restart check's phase of a process, from the hash it started on.
+ *
+ * @param {string} hash - `location.hash` before the page changes it
+ * @returns {'first' | 'second' | 'third'}
+ */
+function restartPhaseOf(hash) {
+  if (hash === `#${RESTART_ROUTE}`) return 'second';
+  if (hash === `#${RESTART_AGAIN_ROUTE}`) return 'third';
+  return 'first';
+}
+
+/** The ad mode and route each restart check phase restarts with (none: the last). */
+const RESTART_NEXT = {
+  first: { mode: 'live', route: RESTART_ROUTE },
+  second: { mode: 'test', route: RESTART_AGAIN_ROUTE },
+  third: null,
+};
 
 /** The eight layouts of page 2, in select order. */
 const LAYOUTS = [
@@ -199,19 +222,29 @@ async function runSteps(host) {
   // --------------------------------------------------------------- restart
   async function restartCheck() {
     const route = await exec('location.hash');
-    if (host.restartPhase === 'second') {
-      await step('restart-second', { route, windows: host.windows ? await host.windows() : null });
+    const phase = host.restartPhase ?? 'first';
+    const snap = await snapshot();
+    await step(`restart-${phase}`, {
+      route,
+      mode: snap?.mode ?? null,
+      pid: cfg.pid ?? null,
+      windows: phase === 'first' || !host.windows ? null : await host.windows(),
+    });
+    const next = RESTART_NEXT[phase];
+    if (!next) {
       record({ kind: 'done', restarted: true, route });
       host.quit();
       return;
     }
-    await step('restart-first', { route });
-    record({ kind: 'restart-requested', route: RESTART_ROUTE });
+    record({ kind: 'restart-requested', phase, mode: next.mode, route: next.route });
     if (host.flush) await host.flush();
     const result = await exec(
-      `window.showcase.restart('test', ${JSON.stringify(RESTART_ROUTE)}).then(() => 'requested', (e) => 'refused: ' + String(e))`,
+      `window.showcase.restart(${JSON.stringify(next.mode)}, ${JSON.stringify(next.route)}).then(() => 'requested', (e) => 'refused: ' + String(e))`,
     );
-    // A granted restart exits this process before the answer arrives.
+    // A granted restart exits this process soon after (at the app's exit,
+    // once the plugins are done), sometimes after the answer arrives: only
+    // a refusal, or a process still running 15 s later, is a failure.
+    if (result === 'requested') await sleep(15000);
     record({ kind: 'fatal', text: `restart did not exit the app (${String(result)})` });
     host.quit();
   }
@@ -524,4 +557,12 @@ async function runSteps(host) {
   }
 }
 
-module.exports = { runSteps, SCENARIOS, LAYOUTS, RESTART_ROUTE };
+module.exports = {
+  runSteps,
+  SCENARIOS,
+  LAYOUTS,
+  RESTART_ROUTE,
+  RESTART_AGAIN_ROUTE,
+  RESTART_NEXT,
+  restartPhaseOf,
+};

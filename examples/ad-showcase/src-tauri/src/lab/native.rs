@@ -13,7 +13,11 @@
 //!
 //! In the invisible lab, [`hold_app_back`], [`prepare_invisible`] and
 //! [`order_front`] keep the app in the background: never activated, the
-//! window on screen at alpha 0 without becoming key.
+//! window on screen at alpha 0 without becoming key. The lab window sits
+//! above every normal window on every Space ([`LAB_WINDOW_LEVEL`]), so no
+//! window of another app can cover it: `WebKit` treats the page of a
+//! covered (occluded) window as hidden and throttles its timers until they
+//! stop, which stalled a tour mid-way.
 //!
 //! Every function that touches a view runs on the main thread.
 
@@ -27,6 +31,16 @@ use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Sel};
 use objc2::{class, msg_send, sel};
 use objc2_foundation::{NSEdgeInsets, NSPoint, NSRect, NSSize};
 use serde_json::{Value, json};
+
+/// The lab window's level: `NSStatusWindowLevel`, above every normal app
+/// window, so no other app's window can cover (occlude) it. It stays at
+/// alpha 0 and ignores the mouse, so nobody sees or clicks it.
+const LAB_WINDOW_LEVEL: isize = 25;
+/// The lab window's collection behavior: on every Space
+/// (`canJoinAllSpaces`, 1 << 0), not moved by Mission Control (`stationary`,
+/// 1 << 4), out of the window cycle (`ignoresCycle`, 1 << 6) and allowed
+/// next to a full-screen app (`fullScreenAuxiliary`, 1 << 8).
+const LAB_COLLECTION_BEHAVIOR: usize = 1 | (1 << 4) | (1 << 6) | (1 << 8);
 
 /// The webviews of a window, by address (`*mut NSView` as `usize`) to label.
 pub type Views = BTreeMap<usize, String>;
@@ -544,15 +558,18 @@ pub fn hold_app_back() {
     });
 }
 
-/// Alpha 0 and click-through for the window at `ns_window` (before it is
-/// shown, main thread).
+/// Alpha 0, click-through, above other apps' windows and on every Space,
+/// for the window at `ns_window` (before it is shown, main thread).
 pub fn prepare_invisible(ns_window: usize) {
     // SAFETY: Tauri's `ns_window()` of a live window, on the main thread
-    // (the setup hook); public NSWindow setters.
+    // (the setup hook); public NSWindow setters (level and collection
+    // behavior take `NSInteger` and `NSUInteger`).
     unsafe {
         if let Some(window) = object(ns_window) {
             let () = msg_send![window, setAlphaValue: 0.0_f64];
             let () = msg_send![window, setIgnoresMouseEvents: Bool::YES];
+            let () = msg_send![window, setLevel: LAB_WINDOW_LEVEL];
+            let () = msg_send![window, setCollectionBehavior: LAB_COLLECTION_BEHAVIOR];
         }
     }
 }

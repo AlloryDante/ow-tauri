@@ -5,7 +5,7 @@
 //                    [--mode test|live] [--run-id ID] [--no-build]
 //                    [--identity FILE] [--timeout S] [--ad-wait MS]
 //                    [--dwell MS] [--stills DIR] [--theme dark|light]
-//                    [--live-cap N]
+//                    [--live-cap N] [--stall S]
 //
 // --mode test (default): test ads (--test-ad), smoke or tour.
 // --mode live: real ads, only with a live-* scenario (live-layout,
@@ -18,7 +18,8 @@
 //
 // --host tauri (default): stages the ow-tauri page with the lab driver
 //   (scripts/stage.mjs --lab) and builds the debug app with the `lab`
-//   feature into src-tauri/target/e2e, under the lab bundle id. The
+//   feature into $CARGO_TARGET_DIR (else src-tauri/target/e2e), under the
+//   lab bundle id. The
 //   plugin's analytics and consent experiment go to a loopback sink the
 //   runner starts (sink.jsonl), never to Overwolf.
 // --host electron: stages the ow-electron app and runs it on the parity
@@ -26,10 +27,13 @@
 //   (e2e/electron-main.cjs) keeps every window at opacity 0.
 // --steps smoke (default): start, page 1, wait for display_ad_loaded, quit.
 //   --steps tour: every page and its buttons (no ad is ever clicked).
-//   --steps restart (ow-tauri): start on the parity page (no ad guest),
-//   restart in TEST through the app, and follow the new process (its own
-//   window monitor and front check) until it reports the page it came back
-//   on and quits.
+//   --steps restart (ow-tauri): start on the parity page (no ad guest) in
+//   TEST, restart through the app in LIVE, then in TEST again, and follow
+//   each new process (its own window monitor and front check) until the
+//   third reports the page it came back on and quits. The check: three
+//   processes, the modes TEST -> LIVE -> TEST, the page kept, each old
+//   process gone, no window ever visible, never frontmost. No phase mounts
+//   an ad guest, so the LIVE phase loads no ad.
 // --theme dark (default) or light: the showcase theme the steps set before
 //   the first still, so both themes can be recorded.
 //
@@ -37,6 +41,11 @@
 // the app is killed the moment one of its windows becomes visible), a check
 // that the app never becomes the frontmost app, and a kill of the whole
 // process group on every exit path. Output: e2e/out/<run-id>/summary.json.
+//
+// Stall watchdog (ow-tauri): the lab driver records a heartbeat every 5 s.
+// A run that records nothing for --stall seconds (default 60; 0 turns it
+// off) is killed at once with verdict `stalled`, and the summary names the
+// last step it finished (`stalled.after`).
 
 import { spawn, spawnSync } from 'node:child_process';
 import {
@@ -48,6 +57,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -58,6 +68,7 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { owElectron } from '../scripts/ow-electron.mjs';
+import { isStalled, lastProgress, restartVerdict } from './watch.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const exampleDir = resolve(here, '..');
@@ -79,6 +90,7 @@ const { values: opts } = parseArgs({
     theme: { type: 'string', default: 'dark' },
     'live-cap': { type: 'string', default: '10' },
     'live-observe': { type: 'string', default: '90000' },
+    stall: { type: 'string', default: '60' },
   },
 });
 
@@ -175,7 +187,10 @@ function labTauriConfig() {
 }
 
 function buildTauri() {
-  const exe = join(exampleDir, 'src-tauri', 'target', 'e2e', 'debug', 'ow-tauri-ad-showcase');
+  const targetDir = process.env.CARGO_TARGET_DIR
+    ? resolve(process.env.CARGO_TARGET_DIR)
+    : join(exampleDir, 'src-tauri', 'target', 'e2e');
+  const exe = join(targetDir, 'debug', 'ow-tauri-ad-showcase');
   if (opts['no-build'] && existsSync(exe)) return exe;
   stage('tauri', true);
   // generate_context! embeds the page when the crate compiles: touch the
@@ -195,7 +210,7 @@ function buildTauri() {
       '--manifest-path',
       join(exampleDir, 'src-tauri', 'Cargo.toml'),
       '--target-dir',
-      join(exampleDir, 'src-tauri', 'target', 'e2e'),
+      targetDir,
     ],
     {
       env: {
@@ -456,6 +471,10 @@ async function main() {
   let doneAt = null;
   let verdict;
   let timedOut = false;
+  let stalled = null;
+  const stallMs = tauri ? Number(opts.stall) * 1000 : 0;
+  let lastSize = 0;
+  let lastChange = Date.now();
   const started = Date.now();
   let monitorOffset = 0;
   for (;;) {
@@ -487,10 +506,33 @@ async function main() {
         ? 'safety-kill'
         : doneAt
           ? 'done'
-          : timedOut
-            ? 'timeout'
-            : 'exited-early';
+          : stalled
+            ? 'stalled'
+            : timedOut
+              ? 'timeout'
+              : 'exited-early';
       break;
+    }
+    const size = existsSync(e2eFile) ? statSync(e2eFile).size : 0;
+    if (size !== lastSize) {
+      lastSize = size;
+      lastChange = Date.now();
+    }
+    if (
+      !stalled &&
+      !safetyKill &&
+      isStalled({ now: Date.now(), lastChange, stallMs, finished: doneAt !== null })
+    ) {
+      stalled = {
+        at: new Date().toISOString(),
+        after: lastProgress(readJsonl(e2eFile)),
+        quietMs: Date.now() - lastChange,
+      };
+      log(
+        `STALLED: nothing recorded for ${Math.round(stalled.quietMs / 1000)} s after ${String(stalled.after)}; killing the app`,
+      );
+      killTree(child, 'SIGTERM');
+      setTimeout(() => killTree(child, 'SIGKILL'), 3000).unref();
     }
     if (!doneAt && readJsonl(e2eFile).some((r) => r.kind === 'done' || r.kind === 'fatal')) {
       doneAt = Date.now();
@@ -519,12 +561,12 @@ async function main() {
   killTree(mon, 'SIGTERM');
   running.delete(mon);
   let restart = null;
-  if (restartCheck) {
-    restart = await followRestart(child.pid, monitor, e2eFile);
+  if (restartCheck && !safetyKill && !stalled) {
+    restart = await followRestart(child.pid, monitor, e2eFile, stallMs);
     if (restart.verdict === 'done' && verdict === 'exited-early') verdict = 'done';
     else if (restart.verdict !== 'done') verdict = `restart-${restart.verdict}`;
-    killTree(child, 'SIGKILL');
   }
+  if (restartCheck) killTree(child, 'SIGKILL');
   if (sink) {
     sink.server.closeAllConnections();
     await new Promise((ok) => sink.server.close(ok));
@@ -543,6 +585,7 @@ async function main() {
     verdict,
     exit,
     safetyKill,
+    stalled,
     everVisible: monitorEnd ? monitorEnd.everVisible : null,
     everFront,
     started: steps.some((s) => s.name === 'started'),
@@ -593,84 +636,149 @@ async function main() {
     summary.started &&
     !summary.fatal.length &&
     (restart
-      ? restart.everVisible === false && !restart.everFront
+      ? restart.everVisible === false && !restart.everFront && restart.check.ok
       : live || summary.displayAdLoaded);
   process.exitCode = ok ? 0 : 1;
 }
 
 /**
- * The restart check's second half: the process the app started for its
- * restart (the driver record with `restartPhase: 'second'`), under its own
- * window monitor and front check, until it reports `done` and exits.
+ * The restart check after the first process: each process the app started
+ * for a restart (the driver record with `restartPhase` 'second', then
+ * 'third'), under its own window monitor and front check. A phase passes
+ * once the next one reports (or, for the third, once it reports `done` and
+ * exits); the process before it must have exited by then (within 10 s).
  */
-async function followRestart(firstPid, monitor, e2eFile) {
+async function followRestart(firstPid, monitor, e2eFile, stallMs) {
+  const gone = {};
+  const processes = [];
+  let previous = firstPid;
+  let result = 'done';
+  for (const phase of ['second', 'third']) {
+    const followed = await followPhase(phase, previous, monitor, e2eFile, stallMs);
+    gone[phase] = followed.previousGone;
+    processes.push(followed);
+    if (followed.verdict !== 'done') {
+      result = followed.verdict;
+      break;
+    }
+    previous = followed.pid;
+  }
+  const records = readJsonl(e2eFile);
+  const check = restartVerdict(records, gone);
+  const third = records.find((r) => r.kind === 'step' && r.name === 'restart-third');
+  return {
+    verdict: result,
+    firstPid,
+    processes,
+    route: third?.route ?? null,
+    everVisible: processes.some((p) => p.everVisible === true)
+      ? true
+      : processes.length === 2 && processes.every((p) => p.everVisible === false)
+        ? false
+        : null,
+    everFront: processes.some((p) => p.everFront),
+    check,
+  };
+}
+
+/** One phase of the restart check (see followRestart). */
+async function followPhase(phase, previousPid, monitor, e2eFile, stallMs) {
   const deadline = Date.now() + 120000;
-  let second = null;
-  while (!second && Date.now() < deadline) {
-    second = readJsonl(e2eFile).find((r) => r.kind === 'driver' && r.restartPhase === 'second');
-    if (!second) await new Promise((ok) => setTimeout(ok, 250));
+  let driver = null;
+  while (!driver && Date.now() < deadline) {
+    driver = readJsonl(e2eFile).find((r) => r.kind === 'driver' && r.restartPhase === phase);
+    if (!driver) await new Promise((ok) => setTimeout(ok, 250));
   }
-  if (!second || typeof second.pid !== 'number' || second.pid === firstPid) {
-    log('restart: no second process reported');
-    return { verdict: 'no-second-process', firstPid };
+  if (!driver || typeof driver.pid !== 'number' || driver.pid === previousPid) {
+    log(`restart: no ${phase} process reported`);
+    return { phase, verdict: `no-${phase}-process`, pid: null, previousGone: false };
   }
-  const pid = second.pid;
-  log(`restart: second process ${pid}`);
-  const monitorFile = join(runDir, 'window-monitor-restart.jsonl');
-  const mon = spawn(monitor, [String(pid), monitorFile, '25'], { stdio: 'ignore', detached: true });
-  running.add(mon);
-  const alive = () => {
+  const pid = driver.pid;
+  log(`restart: ${phase} process ${pid}`);
+  const alive = (p) => {
     try {
-      process.kill(pid, 0);
+      process.kill(p, 0);
       return true;
     } catch {
       return false;
     }
   };
+  // The old process must be gone by now (it exits before the new one starts).
+  let previousGone = !alive(previousPid);
+  for (let i = 0; i < 40 && !previousGone; i += 1) {
+    await new Promise((ok) => setTimeout(ok, 250));
+    previousGone = !alive(previousPid);
+  }
+  const monitorFile = join(runDir, `window-monitor-${phase}.jsonl`);
+  const mon = spawn(monitor, [String(pid), monitorFile, '25'], { stdio: 'ignore', detached: true });
+  running.add(mon);
   let everFront = false;
   let safetyKill = null;
   let doneAt = null;
   let result = 'timeout';
-  while (Date.now() < deadline) {
-    if (frontPid() === pid) everFront = true;
-    for (const entry of readJsonl(monitorFile)) {
-      if (!safetyKill && (entry.anyVisible === true || entry.everVisible === true)) {
-        safetyKill = { at: new Date().toISOString(), entry };
-        log('SAFETY: a window of the restarted app became visible; killed');
-        try {
-          process.kill(pid, 'SIGKILL');
-        } catch {
-          // gone
-        }
-      }
-    }
-    if (!doneAt && readJsonl(e2eFile).some((r) => r.kind === 'done' && r.restarted)) {
-      doneAt = Date.now();
-    }
-    if (!alive()) {
-      result = safetyKill ? 'safety-kill' : doneAt ? 'done' : 'exited-early';
-      break;
-    }
-    if (doneAt && Date.now() - doneAt > 20000) break;
-    await new Promise((ok) => setTimeout(ok, 250));
-  }
-  if (alive()) {
+  let lastSize = 0;
+  let lastChange = Date.now();
+  const kill = () => {
     try {
       process.kill(pid, 'SIGKILL');
     } catch {
       // gone
     }
+  };
+  while (Date.now() < deadline) {
+    if (frontPid() === pid) everFront = true;
+    for (const entry of readJsonl(monitorFile)) {
+      if (!safetyKill && (entry.anyVisible === true || entry.everVisible === true)) {
+        safetyKill = { at: new Date().toISOString(), entry };
+        log(`SAFETY: a window of the ${phase} process became visible; killed`);
+        kill();
+      }
+    }
+    const records = readJsonl(e2eFile);
+    const next =
+      phase === 'second' && records.some((r) => r.kind === 'driver' && r.restartPhase === 'third');
+    if (
+      !doneAt &&
+      (next || (phase === 'third' && records.some((r) => r.kind === 'done' && r.restarted)))
+    ) {
+      doneAt = Date.now();
+    }
+    const size = existsSync(e2eFile) ? statSync(e2eFile).size : 0;
+    if (size !== lastSize) {
+      lastSize = size;
+      lastChange = Date.now();
+    }
+    if (!alive(pid)) {
+      result = safetyKill ? 'safety-kill' : doneAt || next ? 'done' : 'exited-early';
+      // The second process exits before the third reports: wait for it.
+      if (result === 'exited-early' && phase === 'second') {
+        for (let i = 0; i < 120 && result !== 'done'; i += 1) {
+          await new Promise((ok) => setTimeout(ok, 250));
+          if (readJsonl(e2eFile).some((r) => r.kind === 'driver' && r.restartPhase === 'third'))
+            result = 'done';
+        }
+      }
+      break;
+    }
+    if (isStalled({ now: Date.now(), lastChange, stallMs, finished: doneAt !== null })) {
+      log(`STALLED: the ${phase} process recorded nothing after ${String(lastProgress(records))}`);
+      result = 'stalled';
+      kill();
+      break;
+    }
+    if (doneAt && Date.now() - doneAt > 20000) break;
+    await new Promise((ok) => setTimeout(ok, 250));
   }
+  if (alive(pid)) kill();
   await new Promise((ok) => setTimeout(ok, 500));
   killTree(mon, 'SIGTERM');
   running.delete(mon);
   const end = readJsonl(monitorFile).find((r) => r.kind === 'end') ?? null;
-  const back = readJsonl(e2eFile).find((r) => r.kind === 'step' && r.name === 'restart-second');
   return {
+    phase,
     verdict: result,
-    firstPid,
-    secondPid: pid,
-    route: back?.route ?? null,
+    pid,
+    previousGone,
     everVisible: end ? end.everVisible : null,
     everFront,
     safetyKill,

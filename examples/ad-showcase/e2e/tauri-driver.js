@@ -7,13 +7,20 @@
 // steps' `executeJavaScript` is an indirect eval in this page (the lab build
 // allows it in its CSP), and the lab commands of src-tauri/src/lab.rs give
 // it the records, the window list, the native probes and the quit.
+//
+// It also records a heartbeat every 5 s and every page visibility change,
+// so the runner's stall watchdog can tell a stalled page (hidden: WebKit
+// stops its timers) from a slow step.
 
 import { invoke } from '@tauri-apps/api/core';
 
-import { RESTART_ROUTE, runSteps } from './steps.cjs';
+import { restartPhaseOf, runSteps } from './steps.cjs';
 
 /** The route the page started on (read before the page can change it). */
 const startHash = location.hash;
+
+/** How often the driver records a heartbeat (the runner's stall watchdog). */
+const BEAT_MS = 5000;
 
 /** Evaluates `code` in the page, as Electron's `executeJavaScript` does. */
 const evaluate = (code) => Promise.resolve((0, eval)(code));
@@ -35,8 +42,14 @@ async function start() {
         .catch(() => undefined),
     );
   };
-  const restartPhase = startHash === `#${RESTART_ROUTE}` ? 'second' : 'first';
+  const restartPhase = restartPhaseOf(startHash);
   record({ kind: 'driver', host: 'tauri', pid: config.pid, restartPhase, startHash });
+  document.addEventListener('visibilitychange', () => {
+    record({ kind: 'visibility', state: document.visibilityState });
+  });
+  const beat = setInterval(() => {
+    record({ kind: 'beat', visibility: document.visibilityState });
+  }, BEAT_MS);
   const page = { webContents: { executeJavaScript: evaluate } };
   const host = {
     name: 'tauri',
@@ -44,6 +57,7 @@ async function start() {
     record,
     mainWindow: () => page,
     quit: () => {
+      clearInterval(beat);
       void chain.then(() => invoke('e2e_quit'));
     },
     // The window's native hit test and the test-mode click (src-tauri/src/lab.rs).

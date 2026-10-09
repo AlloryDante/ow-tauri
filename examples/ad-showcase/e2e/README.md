@@ -18,12 +18,16 @@ node e2e/run.mjs --host tauri --mode live --steps live-layout     # LIVE, budget
 
 - `--steps smoke` (default): the window starts, page 1 renders, and the run
   waits (`--ad-wait`, 60 s) until its slots have an ad.
-- `--steps restart` (ow-tauri): starts on the parity page (no ad guest),
-  restarts in TEST through `window.showcase.restart` onto
-  `parity/restarted`, and follows the new process under its own window
-  monitor and front check until it reports that page and quits
-  (`summary.json` `restart`). It proves the restart of a built app and that
-  the lab environment carries over, so the new process stays invisible.
+- `--steps restart` (ow-tauri): starts on the parity page (no ad guest) in
+  TEST, restarts through `window.showcase.restart` in LIVE onto
+  `parity/restarted`, then in TEST onto `parity/restarted-again`, and
+  follows each new process under its own window monitor and front check
+  until the third reports its page and quits (`summary.json` `restart`).
+  It passes with three processes, the modes TEST, LIVE and TEST, each on
+  its page, and each old process gone within 10 s of the next one
+  reporting. No phase mounts an ad guest, so the LIVE phase loads no ad. It
+  proves the restart of a built app both ways and that the lab environment
+  carries over, so each new process stays invisible.
 - `--steps tour`: then every page in order, waiting for each format's events
   instead of fixed times: the size groups and the below-the-fold box
   (scrolled by the page's own scroll box), all eight layouts, the high-impact
@@ -111,6 +115,14 @@ per step, with `window.__showcase.snapshot()` and the new timeline rows),
   becomes the frontmost app (`lsappinfo front`), and a kill of the whole
   process group on every exit path. `summary.json` records `everVisible`,
   `everFront` and any process the app left behind.
+- ow-tauri: the lab window sits above other apps' windows on every Space,
+  so none can cover it (WebKit stops the timers of a covered page, which
+  stalled tours). The driver records a heartbeat every 5 s and each page
+  visibility change; a run that records nothing for `--stall` seconds
+  (default 60, `0` turns it off) is killed with verdict `stalled`, and
+  `summary.json` `stalled.after` names the last step it finished.
+- ow-tauri builds go to `$CARGO_TARGET_DIR` when it is set, else
+  `src-tauri/target/e2e`.
 
 `run.mjs` exits 0 only when the driver finished, `everVisible` is `false`,
 the app was never frontmost, nothing was left running, the driver reported
