@@ -1,8 +1,54 @@
 # ow-electron parity harness
 
-A small ow-electron app plus scripts that watch what `@overwolf/ow-electron` does as a black box. ow-tauri uses it to match ow-electron's ad, consent, analytics and identity behaviour on the wire. The harness only observes: it records requests, files, cookies and the values ow-electron exposes. It never changes ow-electron.
+This folder records what an app does on ow-electron and on Tauri with
+`tauri-plugin-overwolf`, and compares the two. It is a small ow-electron app
+plus scripts that watch `@overwolf/ow-electron` as a black box: they record
+requests, files, cookies and the values ow-electron exposes, and never change
+ow-electron. `tauri-app/` runs the same scenarios on the plugin, and
+`parity-diff.mjs` lists every difference. ow-tauri uses the harness to match
+ow-electron's ad, consent, analytics and identity behaviour on the wire.
 
-It is not part of the npm workspace and nothing in ow-tauri imports it.
+It is not part of the npm workspace, and nothing in ow-tauri imports it. To
+check the parity results yourself, start with
+[Rerun the proof](#rerun-the-proof). The rest of this file is for
+contributors who add scenarios or read captures.
+
+## Rerun the proof
+
+You run one scenario on ow-electron (the baseline), the same scenario on
+Tauri with the plugin, and diff the two captures: host and ad page requests,
+consent, cookies, state files, guest state and `<owadview>` events.
+
+You need macOS (the Tauri run needs the window monitor), Node.js 22.12 or
+newer, and Rust with the [Tauri 2 prerequisites](https://tauri.app/start/prerequisites/).
+Install at the repository root, then the harness on its own:
+
+```sh
+npm install
+npm run build --workspace tauri-plugin-overwolf-api
+cd tools/parity-harness
+npm install --workspaces=false
+```
+
+Record the baseline and a Tauri run with test ads and invisible windows, then
+diff them. The first Tauri run builds `tauri-app` in debug with the plugin's
+`lab` feature.
+
+```sh
+node run.mjs --mode test --present transparent --window-monitor --run-id E1
+node run.mjs --host tauri --mode test --present transparent --window-monitor --run-id T1
+node parity-diff.mjs captures/E1 captures/T1
+```
+
+To compare one scenario, add the same `--scenario <name>` to both runs, for
+example `--scenario sizes`. Each run writes `captures/<run-id>/`
+(git-ignored). The diff writes `parity-diff.md` and `parity-diff.json` into
+the Tauri run's folder and exits 1 while a `BUG` row remains. An
+`intended:*` row is a documented difference (the host label, a platform gap,
+an optimisation or a deviation), a `variance` row also differs between two
+ow-electron runs, and a `BUG` row is any other difference. See
+[the class table](#comparing-the-hosts-parity-diffmjs) and
+[docs/PARITY.md](../../docs/PARITY.md) for the results.
 
 ## What it records
 

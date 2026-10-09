@@ -1,298 +1,399 @@
-# ow-tauri Ad Showcase
+# ow-tauri ad showcase
 
-One window that shows every `<owadview>` ad format working, in test and in
-live mode, with **the same page on ow-electron and on Tauri with
-`tauri-plugin-overwolf`**. It is built for a presenter: pick a page, watch
-the ads load and read every event the ad element raises in the timeline on
-the right.
+A Tauri 2 app that shows every Overwolf `<owadview>` ad format and the consent
+flow through `tauri-plugin-overwolf`. The same page also runs on ow-electron,
+so you can put the two hosts side by side and compare them. Pick a page, watch
+the ads load, and read every event the ad elements raise in the timeline on
+the right. It is for developers who want to see the plugin work before they
+add ads to their own app, and for anyone who presents the project.
 
-- `src/renderer/` is the page: plain TypeScript and CSS, no framework. It
-  talks to its host only through `window.showcase`
-  ([src/shared/ipc.ts](src/shared/ipc.ts) `ShowcaseApi`).
-- **Tauri** ([src-tauri/](src-tauri/), [src/tauri/](src/tauri/)): a plain
-  Tauri 2 app. `src/tauri/install.ts` builds `window.showcase` from
-  [`tauri-plugin-overwolf-api`](../../packages/api/README.md) (consent, email
-  hashes) and the app's own commands
-  ([src-tauri/src/showcase.rs](src-tauri/src/showcase.rs): host info,
-  exports, the parity report, restart, window actions), and imports
-  `tauri-plugin-overwolf-api/adview` for the `<owadview>` element. The
-  window is a normal `WebviewWindow` labelled `main`; its capability
-  ([src-tauri/capabilities/default.json](src-tauri/capabilities/default.json))
-  grants `overwolf:default` and `overwolf:email-hashes`.
-- **ow-electron** (the twin, for side-by-side comparison):
-  [src/main/main.ts](src/main/main.ts) and
-  [src/preload/preload.ts](src/preload/preload.ts) answer the same API over
-  Electron IPC with `app.overwolf`.
-- One rolldown config ([rolldown.config.mjs](rolldown.config.mjs)) builds
-  both; [scripts/stage.mjs](scripts/stage.mjs) writes them to `.stage/`
-  (git-ignored).
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/showcase/layouts-dark.webp">
+  <img alt="The showcase in test mode on the Layouts page: the numbered page list on the left, the Tall Duo layout with a 160x600 test ad and a 400x600 slot playing a video test ad in the middle, and the event timeline with its counts on the right." src="../../docs/images/showcase/layouts-light.webp">
+</picture>
 
-## Prerequisites
+To run it, start with [Run it in test mode](#run-it-in-test-mode). To present
+it, read [Showing it to someone](#showing-it-to-someone).
 
-- Node 22.12 or newer and the [Tauri 2 prerequisites](https://tauri.app/start/prerequisites/)
-  for your OS (Rust, WebView2 on Windows, WebKitGTK on Linux).
-- Install from the repository root (the example is an npm workspace, so
-  `tauri-plugin-overwolf-api` links to `packages/api`), and install
-  ow-electron for the twin in `tools/parity-harness` (its own install,
-  outside the workspace):
+## Run it in test mode
 
-```shell
+You need:
+
+- Node.js 22.12 or newer;
+- Rust 1.90 or newer and the rest of the
+  [Tauri 2 prerequisites](https://tauri.app/start/prerequisites/) for your OS:
+  the Xcode command line tools on macOS, the WebView2 Runtime and the MSVC
+  build tools on Windows, WebKitGTK on Linux;
+- Windows 10/11 or macOS 14 or newer to see ads. On Windows the ads need the
+  WebView2 Runtime 98.0.1108.44 or newer. On Linux the app builds and runs,
+  but ads report `unsupported`.
+
+From a fresh clone, install at the repository root first, then run the
+example:
+
+```sh
+git clone https://github.com/AlloryDante/ow-tauri
+cd ow-tauri
 npm install
 npm run build --workspace tauri-plugin-overwolf-api
-(cd tools/parity-harness && npm install --workspaces=false)
+cd examples/ad-showcase
+npm run start:tauri:test
 ```
 
-The showcase runs ow-electron from there
-([scripts/ow-electron.mjs](scripts/ow-electron.mjs)) instead of depending on
-it, so the workspace install stays free of the Electron runtime download;
-[types/electron.d.ts](types/electron.d.ts) types the part of `electron` the
-twin uses.
+The plugin is not on crates.io or npm yet, and the example does not need
+them. It is an npm workspace, so `tauri-plugin-overwolf-api` links to
+`packages/api`, and `src-tauri/` takes the plugin by path from
+`crates/tauri-plugin-overwolf`. If `packages/api/dist` is missing, the stage
+script builds it for you.
 
-## Run both hosts
+`start:tauri:test` stages the page, builds a debug app with the page embedded
+(`tauri build --debug --no-bundle`) and runs the binary with `--test-ad`.
+[scripts/run.mjs](scripts/run.mjs) does this on every OS (the binary is an
+`.exe` on Windows, and `CARGO_TARGET_DIR` is honoured). Arguments after `--`
+go to the app, and `--no-build` reuses the last binary:
 
-From `examples/ad-showcase`:
+```sh
+npm run start:tauri:test -- --showcase-page=layouts/tower
+node scripts/run.mjs --no-build -- --test-ad
+```
 
-| Script                                | What it does                                                                                  |
-| ------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `npm run start:tauri:test`            | stage, debug build with the page embedded, run it with `--test-ad` (test ads)                |
-| `npm run start:tauri`                 | the same without `--test-ad` (live ads)                                                       |
-| `npm run dev:tauri:test` / `dev:tauri` | `tauri dev` (hot reload); Restart in TEST/LIVE is refused there with a notice (below)        |
-| `npm run start:electron:test`         | stage, then `ow-electron --test-ad .stage/electron` (test ads)                                |
-| `npm run start:electron`              | the same without `--test-ad` (live ads)                                                       |
-| `npm run build`                       | stage both hosts (`.stage/electron`, `.stage/tauri`)                                          |
-| `npm run typecheck` / `lint` / `test` | `tsc`, ESLint, vitest                                                                         |
-| `npm run check:rust`                  | `cargo fmt --check`, `cargo clippy -D warnings` with and without the `lab` feature            |
-| `npm run lab:smoke`                   | the invisible lab smoke run (macOS, agents; see [e2e/README.md](e2e/README.md))               |
-| `npm run screenshots`                 | the documentation images, in the invisible lab with test ads (see [Screenshots](#screenshots)) |
+For hot reload, run `npm run dev:tauri:test` instead. It uses `tauri dev`,
+where the page comes from the Tauri CLI's dev server. That server stops when
+the first process exits, so Restart in TEST/LIVE cannot work there: the app
+refuses the restart and the banner tells you to use `npm run start:tauri`.
 
-`start:tauri*` run [scripts/run.mjs](scripts/run.mjs): `tauri build --debug
---no-bundle` with the staged identity, then the binary (`.exe` on Windows),
-arguments after `--` passed through.
+Stay on the `:test` scripts while you explore. They show Overwolf's test ads,
+which fill every format. Live ads are covered in
+[Test mode and live mode](#test-mode-and-live-mode).
 
-ow-electron downloads its runtime on first use. `src-tauri/` is its own
-Cargo workspace with its own `Cargo.lock`, like the packages sample.
+## What you see
 
-## TEST vs LIVE
+The window is 1280x860 (at least 1100x700), large enough for every format's
+documented minimum.
 
-- **TEST** (`--test-ad`): Overwolf's test inventory. Every format fills,
-  including high impact, interstitial and reward. The top bar shows a
-  **TEST** badge.
-- **LIVE** (no switch): real demand for the app's uid. The top bar shows a
-  **LIVE** badge. Standard display and video fill once Overwolf has enabled
-  the uid; a house ad fills on no-fill once one is set up. High impact,
-  interstitial and reward are demand-gated: they do not fill until Overwolf
-  qualifies the uid or attaches a demo campaign.
-- The mode follows the `--test-ad` switch on both hosts (the plugin reads
-  it; `showcase_info` reports it), so use the `:test` scripts.
-- **Restart in TEST / LIVE** in the top bar relaunches the app with or
-  without `--test-ad` and comes back to the same page and choice
-  (`--showcase-page=<page>[/<choice>]`, e.g. `layouts/tower` or
-  `sizes/300x250`; the same switch opens the app on that page). Going LIVE
-  asks for an inline confirmation first. On Tauri the new process starts
-  once the old one has exited (`RunEvent::Exit`: the plugin has drained its
-  analytics and the single-instance lock is released). Under `tauri dev`
-  the page comes from the Tauri CLI's dev server, which stops with the first
-  process, so the app refuses the restart and the banner says to use
-  `npm run start:tauri` instead.
-
-## Identity
-
-The tracked [package.json](package.json) holds a placeholder identity
-(`author: "Example Studio"`, `productName: "ow-tauri Ad Showcase"`), so a clean
-clone runs in test mode with the formula uid (`docs/CONTRACT.md` G.2).
-
-For a demo with your own app identity:
-
-1. Copy [identity.example.json](identity.example.json) to
-   `identity.local.json` (git-ignored) and fill in `author` and
-   `productName` as registered with Overwolf. Set `uid` only when Overwolf
-   assigned one in the console; it becomes `overwolf.uid`, which both hosts
-   use as is.
-2. Run any start script (or `npm run build`). `scripts/stage.mjs` merges the
-   file into `.stage/package.json`, `.stage/electron/package.json` and
-   `.stage/tauri.conf.json` (product name, version and `plugins.overwolf`
-   author, name and uid), which the Tauri scripts pass as `--config`.
-   Nothing tracked changes: `git status` stays clean.
-
-`--identity FILE` (`node scripts/stage.mjs --host all --identity FILE`)
-stages another file. The stage script never prints the values. The window
-shows the uid, cuid and muid masked (`abcd…wxyz`); **Reveal** shows one in
-full on screen only, and timeline exports carry the masked uid.
-
-## The window
-
-- **Top bar**: host and version, the TEST/LIVE badge, the uid (masked), the
-  consent chip (`checking…`, `EU rules apply`, `not required` or `could not
-  check`; its tooltip names `isCMPRequired()`), the theme toggle and
-  Restart.
-- **Sidebar**: the nine pages (keys `1` to `9`).
-- **Timeline** (right rail): every event of every `<owadview>` plus every
-  action you take (`control:*` rows), with the time, the slot's `cid` and
-  the time since the slot was created. **This page** (the default) shows the
-  slots created on the current visit of the page plus the app and control
-  rows; **All pages** shows everything. The counts per event at the bottom
-  and the slot filter follow the scope. Filter by slot or by family, pause,
-  click a row to see its payload (a row's tooltip has its full name and
-  `cid`), and **Export JSON** to
+- The top bar has the app name, a TEST or LIVE badge, the host and its
+  version, the uid (masked; click it to reveal it on screen), a consent chip,
+  the Theme button and Restart in LIVE or Restart in TEST. The consent chip
+  reads `checking…`, `EU rules apply`, `not required` or `could not check`;
+  its tooltip names `isCMPRequired()`.
+- The sidebar lists nine pages. Keys `1` to `9` open them.
+- The timeline on the right lists every event of every `<owadview>` and every
+  action you take (`control:*` rows), with the time, the slot's `cid` and the
+  time since the slot was created. This page (the default) shows the slots of
+  the current visit plus the app and control rows; All pages shows
+  everything. The counts at the bottom and the slot filter follow that
+  choice. You can filter by slot or event family, pause, hide the rail and
+  click a row to see its payload. Export JSON writes
   `<userData>/exports/timeline-<host>-<mode>-<time>.json`. Paths in the
-  window and in the export show the home folder as `~`.
+  window and in the export show your home folder as `~`.
 
-## Pages
+The pages follow, in sidebar order.
 
-1. **Sizes**: the seven documented sizes (970x90, 728x90, 160x600, 400x600,
-   400x60, 400x300, 300x250), each with its own `cid`. A slot loads only
-   once at least half of it is in view, and all seven do not fit one
-   window, so the
-   **Show** select picks a group: **Towers and rectangles** (160x600,
-   400x600, 400x300, 300x250; the default), **Banners** (970x90, 728x90,
-   400x60), **Below the fold** (a 300x250 in a scroll box that loads only
-   when scrolled into view) or one size alone. Switching builds fresh
-   containers. The timeline folds away on this page to make room. In LIVE
-   mode the groups leave the 400x300 out (one video container per page;
-   policy note on the page); it can still be shown alone.
-2. **Layouts**: the eight recommended layouts at true size; switching or
-   **Recreate** builds fresh containers. This is the live-mode proof page.
-3. **High impact**: a 440 px wide, full-height zone with Tower Plus
-   (400x60 + 400x600 with `adstyle="high-impact-ad;"`). On
-   `high-impact-ad-loaded` the slot takes the zone and its sibling is hidden
-   with `display: none`; on `high-impact-ad-removed` both come back.
-4. **Interstitial**: Default, Red dim, Blur 3 and With `unit` each add a
-   performance `<owadview>`. The **Click me** counter shows clicks passing
-   through while the ad loads and blocked once it is shown. The DOM panel
-   shows the live `owadview` count and the element's `pointer-events`.
-   **Shrink to 900x500**, then adding an interstitial, shows the error path
-   (`performance_ad_error`, then `shutdown`); **Restore size** undoes it.
-   Shrinking while an interstitial is already shown does not end it. A no-fill ends with `shutdown`
-   only: `performance_ad_no_fill` has not been seen to fire.
-5. **Reward**: a coin shop. The 400x300 `adstyle="rewarded-ad;"` slot
-   preloads, is hidden on `video_ad_ready`, and **Watch ad · +100 coins** shows
-   it. On `complete` after a `play` of the same cycle the coins are granted
-   once and the slot hides for the next preload. A 300x250 reward slot shows
-   "unavailable" after 10 s without `video_ad_ready`. The grant is
-   client-side: Overwolf documents no server verification or postback.
-6. **House**: one 400x300 slot and its `house_ad_action` /
-   `house-ad-action` events. House ads appear on no-fill once configured in
-   the Dev Console for the uid.
-7. **Controls**: one 400x300 video slot with a `customTracking` editor,
-   mute (`setAudioMuted`), `display: none`, scroll out of view and back, hide
-   the window for 3 s and minimize for 3 s.
-8. **Consent & identity**: `isCMPRequired`, the ad privacy settings window,
-   `generateUserEmailHashes` for the fixed address `player@example.com`, and
-   the identity table (uid, cuid, muid masked; host, version, platform,
-   test flag).
-9. **Parity**: the parity harness's report (`parity-diff.json` copied to
-   `<userData>/parity-report.json`), or the commands that make it.
+### 1. Sizes
 
-## Measured results (lab, macOS, 2026-10-07)
+The seven documented sizes (970x90, 728x90, 160x600, 400x600, 400x60,
+400x300, 300x250), each with its own `cid`. Look at how a slot loads only
+once at least half of it is in view.
 
-These runs used the earlier ow-tauri host (before the app moved to
-`tauri-plugin-overwolf-api`); the current Tauri app passes the lab smoke
-(page 1 fills) and restart checks. Invisible lab runs (`e2e/`, alpha-0 windows, never frontmost, no process
-left), ow-tauri 0.1.0 on Tauri 2.12.1 and ow-electron 42.11.4 on one Mac
-(1280x837 window). TEST is the full tour (47 steps, every page and button);
-LIVE used a lab app identity whose uid is not enabled for live demand.
-"Same events" means the same ad event names per slot over the run, guest
-lifecycle left out (`e2e/compare.mjs`).
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/showcase/sizes-dark.webp">
+  <img alt="The Sizes page with the Towers and rectangles group: a 160x600 test ad, a 400x600 slot with a test banner and a video test ad, a 400x300 video test ad and a 300x250 test ad, each with its status chip." src="../../docs/images/showcase/sizes-light.webp">
+</picture>
 
-**TEST mode** (ow-tauri tour `VR1-T-tour`, built from commit `4b230a5`,
-against ow-electron tour `B2-E-tour-4`)
+All seven do not fit one window, so the Show select picks a group: Towers
+and rectangles (160x600, 400x600, 400x300, 300x250; the default), Banners
+(970x90, 728x90, 400x60), Below the fold (a 300x250 in a scroll box that
+loads only when you scroll it into view) or one size alone. Switching builds
+fresh containers. The timeline folds away on this page to make room. In live
+mode the groups leave out the 400x300, because a page may have only one
+video container; you can still show it alone.
 
-| Format (page)                             | ow-tauri                                                             | ow-electron            | Notes                                                                                                                                                           |
-| ----------------------------------------- | -------------------------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Standard, seven sizes (1)                 | all fill, 2 to 34 s                                                  | all fill, 3 to 7 s     | 970x90 test creative is often blank on both                                                                                                                     |
-| Below the fold (1)                        | waits, fills about 2 s after scrolling in                            | same                   |                                                                                                                                                                 |
-| Eight layouts (2)                         | 8/8 fill, 2.5 to 3.7 s                                               | 8/8 fill, 2.5 to 5.1 s | which slot gets a video creative varies per load                                                                                                                |
-| High impact (3)                           | takeover, then removed and restored                                  | same                   | `high-impact-ad-loaded` / `-removed`, sibling `display: none`                                                                                                   |
-| Interstitial (4)                          | pass-through while loading, modal after                              | same                   | probe: "Click me" 0 to 1 while loading, the ad on top once shown                                                                                                |
-| Interstitial, small window (4)            | `performance_ad_error`, `shutdown`                                   | same                   |                                                                                                                                                                 |
-| Interstitial, red dim / blur 3 / unit (4) | load / load / `shutdown`                                             | same                   |                                                                                                                                                                 |
-| Reward (5)                                | ready, play, granted once, next ready                                | same                   | `complete` came after 14 s (ow-tauri) and 87 s (ow-electron) after a 2 s hide during play; later ow-tauri tours did not always complete (see Lab) |
-| House slot (6)                            | test video plays                                                     | same                   | no house ad configured                                                                                                                                          |
-| Controls (7)                              | tracking, mute, display, scroll, hide, minimize: a new ad after each | same                   |                                                                                                                                                                 |
-| Consent and identity (8)                  | CMP required, three hashes, uid masked                               | same                   | the privacy settings window opens at alpha 0 in later lab tours, app kept in the background                                                                     |
+### 2. Layouts
 
-Step by step, 255 of 301 compare rows are the same and 21 differ only in
-guest lifecycle (ow-electron reports a `did-fail-load` per guest). The
-other 25 are timing: a video's `play` lands one step earlier or later, a
-reward slot's status is one step apart, and at the restore step the
-high-impact slot already reports a new load on ow-tauri only.
+Overwolf's eight recommended layouts at true size: Combo Classic, Tall Duo,
+Tower Plus, Studio Tower, Tower, Studio, Studio Plus and PopUp Studio Plus.
+Each has at most one video container, so this is the page to use in live
+mode. Switching, or Recreate, builds fresh containers. The picture at the top
+of this file shows Tall Duo.
 
-**LIVE mode** (9 ad loads in total, never clicked)
+### 3. High impact
 
-| Run (page)               | Loads | ow-tauri                                                    | ow-electron                                             |
-| ------------------------ | ----- | ----------------------------------------------------------- | ------------------------------------------------------- |
-| Layout Combo Classic (2) | 2 + 2 | auctions sent (`gampad/ads`, prebid bidders), no fill event | auctions sent, slot impression ping sent, no fill event |
-| 300x250 alone (1)        | 1 + 1 | auctions sent, no fill event                                | auctions sent, slot impression ping sent, no fill event |
-| Reward (5)               | 2     | video auctions sent, no `video_ad_ready`                    | not run                                                 |
-| Interstitial (4)         | 1     | `shutdown` (no fill)                                        | not run                                                 |
+A 440 px wide, full-height zone with Tower Plus (400x60 and 400x600, the
+400x600 with `adstyle="high-impact-ad;"`). Watch the State chip: on
+`high-impact-ad-loaded` the slot takes the whole zone and its sibling gets
+`display: none`; on `high-impact-ad-removed` both come back.
 
-No format filled live on either host for this uid: the requests go out the
-same way, demand does not answer. The ow-tauri guest probe lists only the
-guest page's own requests, not those of its frames, so the impression ping
-is not visible there.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/showcase/high-impact-dark.webp">
+  <img alt="The High impact page during a takeover: a test ad fills the 440 px zone on the left, the State chip reads Takeover, and the timeline ends with high-impact-ad-loaded." src="../../docs/images/showcase/high-impact-light.webp">
+</picture>
 
-## Run of show (presenter)
+### 4. Interstitial
 
-A person runs this, with a visible window, ideally on Windows (macOS has a
-known request-header gap, `docs/ARCHITECTURE.md` section 6).
+Default, Red dim, Blur 3 and With unit each add a performance `<owadview>`
+to the page. The Click me counter shows clicks passing through while the ad
+loads and blocked once it is shown.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/showcase/interstitial-dark.webp">
+  <img alt="The Interstitial page with a test interstitial over the page and its close button, and performance_ad_loaded as the last timeline row." src="../../docs/images/showcase/interstitial-light.webp">
+</picture>
+
+The DOM panel shows the live `owadview` count and the element's
+`pointer-events`. Shrink to 900x500, then add an interstitial, to see the
+error path (`performance_ad_error`, then `shutdown`); Restore size undoes
+it. Shrinking while an interstitial is already shown does not end it. A
+no-fill ends with `shutdown` only: `performance_ad_no_fill` has not been
+seen to fire.
+
+### 5. Reward
+
+A small coin shop. Press Watch ad · +100 coins and follow the steps from
+Preloading to Granted +100.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/showcase/reward-playing-dark.webp">
+  <img alt="The Reward page while the rewarded video test ad plays: the shop shows 0 coins, with Preloading and Ready checked and Playing as the current step." src="../../docs/images/showcase/reward-playing-light.webp">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/showcase/reward-granted-dark.webp">
+  <img alt="The Reward page after the grant: 100 coins, every step through Granted +100 checked, the slot hidden for the next preload and the 300x250 slot marked unavailable." src="../../docs/images/showcase/reward-granted-light.webp">
+</picture>
+
+The 400x300 `adstyle="rewarded-ad;"` slot preloads, hides on
+`video_ad_ready`, and Watch ad shows it. On `complete` after a `play` of the
+same cycle the coins are granted once, and the slot hides for the next
+preload. Hide 2 s during play hides the slot while it plays. A second,
+300x250 reward slot shows "unavailable" after 10 s without
+`video_ad_ready`. The grant happens in the page: Overwolf documents no
+server verification or postback for reward ads.
+
+### 6. House
+
+One 400x300 slot and a log of its `house_ad_action` and `house-ad-action`
+events. House ads appear on no-fill once one is set up in the Dev Console
+for the app's uid.
+
+### 7. Controls
+
+One 400x300 video slot with a `customTracking` editor, mute
+(`setAudioMuted`), `display: none`, scroll out of view and back, hide the
+window for 3 s and minimize it for 3 s. Each action is a `control:` row in
+the timeline.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../docs/images/showcase/controls-dark.webp">
+  <img alt="The Controls page with a playing 400x300 video test ad, the customTracking editor and the sound, visibility and window buttons." src="../../docs/images/showcase/controls-light.webp">
+</picture>
+
+### 8. Consent & identity
+
+`isCMPRequired()`, a button that opens the ad privacy settings window,
+`generateUserEmailHashes()` for the fixed address `player@example.com`, and
+the identity table (uid, cuid and muid masked; host, version, platform and
+test flag).
+
+### 9. Parity
+
+The parity harness's report (`parity-diff.json` copied to
+`<userData>/parity-report.json`), or the commands that make it. Both hosts
+read the same file, because they use the same userData folder for the same
+product name. See
+[Rerun the proof](../../tools/parity-harness/README.md#rerun-the-proof).
+
+## Showing it to someone
+
+Run the demo in normal, visible windows, ideally on Windows. macOS has a
+known gap in the request headers of ad subresources
+([ARCHITECTURE 6.6](../../docs/ARCHITECTURE.md#66-request-shaping)).
+
+Before a demo that includes live ads, make sure that:
+
+- Overwolf has enabled your demo uid for live ads;
+- a house ad, with an event name, is set up in the Dev Console for that uid;
+- Overwolf has qualified the uid, or attached a demo campaign, for high
+  impact, interstitial and reward. Without that, show these three in test
+  mode only.
+
+Then:
 
 1. Start `npm run start:electron:test` and `npm run start:tauri:test` side by
    side.
-2. Walk pages 1 to 8 on both. Close the interstitial yourself. If Overwolf's
-   QA asks for it, click an ad a few times: each click opens one browser
-   window and nothing crashes.
-3. Export both timelines; show them and the parity report (page 9).
-4. **Restart in LIVE** on both with the demo identity. Show page 2 filling
-   and a house ad on no-fill (if one is set up). Say plainly that high
-   impact, interstitial and reward will not fill until Overwolf qualifies
-   the uid; the timeline shows the live ad requests going out on both
-   hosts.
-5. Minimize: the ads hide. Close the app: no ad process is left.
+2. Open Sizes, then Layouts, and point at the timeline as the slots load.
+3. Walk High impact, Interstitial, Reward, House and Controls on both
+   hosts. Close the interstitial yourself.
+4. On Consent & identity, show the consent chip, open the ad privacy
+   settings and generate the email hashes.
+5. Export both timelines and open Parity.
+6. Press Restart in LIVE on both, with your own identity (below). Show
+   Layouts filling, and a house ad on no-fill if one is set up. Say that high
+   impact, interstitial and reward do not fill until Overwolf qualifies the
+   uid; the timeline still shows each slot's ad page loading on both hosts.
+7. Minimize the window: the ads hide. Close the app: no ad process is left.
 
-## Before the meeting (with Overwolf)
+Clicking an ad is for test mode only, and only when someone asks to see it:
+each click opens one browser window and nothing crashes. Never click a live
+ad.
 
-- [ ] The demo uid is enabled for live ads on Overwolf's backend.
-- [ ] A house ad (with an event name) is set up in the Dev Console for it.
-- [ ] A demo campaign or test qualification for high impact, interstitial
-      and reward on the demo uid; without it these three are shown in TEST
-      mode only.
-- [ ] A Windows run of the full ow-tauri test suite is green.
-- [ ] A live rehearsal on the Windows machine.
+Do not claim:
 
-## Do not claim
-
-- In-stream ads: ow-electron has no API for them.
-- Live fill of high impact, interstitial or reward without qualification.
+- in-stream ads (ow-electron has no API for them);
 - macOS request-header parity for subresources and `x-ow-*` headers, or
-  Linux request shaping.
-- A server-verified reward: none exists.
-- That `performance_ad_no_fill` fires: ow-electron sends `shutdown` only.
+  request shaping on Linux;
+- a server-verified reward (none exists);
+- that `performance_ad_no_fill` fires (ow-electron sends `shutdown` only).
 
-## Screenshots
+## Test mode and live mode
 
-`npm run screenshots` records the documentation images: the lab tour with
-stills in the dark and the light theme, test ads only, with the tracked
-placeholder identity (it refuses to run with `identity.local.json` and checks
-that the window shows the placeholder's formula uid). Output:
-`e2e/out/screenshots/<theme>/` (git-ignored); `--out DIR` copies the page
-images to `DIR/<page>-<dark|light>.png`. See
+- Test mode (`--test-ad`, TEST badge) uses Overwolf's test inventory. Every
+  format fills, including high impact, interstitial and reward.
+- Live mode (no `--test-ad`, LIVE badge) uses real demand for the app's uid.
+  Standard display and video fill once Overwolf has enabled the uid, and a
+  house ad fills on no-fill once one is set up. High impact, interstitial and
+  reward do not fill until Overwolf qualifies the uid or attaches a demo
+  campaign.
+
+The mode follows the `--test-ad` switch on both hosts: the plugin reads it,
+and `showcase_info` reports it to the page.
+
+Restart in TEST or Restart in LIVE relaunches the app with or without
+`--test-ad` and comes back to the same page and choice
+(`--showcase-page=<page>[/<choice>]`, for example `layouts/tower` or
+`sizes/300x250`; the same switch opens the app on that page). Going LIVE
+asks you to confirm in a banner first. On Tauri the new process starts once
+the old one has exited (`RunEvent::Exit`), after the plugin has sent its
+pending analytics and the single-instance lock is free.
+
+Live ads fill only for an app registered with Overwolf
+([OVERWOLF-ONBOARDING.md](../../docs/OVERWOLF-ONBOARDING.md)). The tracked
+[package.json](package.json) holds a placeholder identity
+(`author: "Example Studio"`, `productName: "ow-tauri Ad Showcase"`), so a
+clean clone runs with the formula uid
+([CONTRACT G.2](../../docs/CONTRACT.md#g2-app-uid)) and test ads. For live
+mode, give it your own app identity:
+
+1. Copy [identity.example.json](identity.example.json) to
+   `identity.local.json`, which is git-ignored, and fill in `author` and
+   `productName` as registered with Overwolf. Set `uid` only when Overwolf
+   assigned one in the console; it becomes `overwolf.uid`, which both hosts
+   use as is.
+2. Run any start script, or `npm run build`. `scripts/stage.mjs` merges the
+   file into `.stage/package.json`, `.stage/electron/package.json` and
+   `.stage/tauri.conf.json` (product name, version, and the `plugins.overwolf`
+   author, name and uid). The Tauri scripts pass that config with `--config`.
+   Nothing tracked changes, so `git status` stays clean.
+
+To stage another file, run `node scripts/stage.mjs --host all --identity FILE`.
+The stage script never prints the identity values. The window shows the uid,
+cuid and muid masked (`abcd…wxyz`); Reveal shows one in full on screen only,
+and timeline exports carry the masked uid.
+
+Never click live ads. The LIVE confirmation banner says the same.
+
+## Compare with ow-electron
+
+The ow-electron twin answers the same page API as the Tauri app, over
+Electron IPC with `app.overwolf`. Install ow-electron once, in the parity
+harness folder (its own install, outside the workspace):
+
+```sh
+cd tools/parity-harness
+npm install --workspaces=false
+```
+
+Then, from `examples/ad-showcase`:
+
+```sh
+npm run start:electron:test   # test ads
+npm run start:electron        # live ads
+```
+
+Both stage the ow-electron app into `.stage/electron` and run it with
+[scripts/ow-electron.mjs](scripts/ow-electron.mjs), which takes ow-electron
+from the harness install. ow-electron downloads its runtime on first use.
+
+## Scripts
+
+Run these from `examples/ad-showcase`.
+
+| Script                        | What it does                                                                                       |
+| ----------------------------- | -------------------------------------------------------------------------------------------------- |
+| `npm run start:tauri:test`    | stage, debug build with the page embedded, run it with `--test-ad` (test ads)                      |
+| `npm run start:tauri`         | the same without `--test-ad` (live ads)                                                            |
+| `npm run dev:tauri:test`      | `tauri dev` with hot reload and `--test-ad`; Restart is refused here                               |
+| `npm run dev:tauri`           | the same without `--test-ad`                                                                       |
+| `npm run start:electron:test` | stage, then `ow-electron --test-ad .stage/electron` (test ads)                                     |
+| `npm run start:electron`      | the same without `--test-ad` (live ads)                                                            |
+| `npm run build`               | stage both hosts (`.stage/electron`, `.stage/tauri`)                                               |
+| `npm run stage`               | the same as `build`                                                                                |
+| `npm run typecheck`           | `tsc`                                                                                              |
+| `npm run lint`                | ESLint                                                                                             |
+| `npm run test`                | vitest                                                                                             |
+| `npm run check:rust`          | `cargo fmt --check`, and `cargo clippy -D warnings` with and without the `lab` feature             |
+| `npm run lab:smoke`           | the invisible lab smoke run (macOS; see [e2e/README.md](e2e/README.md))                            |
+| `npm run screenshots`         | the documentation images, in the invisible lab with test ads (see [Lab and tests](#lab-and-tests)) |
+
+## How it is built
+
+- `src/renderer/` is the page: plain TypeScript and CSS, no framework. It
+  talks to its host only through `window.showcase` (`ShowcaseApi` in
+  [src/shared/ipc.ts](src/shared/ipc.ts)).
+- The Tauri app is [src-tauri/](src-tauri/) and [src/tauri/](src/tauri/), a
+  plain Tauri 2 app. `src/tauri/install.ts` builds `window.showcase` from
+  [`tauri-plugin-overwolf-api`](../../packages/api/README.md) (consent,
+  email hashes) and the app's own commands
+  ([src-tauri/src/showcase.rs](src-tauri/src/showcase.rs): host info,
+  exports, the parity report, restart, window actions). It imports
+  `tauri-plugin-overwolf-api/adview` for the `<owadview>` element. The window
+  is a normal `WebviewWindow` labelled `main`. Its capability
+  ([src-tauri/capabilities/default.json](src-tauri/capabilities/default.json))
+  grants `overwolf:default` and `overwolf:email-hashes`.
+- The ow-electron twin is [src/main/main.ts](src/main/main.ts) and
+  [src/preload/preload.ts](src/preload/preload.ts).
+  [types/electron.d.ts](types/electron.d.ts) types the part of `electron` the
+  twin uses. The showcase runs ow-electron from the harness install instead
+  of depending on it, so the workspace install does not download the
+  Electron runtime.
+- One rolldown config ([rolldown.config.mjs](rolldown.config.mjs)) builds
+  both hosts, and [scripts/stage.mjs](scripts/stage.mjs) writes them to
+  `.stage/` (git-ignored).
+- `src-tauri/` is its own Cargo workspace with its own `Cargo.lock`, like
+  the packages sample.
+
+## Lab and tests
+
+`npm run typecheck`, `npm run lint`, `npm run test` and `npm run check:rust`
+are the checks to run before you commit.
+
+`e2e/` drives the showcase headlessly on both hosts: macOS, invisible
+windows, test ads. See [e2e/README.md](e2e/README.md). The Tauri app has the
+lab only with its `lab` Cargo feature, which is off by default.
+
+`npm run screenshots` records the documentation images. It runs the lab
+tour with stills in the dark and the light theme, with test ads only and the
+tracked placeholder identity. It refuses to use `identity.local.json` and
+checks that the app reported the placeholder's formula uid. Output goes to
+`e2e/out/screenshots/<theme>/` (git-ignored); `--out DIR` also copies each
+still to `DIR/<still>-<theme>.png`. See
 [scripts/screenshots.mjs](scripts/screenshots.mjs).
 
-## Lab
+For results that compare the two hosts, see
+[docs/PARITY.md](../../docs/PARITY.md).
 
-`e2e/` drives the showcase headlessly on both hosts (macOS, invisible
-windows, test ads): see [e2e/README.md](e2e/README.md). The Tauri shell has
-the lab only with its `lab` Cargo feature, which is off by default.
+## Troubleshooting
 
-Open lab notes: in one of four ow-tauri tours of 2026-10-07 the reward
-guest asked the host to reload (`__host:reload`) when its slot came back
-from a 2 s `display: none` during play, so that video never completed; the
-others and both ow-electron tours completed. In four ow-tauri tours of
-2026-10-08 (three with the plugin's whole-run activation hold, one in the
-`4b230a5` configuration as a control) the reward test video played, got no
-reload and sent no `complete` within 120 s after that hide; the control
-failing the same way points at the test creative of that day rather than
-the hold. In one ow-tauri tour the banner slot
-of four layouts and the controls slot got no test fill (guest visible,
-sized and requesting ads); the tour before and the ow-electron tours filled
-them.
+- Restart does nothing, or the restart banner says it needs a built app. You
+  are under `tauri dev`. Use `npm run start:tauri:test`.
+- `ow-electron is not installed`. Run
+  `cd tools/parity-harness && npm install --workspaces=false` once. If
+  install scripts are blocked, run
+  `node node_modules/@overwolf/ow-electron/install.js` in that folder.
+- Nothing fills in live mode. Overwolf has not enabled the uid yet, or the
+  format needs qualification. Use the `:test` scripts.
+- The 970x90 test creative is often blank. It is blank on ow-electron too.
+- An interstitial ends with `performance_ad_error` and `shutdown`. The
+  window is smaller than the ad's minimum; press Restore size.
+
+For problems with the plugin itself, see
+[docs/TROUBLESHOOTING.md](../../docs/TROUBLESHOOTING.md).
