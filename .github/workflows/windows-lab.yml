@@ -35,18 +35,9 @@ name: Windows lab
 # show on the runner's desktop, which is nobody's screen (run.mjs
 # --ci-visible). The macOS job keeps the invisible lab.
 
+# It runs weekly and on demand (Actions > Windows lab > Run workflow), not on
+# every push: a full run takes 30 to 45 minutes.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'crates/tauri-plugin-overwolf/**'
-      - 'packages/api/**'
-      - 'packages/guest-shims/**'
-      - 'tools/parity-harness/**'
-      - 'tools/spikes/unstable-input/**'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      - '.github/workflows/windows-lab.yml'
   schedule:
     # Weekly drift lab (DESIGN §7.5, D26): Tuesday 04:41 UTC.
     - cron: '41 4 * * 2'
