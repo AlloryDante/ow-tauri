@@ -444,9 +444,29 @@ function main() {
 }
 
 /**
+ * Replaces every UUID in `text` with a stable tag (`<uuid-1>`, `<uuid-2>`,
+ * ...; one tag per distinct value, shared through `tags`). The summary is
+ * printed to the public CI log, and a muid or another machine id must not
+ * reach it; equal values keep equal tags, so a difference stays visible.
+ * The captures artifact keeps the real values.
+ * @param {string} text
+ * @param {Map<string, string>} tags
+ */
+export function redactIds(text, tags) {
+  return text.replace(
+    /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi,
+    (id) => {
+      const key = id.toLowerCase();
+      if (!tags.has(key)) tags.set(key, `<uuid-${tags.size + 1}>`);
+      return /** @type {string} */ (tags.get(key));
+    },
+  );
+}
+
+/**
  * The Markdown summary of one shard: a table row per lab entry, then every
- * BUG difference (section, key, field and both values; the lab runs the
- * neutral identity, so nothing personal can be in them).
+ * BUG difference (section, key, field and both values, with UUIDs such as
+ * the muid replaced by tags: see {@link redactIds}).
  * @param {string} shardName
  * @param {any[]} rows
  */
@@ -478,8 +498,9 @@ export function summaryMarkdown(shardName, rows) {
   ];
   const bugs = rows.flatMap((r) => r.bugs.map((b) => ({ scenario: r.scenario, ...b })));
   if (bugs.length) {
+    const tags = new Map();
     const cell = (v) =>
-      String(typeof v === 'string' ? v : JSON.stringify(v ?? null))
+      redactIds(String(typeof v === 'string' ? v : JSON.stringify(v ?? null)), tags)
         .replace(/\|/g, '\\|')
         .replace(/\n/g, ' ')
         .slice(0, 160);

@@ -14,6 +14,7 @@ import {
   LAB_SCENARIOS,
   MACOS_DRIFT_SCENARIOS,
   planOf,
+  redactIds,
   resetDir,
   resetState,
   rowFailed,
@@ -471,6 +472,49 @@ test('the summary lists every BUG difference under the table', () => {
   assert.match(md, /\| dialog-probe \| - \| exit 0 \| n\/a \|.*\| ok \|/);
   assert.match(md, /#### BUG differences/);
   assert.match(md, /\| messages \| call \| isCMPRequired \| missing \| called \| a\\\|b \|/);
+});
+
+test('machine ids never reach the printed summary', () => {
+  const a = '84AD5CF9-4a14-4b31-849c-345a3da8a1aa';
+  const b = '6b297572-9149-4366-0685-abce0b102377';
+  const tags = new Map();
+  assert.equal(
+    redactIds(`x ${a} y ${b} z ${a.toLowerCase()}`, tags),
+    'x <uuid-1> y <uuid-2> z <uuid-1>',
+  );
+  const md = summaryMarkdown('2/8', [
+    {
+      scenario: 'sizes',
+      compared: true,
+      diffFound: true,
+      electron: { status: 0, exit: { code: 0 } },
+      tauri: { status: 0, exit: { code: 0 } },
+      counts: { BUG: 2 },
+      checks: [],
+      bugs: [
+        {
+          section: 'identity',
+          key: 'app.overwolf.muid',
+          field: 'value',
+          electron: { value: a },
+          tauri: { value: b },
+        },
+        {
+          section: 'request',
+          key: `GET /Counter?muid=${a}`,
+          field: 'missing',
+          electron: 1,
+          tauri: 0,
+        },
+      ],
+    },
+  ]);
+  assert.doesNotMatch(md, /[0-9a-f]{8}-[0-9a-f]{4}-/i);
+  assert.match(
+    md,
+    /\| sizes \| identity \| app\.overwolf\.muid \| value \| \{"value":"<uuid-1>"\} \| \{"value":"<uuid-2>"\} \|/,
+  );
+  assert.match(md, /muid=<uuid-1>/);
 });
 
 test('the state folders of both hosts are reset between runs', () => {
