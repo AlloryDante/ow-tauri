@@ -11,7 +11,10 @@
  *   `src-tauri/src`, which stop seeing a window that hosts an ad (§2.10);
  * - the macOS terminate hook;
  * - the `tauri` crate and `@tauri-apps/api` minor versions;
- * - the WebView2 floor, the test-ad state, and two updaters at once.
+ * - the WebView2 floor, the test-ad state, and two updaters at once;
+ * - what the build step checks for a Windows release: the installer hooks
+ *   setting (`bundle.windows.nsis.installerHooks`), the update client's
+ *   publisher data (R5), and the `ow-tauri sign` output against the uid.
  *
  * @packageDocumentation
  */
@@ -21,7 +24,8 @@ import { readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 
 import { capabilitiesOf, DEFAULT_PERMISSION, grants, parseLoose } from './init.js';
-import { isObject } from './json.js';
+import { isObject, type JsonObject } from './json.js';
+import { RESULT_FILE, SIGNED_DIR, uidMismatchMessage } from './sign.js';
 import {
   UNPINNED_MESSAGE,
   child,
@@ -210,19 +214,98 @@ async function versionFindings(tauriDir: string): Promise<Finding[]> {
   ];
 }
 
-async function updaterFindings(tauriDir: string): Promise<Finding[]> {
+async function updaterFindings(tauriDir: string, config: JsonObject): Promise<Finding[]> {
   const toml = (await readText(join(tauriDir, 'Cargo.toml'))) ?? '';
   const official = /^tauri-plugin-updater\s*=/m.test(toml);
   const ours = /^tauri-plugin-overwolf\s*=\s*\{[^}]*features\s*=\s*\[[^\]]*"updater"/m.test(toml);
-  return official && ours
-    ? [
-        {
-          level: 'warn',
-          message:
-            'both tauri-plugin-updater and the overwolf "updater" feature are on: two updaters would race at exit on Windows; register only one there (docs/INTEROP.md)',
-        },
-      ]
-    : [];
+  const findings: Finding[] = [];
+  if (official && ours) {
+    findings.push({
+      level: 'warn',
+      message:
+        'both tauri-plugin-updater and the overwolf "updater" feature are on: two updaters would race at exit on Windows; register only one there (docs/INTEROP.md)',
+    });
+  }
+  if (ours) {
+    const updater = child(overwolfBlock(config), 'updater');
+    const names = updater['publisherNames'];
+    const hasNames =
+      Array.isArray(names) && names.some((n) => typeof n === 'string' && n.trim() !== '');
+    const hasKey = typeof updater['pubkey'] === 'string' && updater['pubkey'].trim() !== '';
+    if (!hasNames && !hasKey) {
+      findings.push({
+        level: 'warn',
+        message:
+          "plugins.overwolf.updater: set publisherNames (your installer's certificate subject) or pubkey before a release build; the update client refuses to run without one",
+      });
+    }
+  }
+  return findings;
+}
+
+/** The generated hooks, relative to the Tauri folder (`build::run`). */
+export const INSTALLER_HOOKS_PATH = 'gen/overwolf/installer-hooks.nsh';
+
+/**
+ * Whether `bundle.windows.nsis.installerHooks` brings in the generated
+ * hooks: the generated file itself, or a file that includes it.
+ *
+ * @param tauriDir - the Tauri folder
+ * @param config - the merged configuration
+ * @returns the finding
+ */
+async function installerHooksFinding(tauriDir: string, config: JsonObject): Promise<Finding> {
+  const configured = child(child(child(config, 'bundle'), 'windows'), 'nsis')['installerHooks'];
+  if (typeof configured !== 'string') {
+    return {
+      level: 'warn',
+      message: `set bundle.windows.nsis.installerHooks to "${INSTALLER_HOOKS_PATH}": the Windows installer otherwise skips the Overwolf install record and uninstall work (CONTRACT I.6)`,
+    };
+  }
+  const normal = configured.replaceAll('\\', '/').replace(/^(?:\.\/)+/, '');
+  if (normal === INSTALLER_HOOKS_PATH) {
+    return { level: 'ok', message: 'the Windows installer runs the generated Overwolf hooks' };
+  }
+  const text = (await readText(join(tauriDir, configured))) ?? '';
+  return text.includes('overwolf-hooks.nsh') || text.includes('installer-hooks.nsh')
+    ? { level: 'ok', message: `${configured} includes the generated Overwolf hooks` }
+    : {
+        level: 'warn',
+        message: `bundle.windows.nsis.installerHooks (${configured}) does not include gen/overwolf/overwolf-hooks.nsh; !include it and insert OW_TAURI_HOOK_POSTINSTALL and OW_TAURI_HOOK_POSTUNINSTALL (CONTRACT I.6)`,
+      };
+}
+
+/**
+ * With `signing.enabled`: whether the `ow-tauri sign` output exists, and
+ * whether its uid is the resolved one (`build::run` fails a Windows
+ * release build otherwise).
+ *
+ * @param tauriDir - the Tauri folder
+ * @param config - the merged configuration
+ * @param uid - the resolved uid, when it resolved
+ * @returns the findings
+ */
+async function signingFindings(
+  tauriDir: string,
+  config: JsonObject,
+  uid: string | undefined,
+): Promise<Finding[]> {
+  if (child(overwolfBlock(config), 'signing')['enabled'] !== true) return [];
+  const path = join(projectDirOf(tauriDir), SIGNED_DIR, RESULT_FILE);
+  const result = parseLoose(await readText(path));
+  if (!isObject(result)) {
+    return [
+      {
+        level: 'warn',
+        message: `signing is on but ${SIGNED_DIR}/${RESULT_FILE} is missing; run ow-tauri sign before a Windows release build`,
+      },
+    ];
+  }
+  const signed = typeof result['uid'] === 'string' ? result['uid'] : '';
+  if (uid !== undefined && signed !== uid) {
+    return [{ level: 'error', message: uidMismatchMessage(signed, uid) }];
+  }
+  return [{ level: 'ok', message: `${SIGNED_DIR}/${RESULT_FILE} was signed for this uid` }];
 }
 
 /**
@@ -234,8 +317,10 @@ async function updaterFindings(tauriDir: string): Promise<Finding[]> {
 export async function doctor(loaded: LoadedConfig): Promise<Finding[]> {
   const { config, tauriDir } = loaded;
   const findings: Finding[] = [];
+  let uid: string | undefined;
   try {
     const identity = await resolveIdentity(config, tauriDir);
+    uid = identity.uid;
     findings.push(
       {
         level: 'info',
@@ -264,7 +349,9 @@ export async function doctor(loaded: LoadedConfig): Promise<Finding[]> {
     ...(await capabilityFindings(tauriDir)),
     ...(await sourceFindings(tauriDir)),
     ...(await versionFindings(tauriDir)),
-    ...(await updaterFindings(tauriDir)),
+    ...(await updaterFindings(tauriDir, config)),
+    await installerHooksFinding(tauriDir, config),
+    ...(await signingFindings(tauriDir, config, uid)),
     {
       level: 'info',
       message: `Windows: ads need the WebView2 Runtime ${WEBVIEW2_MINIMUM} or newer`,

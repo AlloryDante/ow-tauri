@@ -32,6 +32,7 @@ beforeEach(() => {
   write(join(tauriDir, 'tauri.conf.json'), {
     productName: 'My Game App',
     version: '1.0.0',
+    bundle: { windows: { nsis: { installerHooks: './gen/overwolf/installer-hooks.nsh' } } },
     plugins: { overwolf: { author: 'Example Studio', name: 'My Game App', ads: { testAd: true } } },
   });
   write(
@@ -72,6 +73,7 @@ describe('ow-tauri doctor', () => {
       'the uid is pinned for release builds',
       'the macOS web content terminate hook is wired',
       'tauri 2.12.1 and @tauri-apps/api ^2.12.0 share the minor 2.12',
+      'the Windows installer runs the generated Overwolf hooks',
     ]);
     expect(formatFindings(findings.slice(0, 1))).toMatch(/^info {2}uid [a-p]{40} /);
   });
@@ -112,6 +114,10 @@ describe('ow-tauri doctor', () => {
     expect(warn).toContain(`${join('src', 'commands', 'win.rs')}:2: get_webview_window`);
     expect(warn).toContain('tauri 2.10.0 and @tauri-apps/api 2.12.1 differ in the minor version');
     expect(warn).toContain('both tauri-plugin-updater and the overwolf "updater" feature are on');
+    expect(warn).toContain('plugins.overwolf.updater: set publisherNames');
+    expect(warn).toContain(
+      'set bundle.windows.nsis.installerHooks to "gen/overwolf/installer-hooks.nsh"',
+    );
     expect(messages(findings, 'error')).toEqual([
       'capability "remote" (capabilities/default.json) allows the remote URL "https://*.overwolf.com", which covers Overwolf ad pages; remove it',
       'capability "remote" (capabilities/default.json) allows the remote URL "https://*", which covers Overwolf ad pages; remove it',
@@ -134,6 +140,64 @@ describe('ow-tauri doctor', () => {
     expect(messages(await run(), 'info').join('\n')).toContain(
       'could not compare the tauri crate (2.12.3) with @tauri-apps/api (not found)',
     );
+  });
+
+  it('checks the installer hooks setting and the update publisher data', async () => {
+    const config = (installerHooks: string, updater: unknown): unknown => ({
+      productName: 'My Game App',
+      version: '1.0.0',
+      bundle: { windows: { nsis: { installerHooks } } },
+      plugins: { overwolf: { author: 'Example Studio', name: 'My Game App', updater } },
+    });
+    write(
+      join(tauriDir, 'Cargo.toml'),
+      '[package]\nname = "app"\n[dependencies]\ntauri = "2.12.1"\ntauri-plugin-overwolf = { version = "1", features = ["updater"] }\n',
+    );
+    write(join(tauriDir, 'mine.nsh'), '!include "gen\\overwolf\\overwolf-hooks.nsh"\n');
+    write(join(tauriDir, 'other.nsh'), '; nothing\n');
+    write(
+      join(tauriDir, 'tauri.conf.json'),
+      config('mine.nsh', { publisherNames: ['Example Studio'] }),
+    );
+    let findings = await run();
+    expect(messages(findings, 'warn')).toEqual([]);
+    expect(messages(findings, 'ok')).toContain('mine.nsh includes the generated Overwolf hooks');
+    write(join(tauriDir, 'tauri.conf.json'), config('other.nsh', { pubkey: 'RWT' }));
+    findings = await run();
+    expect(messages(findings, 'warn')).toEqual([
+      'bundle.windows.nsis.installerHooks (other.nsh) does not include gen/overwolf/overwolf-hooks.nsh; !include it and insert OW_TAURI_HOOK_POSTINSTALL and OW_TAURI_HOOK_POSTUNINSTALL (CONTRACT I.6)',
+    ]);
+    write(
+      join(tauriDir, 'tauri.conf.json'),
+      config('.\\gen\\overwolf\\installer-hooks.nsh', { publisherNames: [' '] }),
+    );
+    findings = await run();
+    expect(messages(findings, 'warn')).toEqual([
+      "plugins.overwolf.updater: set publisherNames (your installer's certificate subject) or pubkey before a release build; the update client refuses to run without one",
+    ]);
+  });
+
+  it('checks the ow-tauri sign output against the uid when signing is on', async () => {
+    const uid = 'abcdefghijklmnopabcdefghijklmnop';
+    write(join(tauriDir, 'tauri.conf.json'), {
+      productName: 'My Game App',
+      version: '1.0.0',
+      bundle: { windows: { nsis: { installerHooks: 'gen/overwolf/installer-hooks.nsh' } } },
+      plugins: { overwolf: { uid, author: 'Example Studio', signing: { enabled: true } } },
+    });
+    expect(messages(await run(), 'warn')).toEqual([
+      'signing is on but signed/sign-result.json is missing; run ow-tauri sign before a Windows release build',
+    ]);
+    mkdirSync(join(dir, 'signed'));
+    write(join(dir, 'signed', 'sign-result.json'), { uid, version: '1.0.0' });
+    expect(messages(await run(), 'ok')).toContain(
+      'signed/sign-result.json was signed for this uid',
+    );
+    const other = 'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz';
+    write(join(dir, 'signed', 'sign-result.json'), { uid: other, version: '1.0.0' });
+    expect(messages(await run(), 'error')).toEqual([
+      `[OW] the console signed uid ${other} but plugins.overwolf resolves to ${uid}; set plugins.overwolf.uid to "${other}" (or run ow-tauri sign --write-uid)`,
+    ]);
   });
 
   it('turns an identity error into an error finding', async () => {
