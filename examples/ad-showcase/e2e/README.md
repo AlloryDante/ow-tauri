@@ -33,8 +33,8 @@ node e2e/run.mjs --host tauri --mode live --steps live-layout     # LIVE, budget
   the 900x500 error path, the red-dim and blur variants, removal by the app,
   an unknown `unit`), the reward flow (ready, Watch, play, hide during play,
   complete, granted once, the next preload), house, every control, consent
-  and identity, parity, and finally **Export JSON**. Restart is never pressed
-  and no ad is ever clicked.
+  and identity, parity, and finally the Export JSON button. Restart is never
+  pressed and no ad is ever clicked.
 - The interstitial probe reads the page's hit test at the "Click me" button
   (and on ow-tauri the window's native hit test, `hitTest:`). In test mode
   only, and only when the hit test names that button, it sends one click
@@ -88,7 +88,7 @@ per step, with `window.__showcase.snapshot()` and the new timeline rows),
 
 ## Invisibility
 
-- **ow-tauri**: `OW_TAURI_LAB_INVISIBLE=1`. The app is an accessory app (no
+- ow-tauri: `OW_TAURI_LAB_INVISIBLE=1`. The app is an accessory app (no
   Dock icon, no app switcher entry) and is never activated
   ([src-tauri/src/lab.rs](../src-tauri/src/lab.rs)): before the app is
   built, the lab turns every app activation into a no-op and makes
@@ -98,7 +98,7 @@ per step, with `window.__showcase.snapshot()` and the new timeline rows),
   and is then ordered front (`orderFrontRegardless`): on screen, as an ad
   needs to be to fill, and invisible. Dialogs and the file manager do not
   open (the plugin's lab).
-- **ow-electron**: [electron-main.cjs](electron-main.cjs) is the main entry
+- ow-electron: [electron-main.cjs](electron-main.cjs) is the main entry
   of a throwaway app folder around `.stage/electron`. It hides the Dock icon,
   pins every window at opacity 0, click-through and not focusable, turns
   `show()` into `showInactive()`, drops focus calls, and answers dialogs as

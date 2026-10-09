@@ -12,7 +12,7 @@ contenteditable, a contenteditable that cancels `beforeinput` like Draft.js or
 Lexical, an input that cancels `keypress`, an input that cancels `keydown`) and
 four focus patterns (refocus on keydown, node swap on the first key, focus
 handed to a second input, type-anywhere). With `SPIKE_MODE=unstable-child`, one
-blank local child webview sits beside them. **It is not an ad**, and no ads are
+blank local child webview sits beside them. It is not an ad, and no ads are
 loaded.
 
 | Mode | Build | Child webview |

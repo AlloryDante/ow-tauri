@@ -31,9 +31,9 @@ You need:
   [Tauri 2 prerequisites](https://tauri.app/start/prerequisites/) for your OS:
   the Xcode command line tools on macOS, the WebView2 Runtime and the MSVC
   build tools on Windows, WebKitGTK on Linux;
-- Windows 10/11 or macOS 14 or newer to see ads. On Windows the ads need the
-  WebView2 Runtime 98.0.1108.44 or newer. On Linux the app builds and runs,
-  but ads report `unsupported`.
+- Windows 10 22H2 or 11, or macOS 14 or newer, to see ads. On Windows the
+  ads need the WebView2 Runtime 98.0.1108.44 or newer. On Linux the app
+  builds and runs, but ads report `unsupported`.
 
 From a fresh clone, install at the repository root first, then run the
 example:

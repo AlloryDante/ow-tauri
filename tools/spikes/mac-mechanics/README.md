@@ -14,7 +14,7 @@ relies on, on real `WKWebView`s. One item per process:
 | `storage` | `sessionStorage` carry-over across a guest recreate: snapshot, recreate with the same label, restore before page scripts, one-shot |
 
 Guests load only pages from a loopback fixture server inside the app
-(`fixtures/`, 127.0.0.1, random port). **No ads, no network.**
+(`fixtures/`, 127.0.0.1, random port). The spike loads no ads and does not use the network.
 
 ## Run (macOS, invisible lab)
 

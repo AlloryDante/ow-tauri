@@ -17,7 +17,7 @@ privacy settings" button appears only when `isCMPRequired()` says consent rules 
 
 ## Run it
 
-You need Node 22.12 or newer and the
+You need Node.js 22.12 or newer, Rust 1.90 or newer and the
 [Tauri 2 prerequisites](https://tauri.app/start/prerequisites/) for your OS. Ads show on Windows
 and macOS. On Linux the app builds and runs, but ads report `unsupported`
 ([COMPATIBILITY.md](../../docs/COMPATIBILITY.md)).

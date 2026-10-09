@@ -88,10 +88,10 @@ Overwolf test ads (the TEST badge in the top bar); the app id is a placeholder a
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/showcase/sizes-dark.webp">
-  <img alt="The Sizes page with 160x600, 336x280, 400x300 video and 300x250 test ads." src="docs/images/showcase/sizes-light.webp">
+  <img alt="The Sizes page with test ads in 160x600, 400x600, 400x300 video and 300x250 slots, each with its status chip." src="docs/images/showcase/sizes-light.webp">
 </picture>
 
-<b>Sizes.</b> All seven Overwolf ad sizes, each its own <code>&lt;owadview&gt;</code>. A slot loads once half of it is in view.
+Sizes. The page holds all seven Overwolf ad sizes in groups, each its own <code>&lt;owadview&gt;</code>. A slot loads once half of it is in view.
 
 </td>
 <td width="50%" valign="top">
@@ -101,7 +101,7 @@ Overwolf test ads (the TEST badge in the top bar); the app id is a placeholder a
   <img alt="The High impact page with a takeover test ad filling the left zone." src="docs/images/showcase/high-impact-light.webp">
 </picture>
 
-<b>High impact.</b> A <code>high-impact-ad;</code> slot takes over its zone; the zone's other ads hide and come back when it is removed.
+High impact. A <code>high-impact-ad;</code> slot takes over its zone; the zone's other ads hide and come back when it is removed.
 
 </td>
 </tr>
@@ -113,7 +113,7 @@ Overwolf test ads (the TEST badge in the top bar); the app id is a placeholder a
   <img alt="The Interstitial page with a full-window test ad over a dimmed page." src="docs/images/showcase/interstitial-light.webp">
 </picture>
 
-<b>Interstitial.</b> A <code>performance</code> ad covers the window. Input passes through while it loads; after it loads it stays until the user closes it.
+Interstitial. A <code>performance</code> ad covers the window. Input passes through while it loads; after it loads it stays until the user closes it.
 
 </td>
 <td width="50%" valign="top">
@@ -123,7 +123,7 @@ Overwolf test ads (the TEST badge in the top bar); the app id is a placeholder a
   <img alt="The Reward page while the rewarded video test ad plays." src="docs/images/showcase/reward-playing-light.webp">
 </picture>
 
-<b>Reward: playing.</b> A <code>rewarded-ad;</code> video slot stays hidden until the player presses Watch, then plays.
+Reward: playing. A <code>rewarded-ad;</code> video slot stays hidden until the player presses Watch, then plays.
 
 </td>
 </tr>
@@ -135,7 +135,7 @@ Overwolf test ads (the TEST badge in the top bar); the app id is a placeholder a
   <img alt="The Reward page after the grant: 100 coins and every step checked." src="docs/images/showcase/reward-granted-light.webp">
 </picture>
 
-<b>Reward: granted.</b> Coins are granted once, on <code>complete</code> after a <code>play</code>. The grant happens in the app; Overwolf documents no server-side check.
+Reward: granted. Coins are granted once, on <code>complete</code> after a <code>play</code>. The grant happens in the app; Overwolf documents no server-side check.
 
 </td>
 <td width="50%" valign="top">
@@ -145,7 +145,7 @@ Overwolf test ads (the TEST badge in the top bar); the app id is a placeholder a
   <img alt="The Controls page with a playing video test ad and its control buttons." src="docs/images/showcase/controls-light.webp">
 </picture>
 
-<b>Controls.</b> Mute, hide, scroll out of view, hide or minimize the window. Every action is a row in the timeline.
+Controls. Mute, hide, scroll out of view, hide or minimize the window. Every action is a row in the timeline.
 
 </td>
 </tr>
@@ -315,8 +315,8 @@ Your `<owadview>` HTML stays. `ow-tauri migrate` reads your ow-electron
 `package.json` and prints the `plugins.overwolf` block that keeps your app's
 uid; with `--write` it merges the block into your `tauri.conf.json`. With the
 same uid, Overwolf and your users see the same app, with the same consent
-answer and first-launch state. Your
-main-process code moves to Rust and Tauri plugins. See
+answer and first-launch state. Your main-process code moves to Rust and
+Tauri plugins. See
 [docs/MIGRATION.md](docs/MIGRATION.md).
 
 Overwolf packages (game events, overlay, recorder) are not available on

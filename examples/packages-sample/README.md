@@ -23,9 +23,9 @@ npm run start:test
 
 ## Set up
 
-You need Node 22.12 or newer and the
-[Tauri 2 prerequisites](https://tauri.app/start/prerequisites/) for your OS (Rust, WebView2 on
-Windows, WebKitGTK on Linux). Ads show on Windows and macOS. On Linux the app builds and runs, but
+You need Node.js 22.12 or newer, Rust 1.90 or newer and the
+[Tauri 2 prerequisites](https://tauri.app/start/prerequisites/) for your OS (WebView2 on Windows,
+WebKitGTK on Linux). Ads show on Windows and macOS. On Linux the app builds and runs, but
 ads report `unsupported` ([COMPATIBILITY.md](../../docs/COMPATIBILITY.md)).
 
 The sample uses the repository's crate by path and the repository's npm packages as workspaces,
