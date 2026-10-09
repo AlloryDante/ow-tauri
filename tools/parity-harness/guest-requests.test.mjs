@@ -213,6 +213,13 @@ test('guestRequests reads each host’s record', () => {
     JSON.stringify({ label: 'owad-1', url: counter('oam_fpid') }),
   );
   assert.equal(guestRequests(t, 'tauri').source, 'guest-requests');
+  // The same resource timing entry read twice is one request.
+  const entry = { label: 'owad-1', frameTimeOrigin: 1, startTime: 5.5, url: counter('oam_fpid') };
+  writeFileSync(
+    join(t, 'guest-requests.jsonl'),
+    [entry, entry, { ...entry, startTime: 9 }].map((r) => JSON.stringify(r)).join('\n'),
+  );
+  assert.equal(guestRequests(t, 'tauri').requests.length, 2);
 });
 
 /** A gesture-timing capture: one case per `[id, kind, result]`, opens per host. */

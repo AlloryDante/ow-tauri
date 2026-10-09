@@ -389,7 +389,7 @@ async function main() {
         : scenarioConfig.disableAnalytics === true),
     packages: opts.packages ? opts.packages.split(',') : [],
     window: scenarioConfig.window ?? windowSize(opts.layouts),
-    windowTitle: displayName(pkg),
+    windowTitle: scenarioConfig.windowTitle ?? displayName(pkg),
     windowName: opts['window-name'],
     host: opts.host,
     stateDir: watched['ow-electron'],

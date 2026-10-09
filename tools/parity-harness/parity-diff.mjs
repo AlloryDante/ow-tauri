@@ -813,6 +813,9 @@ export function loadCapture(runDir) {
     reloadRequests: pageReloadRequests(runDir),
     guestCount: guestProbeCount(runDir),
     guestRequests: guestRequests(runDir, meta.host ?? 'electron'),
+    createdTitles: readJsonl(join(runDir, 'windows.jsonl'))
+      .filter((r) => r.kind === 'created' && typeof r.state?.title === 'string')
+      .map((r) => r.state.title),
     gestures: gestureCases(runDir, meta.host ?? 'electron'),
     consentCookies: consentCookies(runDir, meta.startedAt),
     stateAfter: stateFile(runDir, 'after'),
@@ -1275,7 +1278,17 @@ function compareHostRequests(e, t, out, tolerance, burst) {
             continue;
           }
           if (stable(v[field]) !== stable(other[field]))
-            push(`Extra.${field}`, v[field], other[field]);
+            push(`Extra.${field}`, v[field], other[field], {
+              // DESIGN D5 (PAR-minor-2): ow-tauri reads a window's title
+              // once, at registration; ow-electron reports its title at
+              // close. Marked for the reader; the rule set has no entry
+              // for it yet, so the row stays a BUG.
+              ...(field === 'title' &&
+              /_window_closed$/.test(a.key) &&
+              t.createdTitles?.includes(other[field])
+                ? { titleAtRegistration: true }
+                : {}),
+            });
         }
       } else if (stable(v) !== stable(other)) {
         push(`query.${k}`, v, other);
@@ -2548,7 +2561,16 @@ export function guestRequests(runDir, host) {
   }
   const stream = readJsonl(join(runDir, 'guest-requests.jsonl'));
   if (stream.length) {
-    for (const r of stream) add(r.url);
+    // One request is one resource timing entry: (frame document, start, URL).
+    const seen = new Set();
+    for (const r of stream) {
+      if (r.startTime !== undefined) {
+        const key = `${r.label}|${r.frameTimeOrigin}|${r.startTime}|${r.url}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+      }
+      add(r.url);
+    }
     return { source: 'guest-requests', requests: out };
   }
   const wire = readJsonl(join(runDir, 'guest-network.jsonl'));

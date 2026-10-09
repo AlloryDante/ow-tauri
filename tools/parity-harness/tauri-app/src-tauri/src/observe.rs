@@ -39,7 +39,8 @@ const REQUEST_POLL: Duration = Duration::from_secs(1);
 /// The requests of a guest's page and its same-origin frames listed since
 /// the last call (resource timing entries; the buffer is raised once per
 /// frame so entries are not dropped): `[timeOrigin, href, [[frame, url,
-/// initiatorType], ...]]`.
+/// initiatorType, startTime, frame timeOrigin], ...]]` (times in ms; one
+/// request is one `(frame timeOrigin, startTime, url)`).
 const GUEST_REQUESTS: &str = r"JSON.stringify((() => {
   const out = [];
   const walk = (w, path) => {
@@ -47,7 +48,8 @@ const GUEST_REQUESTS: &str = r"JSON.stringify((() => {
     try { list = w.performance.getEntriesByType('resource'); } catch (e) { return; }
     try { if (!w.__parityResBuffer) { w.performance.setResourceTimingBufferSize(100000); w.__parityResBuffer = true; } } catch (e) {}
     const from = w.__parityResSeen || 0;
-    for (let i = from; i < list.length; i++) out.push([path, list[i].name, list[i].initiatorType]);
+    const o = w.performance.timeOrigin;
+    for (let i = from; i < list.length; i++) out.push([path, list[i].name, list[i].initiatorType, Math.round(list[i].startTime * 10) / 10, o]);
     w.__parityResSeen = list.length;
     for (let i = 0; i < w.frames.length; i++) walk(w.frames[i], path + '/' + i);
   };
@@ -309,9 +311,9 @@ fn check_requests(app: &AppHandle<Wry>) {
             continue;
         };
         for entry in list.as_array().into_iter().flatten() {
-            let Some([frame, url, kind]) = entry
+            let Some([frame, url, kind, start, frame_origin]) = entry
                 .as_array()
-                .and_then(|a| <&[Value; 3]>::try_from(a.as_slice()).ok())
+                .and_then(|a| <&[Value; 5]>::try_from(a.as_slice()).ok())
             else {
                 continue;
             };
@@ -324,6 +326,8 @@ fn check_requests(app: &AppHandle<Wry>) {
                     "frame": frame,
                     "url": url,
                     "initiatorType": kind,
+                    "startTime": start,
+                    "frameTimeOrigin": frame_origin,
                 }),
             );
         }

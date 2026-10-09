@@ -1450,11 +1450,10 @@ export const SCENARIOS = {
 
   'parked-show-unfocused': {
     describe:
-      '§5.2 #16, PAR-M9: the ad window is hidden from load, after consent; 12 s later it is shown without focus (Tauri show on a non-focusable window, ow-electron showInactive), visible 5 s, hidden again. Launch order, timings and window_closed.',
-    defaults: { mode: 'test', present: 'transparent', layout: '300x250', duration: 40 },
+      '§5.2 #16, PAR-M9: the ad window is created hidden (never shown at startup) and parked past consent; 12 s after load it is shown without focus (Tauri show on a non-focusable window, ow-electron showInactive), visible 5 s, hidden again. Launch order, the first visible heartbeat, timings and window_closed.',
+    defaults: { mode: 'test', present: 'hidden', layout: '300x250', duration: 40 },
     config: {
       actions: [
-        { at: 0, do: 'window', method: 'hide' },
         { at: 12000, do: 'window', method: 'showInactive' },
         { at: 17000, do: 'window', method: 'hide' },
         { at: 25000, do: 'probe-guests', label: 'after-park' },
