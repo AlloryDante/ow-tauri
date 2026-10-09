@@ -97,8 +97,8 @@ base file, then the target's `tauri.<platform>.conf.json` overlay, then
 | `--config <json\|file>` | extra configuration, merged like `tauri build --config`; repeatable, replaces `TAURI_CONFIG` |
 | `--platform <os>` | the build target: `win32`, `darwin` or `linux` (default: this OS) |
 
-`init` accepts `--tauri-dir` only; `migrate` takes only `--from` and
-`--write`.
+Of these three options, `init` accepts only `--tauri-dir`. `migrate` takes
+none of them, only `--from` and `--write`.
 
 ## License
 
