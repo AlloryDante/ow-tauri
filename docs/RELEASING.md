@@ -106,9 +106,12 @@ The commands use `1.0.0-rc.1`; replace it with your version.
    gh workflow run release.yml --ref main -f version=1.0.0-rc.1 -f dry_run=false
    ```
 
-   The `verify` job runs the same checks and refuses the run when the
-   manifests do not carry the version, the CHANGELOG heading has no date, or
-   CI has not passed on the commit. Then:
+   The run releases the head of `main`, so do not push other commits between
+   the bump and the release. The `verify` job runs the same checks and
+   refuses the run when the manifests do not carry the version, the CHANGELOG
+   heading has no date, or CI did not pass on the commit (it waits up to 45
+   minutes for a CI run that is still going; a CI run cancelled by a later
+   push does not count). Then:
    - **Publish crates** waits for your approval (the run page shows "Review
      deployments"). It publishes `tauri-plugin-overwolf-unstable`, waits until
      the crates.io index serves it, then publishes `tauri-plugin-overwolf`.

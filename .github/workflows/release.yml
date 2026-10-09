@@ -116,22 +116,34 @@ jobs:
       - name: Identity check (no personal or lab identity in tracked files)
         run: node scripts/release/identity-check.mjs
 
+      # A real release waits (up to 45 minutes) for a CI run of this commit
+      # that is still running; a dry run only reports.
       - name: CI passed on this commit
         env:
           GH_TOKEN: ${{ github.token }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          passed="$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
-            -f head_sha="$GITHUB_SHA" -f event=push -f status=success --jq '.total_count')"
-          if [ "$passed" -gt 0 ]; then
-            echo "CI passed on $GITHUB_SHA."
-          elif [ "$DRY_RUN" = "true" ]; then
-            echo "::warning::No successful CI run (push to main) for $GITHUB_SHA. The real release refuses this commit."
-          else
-            echo "::error::No successful CI run (push to main) for $GITHUB_SHA. Wait for CI or fix it first."
-            exit 1
-          fi
+          for _ in $(seq 1 90); do
+            runs="$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+              -f head_sha="$GITHUB_SHA" -f event=push \
+              --jq '[.workflow_runs[] | .status + ":" + (.conclusion // "")] | join(" ")')"
+            echo "CI runs of $GITHUB_SHA: ${runs:-none}"
+            if [[ " $runs " == *" completed:success "* ]]; then
+              echo "CI passed on $GITHUB_SHA."
+              exit 0
+            fi
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "::warning::No successful CI run (push to main) for $GITHUB_SHA yet. A real release waits for it and refuses the commit if CI fails."
+              exit 0
+            fi
+            if [[ "$runs" != *queued* && "$runs" != *in_progress* && "$runs" != *waiting* && "$runs" != *pending* && "$runs" != *requested* ]]; then
+              break
+            fi
+            sleep 30
+          done
+          echo "::error::No successful CI run (push to main) for $GITHUB_SHA. Wait for CI or fix it first."
+          exit 1
 
       - name: npm install
         run: npm ci --no-audit --no-fund
