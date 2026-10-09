@@ -38,8 +38,14 @@ describe('settingsActions', () => {
         'generate_user_email_hashes',
         { email: 'player@example.com' },
       ],
-      [() => actions.setUserEmailHashes(hashes), 'set_user_email_hashes', { hashes }],
-      [() => actions.setUserEmailHashes(), 'set_user_email_hashes', { hashes: null }],
+      // The API tells "no argument" from a value on the wire (as ow-electron
+      // stores a given value as is).
+      [
+        () => actions.setUserEmailHashes(hashes),
+        'set_user_email_hashes',
+        { hashes: { value: hashes } },
+      ],
+      [() => actions.setUserEmailHashes(), 'set_user_email_hashes', { hashes: {} }],
       [() => actions.clearUserEmailHashes(), 'clear_user_email_hashes', {}],
       [() => actions.getMachineIds(), 'get_machine_ids', {}],
       [
