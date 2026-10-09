@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    "target": "ES2022",
     "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM"],
+    "lib": ["ES2022", "DOM"],
     "module": "ESNext",
     "skipLibCheck": true,
 
@@ -18,7 +18,17 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+
+    /* In this repository only: type-check against the API's sources, so no
+       build of the package is needed first. A copy of this app outside the
+       repository finds none of these files and resolves the installed
+       package instead. */
+    "paths": {
+      "tauri-plugin-overwolf-api": ["../../packages/api/src/index.ts"],
+      "tauri-plugin-overwolf-api/adview": ["../../packages/api/src/adview/index.ts"],
+      "tauri-plugin-overwolf-api/jsx": ["../../packages/api/src/jsx.ts"]
+    }
   },
   "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]
