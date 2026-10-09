@@ -8,11 +8,12 @@ packages are not available on Tauri.
 
 Use it if you know the ow-electron sample and want to see the same calls on Tauri, or if you want
 to try each plugin API by hand and read its result. For the smallest app with one ad, start with
-[quickstart-vanilla](../quickstart-vanilla) instead.
+[quickstart-vanilla](../quickstart-vanilla) instead. To move your own ow-electron app, read
+[MIGRATION.md](../../docs/MIGRATION.md).
 
-It is a Tauri app, not an Electron emulation. It has one window with a React 19 and Vite page. The
-Rust side is a few lines of plugin setup, and the page calls the plugin directly through
-`tauri-plugin-overwolf-api`.
+The app has one window with a React 19 and Vite page, and the page calls the plugin directly
+through `tauri-plugin-overwolf-api`. The Rust side is a few lines of plugin setup. No Electron code
+runs.
 
 To run it with test ads, from this folder after the setup below:
 
@@ -27,15 +28,17 @@ You need Node 22.12 or newer and the
 Windows, WebKitGTK on Linux). Ads show on Windows and macOS. On Linux the app builds and runs, but
 ads report `unsupported` ([COMPATIBILITY.md](../../docs/COMPATIBILITY.md)).
 
-The sample uses the repository's crate by path and the repository's npm packages as workspaces.
-From the repository root, run once:
+The sample uses the repository's crate by path and the repository's npm packages as workspaces,
+so it runs from a clone. Run this once:
 
 ```sh
+git clone https://github.com/AlloryDante/ow-tauri
+cd ow-tauri
 npm install
 npm run build --workspace tauri-plugin-overwolf-api --workspace tauri-plugin-overwolf-cli
 ```
 
-The second line builds the `dist/` folders of the two packages. The Vite build imports the API
+The last line builds the `dist/` folders of the two packages. The Vite build imports the API
 package's `dist/`, and `npm run doctor` runs the CLI from its `dist/`. The unit tests read the API's
 TypeScript sources directly, so `npm test` does not need the build.
 
@@ -66,7 +69,7 @@ keeps the page across a reload.
 
 ### Logger
 
-The start page. At launch the app logs `getInfo()` (uid, host, ads and analytics state, UTM
+This is the start page. At launch the app logs `getInfo()` (uid, host, ads and analytics state, UTM
 parameters) and `isCMPRequired()`. Every API call made on the other pages appears here with its
 arguments and its result or error code, and so does every ad event. Values are expandable JSON
 trees, and the search box filters by message and value.
@@ -98,16 +101,16 @@ The "CMP & Settings" page shows whether consent rules apply and opens the ad pri
 
 ### Updater
 
-`check()` against Overwolf's update feed, then `downloadAndInstall()` with its `Started`,
-`Progress` and `Finished` events. The Overwolf updater is Windows only. The Rust crate turns on the
+The page runs `check()` against Overwolf's update feed, then `downloadAndInstall()` with its
+`Started`, `Progress` and `Finished` events. The Overwolf updater is Windows only. The Rust crate turns on the
 plugin's `updater` feature for Windows targets, and on macOS and Linux the page shows the
 `unsupported` error as it is. A check only finds an update once a version of the app is published in
 the Overwolf console.
 
 ### Packages
 
-GEP, overlay, recorder and utility: what each does on ow-electron, and why it is not available on
-Tauri. They run inside ow-electron's package runtime and patched Electron, which Tauri does not
+The page lists GEP, overlay, recorder and utility, says what each does on ow-electron, and
+explains why it is not available on Tauri. These packages run inside ow-electron's package runtime and patched Electron, which Tauri does not
 have. The page does not fake them.
 
 ## Where the plugin is wired in
@@ -130,7 +133,8 @@ have. The page does not fake them.
   gets `overwolf:default` plus the opt-in permissions `overwolf:machine-id`,
   `overwolf:email-hashes`, `overwolf:analytics` and `overwolf:updater`.
 - [.env.example](.env.example): the signing credentials `ow-tauri sign` reads from the environment
-  for a Windows release build. Copy it to `.env` (git-ignored) and never commit values.
+  for a Windows release build. Copy it to `.env` (git-ignored) and load it into your shell, or set
+  the variables as CI secrets. `ow-tauri` does not read `.env` itself. Never commit values.
 
 ## Coming from ow-electron
 
@@ -158,8 +162,7 @@ These are for working on the sample itself. Run them from `examples/packages-sam
 
 This app is based on Overwolf's
 [ow-electron-packages-sample](https://github.com/overwolf/ow-electron-packages-sample)
-(commit `8a27053`, MIT, Copyright Overwolf Ltd.; [LICENSE](LICENSE)). From
-it come the page structure (logger, ads tester, settings, packages), the
-ads tester's layouts and slot sizes, the log view (search, expandable JSON
-values) and the dark theme. What changed against upstream is listed in
+(commit `8a27053`, MIT, Copyright Overwolf Ltd.; [LICENSE](LICENSE)). The page structure (logger,
+ads tester, settings, packages), the ads tester's layouts and slot sizes, the log view (search,
+expandable JSON values) and the dark theme come from it. What changed against upstream is listed in
 [CHANGES-FROM-UPSTREAM.md](CHANGES-FROM-UPSTREAM.md).

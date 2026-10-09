@@ -19,11 +19,14 @@ privacy settings" button appears only when `isCMPRequired()` says consent rules 
 
 You need Node 22.12 or newer and the
 [Tauri 2 prerequisites](https://tauri.app/start/prerequisites/) for your OS. Ads show on Windows
-and macOS; on Linux they report `unsupported`.
+and macOS. On Linux the app builds and runs, but ads report `unsupported`
+([COMPATIBILITY.md](../../docs/COMPATIBILITY.md)).
 
-From the repository root, run once:
+The app runs from a clone of this repository. Run this once:
 
 ```sh
+git clone https://github.com/AlloryDante/ow-tauri
+cd ow-tauri
 npm install
 npm run build --workspace tauri-plugin-overwolf-api --workspace tauri-plugin-overwolf-cli
 ```
@@ -35,6 +38,8 @@ npm run tauri dev   # hot reload
 npm start           # a debug build with the page embedded (scripts/run.mjs)
 npm run doctor      # ow-tauri doctor
 ```
+
+`npm run dev` starts only Vite, without the app.
 
 Test ads are on in `src-tauri/tauri.conf.json`. Remove `"ads": { "testAd": true }` before you ship.
 
@@ -52,9 +57,10 @@ The React parts:
 - [src/App.tsx](src/App.tsx) reads `getInfo()` and `isCMPRequired()` and shows the ad privacy
   settings button only when consent rules apply.
 
-The Rust and configuration files match the vanilla app, except that this app's
-[src-tauri/src/lib.rs](src-tauri/src/lib.rs) registers only the log plugin and the Overwolf plugin
-(no single-instance or window-state plugin):
+The Rust and configuration files match the vanilla app's apart from the app name and identifier,
+with one more difference: this app's [src-tauri/src/lib.rs](src-tauri/src/lib.rs) registers only
+the log plugin and the Overwolf plugin (no single-instance or window-state plugin), as in the
+GETTING-STARTED walkthrough:
 
 - [src-tauri/Cargo.toml](src-tauri/Cargo.toml)
 - [src-tauri/build.rs](src-tauri/build.rs)

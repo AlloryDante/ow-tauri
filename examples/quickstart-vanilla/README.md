@@ -2,8 +2,11 @@
 
 The smallest complete app on `tauri-plugin-overwolf`: one window with one 400x300 Overwolf ad, test
 ads on. It is the app that [GETTING-STARTED](../../docs/GETTING-STARTED.md) builds step by step,
-starting from `npm create tauri-app@latest my-game-app -- --template vanilla-ts`. Every file the
-walkthrough shows is here as it shows it, and CI builds the app on Windows, macOS and Linux.
+starting from `npm create tauri-app@latest my-game-app -- --template vanilla-ts --manager npm`. CI
+builds it on Windows, macOS and Linux. It differs from the walkthrough in two places. The crate and
+the npm packages come from this repository by path, not from a git dependency and tarballs. And
+`src-tauri/src/lib.rs` also registers the single-instance and window-state plugins
+([Other plugins](#other-plugins)).
 
 Use it to see an ad running in a few commands, or to copy the plugin setup into your own app. For
 the same app in React, see [quickstart-react](../quickstart-react). To try the other API calls
@@ -23,26 +26,32 @@ You need Node 22.12 or newer and the
 and macOS. On Linux the app builds and runs, but ads report `unsupported`
 ([COMPATIBILITY.md](../../docs/COMPATIBILITY.md)).
 
-From the repository root, run once:
+The app runs from a clone of this repository. Run this once:
 
 ```sh
+git clone https://github.com/AlloryDante/ow-tauri
+cd ow-tauri
 npm install
 npm run build --workspace tauri-plugin-overwolf-api --workspace tauri-plugin-overwolf-cli
 ```
 
-The second line builds the `dist/` folders that the page and `ow-tauri` load. Then, from
+The last line builds the `dist/` folders that the page and `ow-tauri` load. Then, from
 `examples/quickstart-vanilla`:
 
 | Script              | What it does                                                                                                           |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `npm run tauri dev` | the dev server with hot reload                                                                                         |
-| `npm start`         | a debug build with the page embedded, then the app ([scripts/run.mjs](scripts/run.mjs); args after `--` go to the app) |
-| `npm run doctor`    | `ow-tauri doctor`: the resolved uid, the configuration and the capabilities                                            |
+| `npm run tauri dev` | the app under `tauri dev`, with hot reload                                                                             |
+| `npm start`         | a debug build with the page embedded, then the app ([scripts/run.mjs](scripts/run.mjs))                                |
+| `npm run doctor`    | `ow-tauri doctor`: prints the resolved uid and checks the capabilities, the Rust code and the installer settings        |
+
+`npm run dev` starts only Vite, without the app. To pass arguments to the app, run
+`node scripts/run.mjs -- <args>`; `node scripts/run.mjs --no-build` runs the last build again.
 
 Test ads are on (`"ads": { "testAd": true }` in `tauri.conf.json`). Remove it before you ship.
 
 Run the CLI from the local install, with `npm run doctor` or `npm exec --no -- ow-tauri ...`. Do not
-use `npx ow-tauri`.
+use `npx ow-tauri`: without a local install, `npx` may download a different package from the
+registry.
 
 ## Where the plugin is wired in
 
@@ -65,7 +74,8 @@ npm yet. [GETTING-STARTED](../../docs/GETTING-STARTED.md#before-you-start) shows
 
 ## Other plugins
 
-[src-tauri/src/lib.rs](src-tauri/src/lib.rs) also registers two common plugins next to this one:
+[src-tauri/src/lib.rs](src-tauri/src/lib.rs) also registers two common plugins next to this one.
+[INTEROP.md](../../docs/INTEROP.md) explains the order and the filter they need.
 
 - `tauri-plugin-single-instance`, registered first. A second launch focuses the running app, and
   the Overwolf plugin writes nothing in the second process before it exits.
@@ -83,3 +93,4 @@ webview, so `get_webview_window` does not find it.
 - [AD-FORMATS.md](../../docs/AD-FORMATS.md): high impact, performance and the other formats.
 - [OVERWOLF-ONBOARDING.md](../../docs/OVERWOLF-ONBOARDING.md): from test ads to live ads.
 - [PRODUCTION-CHECKLIST.md](../../docs/PRODUCTION-CHECKLIST.md): before the first release.
+- [MIGRATION.md](../../docs/MIGRATION.md): if your app comes from ow-electron.
