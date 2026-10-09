@@ -89,24 +89,37 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for args in "" "--no-default-features --features build"; do
-            out="$(cargo tree -p tauri-plugin-overwolf $args -e features -i tauri --target x86_64-unknown-linux-gnu --locked 2>&1 || true)"
-            if grep -q '"unstable"' <<<"$out"; then echo "$out"; exit 1; fi
+          # The default features (an app's) on Linux.
+          out="$(cargo tree -p tauri-plugin-overwolf -e features -i tauri --target x86_64-unknown-linux-gnu --locked)"
+          if grep -q '"unstable"' <<<"$out"; then echo "$out"; exit 1; fi
+          # The build step's feature set on every target (no Tauri at all).
+          out="$(cargo tree -p tauri-plugin-overwolf --no-default-features --features build -e features --target all --locked)"
+          if grep -q 'tauri feature "unstable"' <<<"$out"; then echo "$out"; exit 1; fi
+      # DESIGN §4.6: `unstable` reaches Tauri on Windows and macOS (feature
+      # `ads`) and nowhere else.
+      - name: Tauri `unstable` comes with `ads` on Windows and macOS
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in x86_64-pc-windows-msvc aarch64-apple-darwin; do
+            out="$(cargo tree -p tauri-plugin-overwolf -e features -i tauri --target "$target" --locked)"
+            grep -q '"unstable"' <<<"$out" || { echo "$out"; echo "no unstable for $target"; exit 1; }
+            out="$(cargo tree -p tauri-plugin-overwolf --no-default-features --features plugin -e features -i tauri --target "$target" --locked)"
+            if grep -q '"unstable"' <<<"$out"; then echo "$out"; echo "unstable without ads for $target"; exit 1; fi
           done
-      # restored in W3: the OWE resource step returns with build::run's
-      # signing support (W1 ships build::run without it).
       - name: mingw-w64 (GNU cross-link of the OWE resource)
-        if: false
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
           rustup target add x86_64-pc-windows-gnu
-      # CONTRACT G.4 c: the OWEINTEGRITY/OWE resource links next to the
-      # VERSIONINFO that tauri-build writes, with MSVC (native, Windows) and
-      # with GNU (mingw-w64 cross from Linux), in a release build that applies
-      # a signed fixture. Versions are pinned: the fixture has no lockfile.
-      # restored in W3 (see the mingw-w64 step above).
+      # CONTRACT G.4 c, DESIGN §4.15: with `signing.enabled`, build::run links
+      # the OWEINTEGRITY/OWE resource next to the VERSIONINFO that tauri-build
+      # writes, in a Windows release build that has `ow-tauri sign` output,
+      # with MSVC (native, Windows) and GNU (mingw-w64 cross from Linux). The
+      # fixture is a plain crate whose build script calls build::run.
       - name: OWEINTEGRITY/OWE resource links next to a VERSIONINFO (MSVC and GNU)
-        if: false
+        if: runner.os != 'macOS'
         shell: bash
         run: |
           set -euo pipefail
@@ -119,8 +132,8 @@ jobs:
             target=x86_64-pc-windows-gnu
             export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
           fi
-          dir="$RUNNER_TEMP/owe-link"
-          mkdir -p "$dir/src" "$dir/ow-tauri-signed"
+          dir="$RUNNER_TEMP/owe-link/app"
+          mkdir -p "$dir/src" "$dir/capabilities" "$dir/../signed"
           cat > "$dir/Cargo.toml" <<EOF
           [package]
           name = "owe-link"
@@ -128,22 +141,24 @@ jobs:
           edition = "2024"
           [workspace]
           [build-dependencies]
-          tauri-plugin-overwolf = { path = "$plugin", default-features = false, features = ["embed-resource"] }
-          embed-resource = "=3.0.12"
+          tauri-plugin-overwolf = { path = "$plugin", default-features = false, features = ["build"] }
           tauri-winres = "=0.3.6"
           EOF
           echo 'fn main() {}' > "$dir/src/main.rs"
           cat > "$dir/build.rs" <<'EOF'
           fn main() {
-              tauri_plugin_overwolf::build::embed_manifest("package.json").unwrap();
+              tauri_plugin_overwolf::build::run().unwrap();
               // A VERSIONINFO as tauri-build writes one, in its own .res.
               let mut res = tauri_winres::WindowsResource::new();
               res.set("FileDescription", "owe-link");
               res.compile().unwrap();
           }
           EOF
-          echo '{"name":"owe-link","version":"1.0.0","author":"CI"}' > "$dir/package.json"
-          echo "{\"name\":\"owe-link\",\"version\":\"1.0.0\",\"author\":\"CI\",\"overwolf\":{\"uid\":\"$uid\"}}" > "$dir/ow-tauri-signed/package.json"
+          cat > "$dir/tauri.conf.json" <<EOF
+          {"productName":"owe-link","version":"1.0.0","identifier":"dev.ow-tauri.owe-link",
+           "plugins":{"overwolf":{"author":"CI","name":"owe-link","uid":"$uid","signing":{"enabled":true}}}}
+          EOF
+          echo "{\"uid\":\"$uid\",\"version\":\"1.0.0\"}" > "$dir/../signed/sign-result.json"
           cargo build --release --target "$target" --manifest-path "$dir/Cargo.toml"
           exe="$dir/target/$target/release/owe-link.exe"
           # Resource type names are stored as UTF-16LE in the PE resource
@@ -156,6 +171,116 @@ jobs:
             "$readobj" --coff-resources "$exe" | tee "$dir/resources.txt"
             grep -q 'OWEINTEGRITY' "$dir/resources.txt"
           fi
+
+  # DESIGN §7.7 G1: every app-facing feature set of the plugin builds, lints
+  # and documents on its own (an app picks one; `--all-features` hides a
+  # missing `cfg`). `lab` and `test-util` are this repository's.
+  features:
+    name: Feature sets (${{ matrix.os }})
+    if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Linux system dependencies (Tauri prerequisites)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: clippy and cargo doc per feature set
+        shell: bash
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          set -euo pipefail
+          for features in "" plugin plugin,ads plugin,ads,updater build; do
+            echo "::group::features [$features]"
+            args=(-p tauri-plugin-overwolf --locked --no-default-features)
+            if [ -n "$features" ]; then args+=(--features "$features"); fi
+            cargo clippy "${args[@]}" --lib -- -D warnings
+            cargo doc "${args[@]}" --no-deps
+            echo "::endgroup::"
+          done
+
+  # DESIGN §8.3, §7.7 G8: the docs as docs.rs builds them (nightly, `--cfg
+  # docsrs`, the [package.metadata.docs.rs] features) for each docs.rs target.
+  docs-rs:
+    name: docs.rs build (${{ matrix.target }})
+    if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-pc-windows-msvc, aarch64-apple-darwin, x86_64-unknown-linux-gnu]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Linux system dependencies (Tauri prerequisites)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - name: Nightly Rust with the target
+        shell: bash
+        run: |
+          rustup toolchain install nightly --profile minimal --target "${{ matrix.target }}"
+          echo "RUSTUP_TOOLCHAIN=nightly" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: docs-rs-${{ matrix.target }}
+      - name: cargo doc as docs.rs runs it
+        shell: bash
+        env:
+          RUSTDOCFLAGS: --cfg docsrs -D warnings
+          RUSTFLAGS: ''
+        run: |
+          set -euo pipefail
+          features="$(sed -n '/^\[package.metadata.docs.rs\]/,/^\[/s/^features *= *\[\(.*\)\]/\1/p' crates/tauri-plugin-overwolf/Cargo.toml | tr -d '" ')"
+          test -n "$features"
+          echo "features: $features"
+          cargo doc -p tauri-plugin-overwolf --no-deps --locked --no-default-features \
+            --features "$features" --target "${{ matrix.target }}"
+
+  # DESIGN §1.2, §7.7 G1: a mobile build gets the stub that reports
+  # `unsupported`; the plugin must still compile for Android.
+  android:
+    name: Android check (aarch64-linux-android)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml) with the Android target
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add aarch64-linux-android
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: android
+      - name: cargo check (NDK clang from the runner image)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ndk="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$bin/aarch64-linux-android24-clang"
+          export AR_aarch64_linux_android="$bin/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
+          cargo check -p tauri-plugin-overwolf --target aarch64-linux-android --locked
 
   msrv:
     name: Rust MSRV 1.90
@@ -191,8 +316,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      # The npm workspaces are packages/* (api, cli, guest-shims); the
-      # examples and the parity harness rejoin them in W3/W4.
+      # The npm workspaces: packages/* (api, cli, guest-shims) and the four
+      # examples; the parity harness has its own job.
       - name: install
         run: npm ci --no-audit --no-fund
       - name: format
@@ -271,12 +396,66 @@ jobs:
       - name: Overwolf packages are on the latest dist-tag
         run: node scripts/check-overwolf-dist-tags.mjs
 
+  # DESIGN §7.7 G10: every example builds on Windows, macOS and Linux
+  # (quickstarts, packages sample, ad showcase): frontend, Rust app (debug, no
+  # bundle, never launched), rustfmt, clippy with and without the lab, and the
+  # examples' Rust tests. The examples' TypeScript lint, types and unit tests
+  # run in the node job (npm workspaces).
   example:
-    name: Example build (${{ matrix.os }})
-    # restored in W3/W4: the examples build on the removed packages/ow-tauri
-    # until their port to tauri-plugin-overwolf-api lands.
-    if: false && github.event_name != 'schedule'
-    needs: [rust, node]
+    name: Example ${{ matrix.example }} (${{ matrix.os }})
+    if: github.event_name != 'schedule'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+        example: [quickstart-vanilla, quickstart-react, packages-sample, ad-showcase]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Linux system dependencies (Tauri prerequisites)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: examples/${{ matrix.example }}/src-tauri -> target
+      - name: install, and build the JavaScript API the example imports
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build --workspace tauri-plugin-overwolf-api
+      - name: frontend
+        run: npm run build --workspace examples/${{ matrix.example }}
+      - name: Rust app (fmt, clippy with and without the lab, build, tests)
+        shell: bash
+        working-directory: examples/${{ matrix.example }}/src-tauri
+        run: |
+          set -euo pipefail
+          cargo fmt -- --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo build --locked
+          if grep -q '^lab = ' Cargo.toml; then
+            cargo clippy --locked --all-targets --features lab -- -D warnings
+            cargo test --locked --features lab
+          fi
+
+  # The parity harness: its own tests (the parity-diff rules, the lab
+  # driver, the scenario table) and the Tauri harness app's Rust lints on the
+  # two OSes whose labs run it. The labs themselves run in windows-lab.yml
+  # and on the macOS invisible lab.
+  harness:
+    name: Parity harness (${{ matrix.os }})
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
@@ -284,58 +463,108 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Skip until the Tauri port of the example exists
-        id: gate
-        shell: bash
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: harness tests (Node built-ins only)
+        working-directory: tools/parity-harness
+        run: node --test parity-diff.test.mjs windows-lab.test.mjs scenarios.test.mjs guest-requests.test.mjs
+      - name: Toolchain (from rust-toolchain.toml)
+        if: runner.os != 'Linux'
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: runner.os != 'Linux'
+        with:
+          workspaces: tools/parity-harness/tauri-app/src-tauri -> target
+      - name: harness app web assets
+        if: runner.os != 'Linux'
         run: |
-          if [ -f examples/packages-sample/src-tauri/Cargo.toml ]; then
-            echo "ported=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "examples/packages-sample has no src-tauri yet; skipping."
-            echo "ported=false" >> "$GITHUB_OUTPUT"
-          fi
+          npm ci --no-audit --no-fund
+          npm run build --workspace tauri-plugin-overwolf-api
+          node -e "import('./tools/parity-harness/tauri-app/build.mjs').then((m) => m.buildWeb())"
+      - name: harness app (fmt, clippy)
+        if: runner.os != 'Linux'
+        shell: bash
+        working-directory: tools/parity-harness/tauri-app/src-tauri
+        run: |
+          cargo fmt -- --check
+          cargo clippy --locked --all-targets -- -D warnings
+
+  # DX-M10 (weekly): the quickstarts against the newest create-tauri-app
+  # template. Scaffolds the template, records how the quickstart's
+  # template-owned files differ from it (step summary, artifact), and builds
+  # the quickstart with the template's newest Tauri packages and crates.
+  template:
+    name: Quickstart vs the newest create-tauri-app template (${{ matrix.os }})
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Linux system dependencies (Tauri prerequisites)
-        if: steps.gate.outputs.ported == 'true' && runner.os == 'Linux'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        if: steps.gate.outputs.ported == 'true'
         with:
           node-version: 22
           cache: npm
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.gate.outputs.ported == 'true'
-      - name: install
-        if: steps.gate.outputs.ported == 'true'
-        run: npm ci --no-audit --no-fund
-      # restored in W3/W4 (job disabled above): builds the removed ow-tauri package.
-      - name: build frontend and Rust app (no bundling, no launch)
-        if: steps.gate.outputs.ported == 'true'
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: scaffold the newest templates
+        shell: bash
+        working-directory: ${{ runner.temp }}
         run: |
-          npm run build --workspace ow-tauri
-          npm run build --workspace examples/packages-sample
-          cargo build --manifest-path examples/packages-sample/src-tauri/Cargo.toml --locked
-      - name: packages sample Rust app lints (with and without the lab)
-        if: steps.gate.outputs.ported == 'true'
+          set -euo pipefail
+          npx --yes create-tauri-app@latest template-vanilla --template vanilla-ts --manager npm --identifier com.example.mygameapp --yes
+          npx --yes create-tauri-app@latest template-react --template react-ts --manager npm --identifier com.example.mygameapp --yes
+      - name: template-owned files that differ (informational)
         shell: bash
         run: |
-          cargo fmt --manifest-path examples/packages-sample/src-tauri/Cargo.toml -- --check
-          cargo clippy --manifest-path examples/packages-sample/src-tauri/Cargo.toml --all-targets --locked -- -D warnings
-          cargo clippy --manifest-path examples/packages-sample/src-tauri/Cargo.toml --all-targets --features lab --locked -- -D warnings
-      - name: ad showcase (lint, types, unit tests, both stages, Rust app with and without the lab)
-        if: steps.gate.outputs.ported == 'true'
+          set -uo pipefail
+          out="$RUNNER_TEMP/template-diff.md"
+          {
+            echo "### Quickstarts vs the newest create-tauri-app template"
+            for flavour in vanilla react; do
+              example="quickstart-$flavour"
+              template="$RUNNER_TEMP/template-$flavour"
+              echo; echo "#### $example"; echo; echo '```diff'
+              for f in package.json tsconfig.json vite.config.ts src-tauri/Cargo.toml src-tauri/build.rs; do
+                if [ -f "$template/$f" ]; then diff -u "$template/$f" "examples/$example/$f" | head -80; fi
+              done
+              echo '```'
+            done
+          } > "$out"
+          cat "$out" >> "$GITHUB_STEP_SUMMARY"
+      - name: quickstarts on the newest Tauri packages and crates
         shell: bash
         run: |
-          npm run lint --workspace examples/ad-showcase
-          npm run typecheck --workspace examples/ad-showcase
-          npm test --workspace examples/ad-showcase
-          npm run build --workspace examples/ad-showcase
-          cargo fmt --manifest-path examples/ad-showcase/src-tauri/Cargo.toml -- --check
-          cargo clippy --manifest-path examples/ad-showcase/src-tauri/Cargo.toml --all-targets --locked -- -D warnings
-          cargo clippy --manifest-path examples/ad-showcase/src-tauri/Cargo.toml --all-targets --features lab --locked -- -D warnings
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm run build --workspace tauri-plugin-overwolf-api
+          for q in quickstart-vanilla quickstart-react; do
+            npm install --no-save --no-audit --no-fund --workspace "examples/$q" @tauri-apps/api@latest @tauri-apps/cli@latest
+            npm run build --workspace "examples/$q"
+            (cd "examples/$q/src-tauri" && cargo update && cargo build)
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: template-diff-${{ matrix.os }}
+          path: ${{ runner.temp }}/template-diff.md
+          if-no-files-found: ignore
+          retention-days: 30
 
   latest:
     name: Newest stable Rust + newest tauri 2.x (${{ matrix.os }})

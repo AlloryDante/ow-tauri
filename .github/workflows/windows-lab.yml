@@ -201,7 +201,9 @@ jobs:
       - name: Build (stable, then unstable)
         shell: pwsh
         run: |
-          $locked = if ($env:DRIFT -eq 'true') { @() } else { @('--locked') }
+          # The drift lab updated Cargo.lock to the newest Tauri 2.x.
+          $locked = @()
+          if ($env:DRIFT -ne 'true') { $locked += '--locked' }
           $env:CARGO_TARGET_DIR = "target/stable"; cargo build @locked
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $env:CARGO_TARGET_DIR = "target/unstable"; cargo build @locked --features unstable
