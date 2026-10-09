@@ -33,10 +33,9 @@ either host; test mode shows it.
 
 Per platform: Windows and macOS are verified in the parity lab against
 ow-electron (test mode, every format). macOS has a request-header gap
-([CONTRACT.md](CONTRACT.md) D.8.3) that can lower live fill. On Linux the
-ad guests cannot overlap the page (tauri-runtime-wry packs child webviews
-side by side), so ad positions, the interstitial overlay and its input
-pass-through do not work there yet.
+([CONTRACT.md](CONTRACT.md) D.8.3) that can lower live fill. Linux has no
+ads: the element mounts nothing, `adview_mount` rejects with `unsupported`
+("ads are not available on Linux") and `getInfo().adsSupported` is `false`.
 
 ## Before you start
 
@@ -67,7 +66,8 @@ ad.addEventListener('display_ad_loaded', () => console.log('filled'));
   on ow-electron. The last two are passed to the ad page as messages; the
   test ad page does nothing visible with them.
 - With TypeScript, `document.createElement('owadview')` is typed as
-  `overwolf.AdviewTag` once `ow-tauri/types` is in your `types`.
+  `OwAdViewElement` once the page imports `tauri-plugin-overwolf-api/adview`
+  ([owadview.md](api/owadview.md)).
 
 ### Lifecycle rules
 
@@ -368,9 +368,8 @@ name, in order; the list below is what was observed or documented.
   Hide the element (or an ancestor) to show a menu or dialog over it; the
   runtime hides the ad with it. CSS transforms and `clip-path` on ancestors
   do not move or clip the ad.
-- **Linux overlays.** On Linux the ad guests cannot overlap the page yet, so
-  positions, the interstitial overlay and its pass-through do not work
-  there.
+- **Ads on Linux.** Every format reports `unsupported` there; consent,
+  analytics and identity still work.
 - **Identical macOS request headers.** WebKit offers no public way to add
   ow-electron's subresource headers ([CONTRACT.md](CONTRACT.md) D.8.3);
   Windows matches.
