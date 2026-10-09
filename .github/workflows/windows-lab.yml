@@ -1,44 +1,79 @@
 name: Windows lab
 
-# The ad-format parity lab on Windows (AD-FORMATS-SPEC section 6 item 14,
-# section 7): every scenario runs on ow-electron and then on ow-tauri on the
-# same runner, both with TEST ads only, and the two captures are compared
-# (tools/parity-harness/parity-diff.mjs) along with the Windows lab checks
-# L1-W (transparency), L2 (z-order), L3-W (input pass-through) and L5 (mute).
-# See tools/parity-harness/ci/windows-lab.mjs.
+# The parity lab on Windows (DESIGN-v2 §7.5, gate G5): every scenario runs on
+# ow-electron and then on ow-tauri (the Tauri-native harness app,
+# tools/parity-harness/tauri-app) on the same runner, both with TEST ads only,
+# and the two captures are compared (tools/parity-harness/parity-diff.mjs)
+# along with the Windows lab checks L1-W (transparency), L2 (z-order), L3-W
+# (input pass-through) and L5 (mute). The scenario list and the per-launch
+# plan are in tools/parity-harness/ci/windows-lab.mjs: the R2/R3 scenarios,
+# the W3-B record-first scenarios (W4 rulings L1-L4) and every DESIGN §5.2
+# check that applies to Windows.
 #
-# Rules: test ads only (the lab never passes --mode live); the app identity
-# is the harness's neutral default (formula uid); windows may show on the
-# runner's desktop, which is nobody's screen (run.mjs --ci-visible).
+# Jobs:
+#   build             the harness app (plugin `lab` feature), once
+#   lab               the parity lab in 8 shards
+#   unstable-input    tools/spikes/unstable-input: Tauri `unstable` must not
+#                     change typing in an app page (DESIGN §4.6a; G5 59/59)
+#   webview2-minimum  the plugin on a fixed-version WebView2 Runtime at the
+#                     floor (ads work) and below it (ads fail closed)
+#   macos-drift       the weekly macOS subset on a hosted runner (invisible lab)
+#   report            one summary; the weekly run opens or updates an issue
+#                     when Overwolf's live ad page or the newest ow-electron
+#                     drifted from ow-tauri
+#
+# Weekly (schedule) and `drift: true`: the harness installs the newest
+# @overwolf/ow-electron and @overwolf/ow-cli `latest` before recording, and
+# the unstable-input spike builds against the newest Tauri 2.x.
+#
+# Rules: test ads only (the lab never passes --mode live; the gesture-timing
+# fixture is a loopback page, never an ad); the app identity is the harness's
+# neutral default (formula uid), a local identity file is refused; windows may
+# show on the runner's desktop, which is nobody's screen (run.mjs
+# --ci-visible). The macOS job keeps the invisible lab.
 
 on:
-  # restored in W3/W4: the push trigger builds the removed packages/ow-tauri
-  # workspace and the harness on it; only a manual run remains until then.
-  # push:
-  #   branches: [main]
-  #   paths:
-  #     - 'crates/**'
-  #     - 'tools/parity-harness/**'
-  #     - 'Cargo.lock'
-  #     - 'rust-toolchain.toml'
-  #     - '.github/workflows/windows-lab.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/tauri-plugin-overwolf/**'
+      - 'packages/api/**'
+      - 'packages/guest-shims/**'
+      - 'tools/parity-harness/**'
+      - 'tools/spikes/unstable-input/**'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/windows-lab.yml'
+  schedule:
+    # Weekly drift lab (DESIGN §7.5, D26): Tuesday 04:41 UTC.
+    - cron: '41 4 * * 2'
   workflow_dispatch:
     inputs:
       scenarios:
-        description: 'Comma-separated scenarios (A, cmp, messages, lab-layers, audio, sizes, ...) or "all"'
+        description: 'Comma-separated lab entries (A, sizes, corrupt-state, corrupt-state:array, ...) or "all"'
         required: false
         default: all
+      drift:
+        description: 'Run as the weekly drift lab (newest ow-electron latest, newest Tauri 2.x for the spike, macOS subset)'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-lab-${{ github.ref }}
+  group: windows-lab-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  CARGO_BUILD_JOBS: 4
+  # The packages sample lists @overwolf/ow-electron for its upstream twin;
+  # the root install never runs Electron.
+  ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+  DRIFT: ${{ github.event_name == 'schedule' || inputs.drift == true }}
 
 jobs:
   build:
@@ -47,6 +82,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -56,10 +93,10 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: tools/parity-harness/tauri-app/src-tauri -> target
-      - name: install (ow-tauri workspace only)
-        run: npm ci --workspace ow-tauri --include-workspace-root --no-audit --no-fund
-      - name: build ow-tauri
-        run: npm run build --workspace ow-tauri
+      - name: install (npm workspaces)
+        run: npm ci --no-audit --no-fund
+      - name: build the JavaScript API (the harness page bundles it)
+        run: npm run build --workspace tauri-plugin-overwolf-api
       - name: build the harness app (web assets, then cargo build with the lab feature)
         run: node tools/parity-harness/tauri-app/build.mjs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -73,19 +110,198 @@ jobs:
           retention-days: 7
 
   lab:
-    name: Lab shard ${{ matrix.shard }}/4 (test ads)
+    name: Lab shard ${{ matrix.shard }}/8 (test ads)
     needs: build
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     runs-on: windows-2025
-    timeout-minutes: 90
+    timeout-minutes: 120
     defaults:
       run:
         working-directory: tools/parity-harness
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/parity-harness/package-lock.json
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-lab-harness-exe
+          path: tools/parity-harness/tauri-app/src-tauri/target/debug
+      - name: install the harness (ow-electron and ow-cli, latest dist-tag)
+        run: npm ci --workspaces=false --no-audit --no-fund
+      - name: drift lab - the newest ow-electron and ow-cli on the latest dist-tag
+        if: env.DRIFT == 'true'
+        run: npm install --no-save --workspaces=false --no-audit --no-fund @overwolf/ow-electron@latest @overwolf/ow-cli@latest
+      - name: ow-electron binary
+        shell: bash
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: ''
+        run: |
+          node -e "require('fs').accessSync(require('@overwolf/ow-electron'))" \
+            || node node_modules/@overwolf/ow-electron/install.js
+          node -e "console.log('ow-electron', require('@overwolf/ow-electron/package.json').version)"
+      # The runner's display starts at 1024 x 768, smaller than most lab
+      # windows: each host then fits the window to the screen its own way and
+      # the scenarios no longer compare like with like.
+      - name: display 1920 x 1080
+        shell: pwsh
+        run: |
+          try { Set-DisplayResolution -Width 1920 -Height 1080 -Force } catch { Write-Warning "display resolution unchanged: $_" }
+          Get-CimInstance Win32_VideoController | Format-Table Name, CurrentHorizontalResolution, CurrentVerticalResolution
+      - name: lab (ow-electron, then ow-tauri, per scenario; parity-diff; Windows checks)
+        env:
+          SCENARIOS: ${{ inputs.scenarios || 'all' }}
+        run: node ci/windows-lab.mjs --shard ${{ matrix.shard }}/8 --scenarios "$env:SCENARIOS"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: windows-lab-summary-${{ matrix.shard }}
+          path: |
+            tools/parity-harness/captures/windows-lab/summary.json
+            tools/parity-harness/captures/windows-lab/summary.md
+          if-no-files-found: warn
+          retention-days: 30
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: windows-lab-captures-${{ matrix.shard }}
+          path: |
+            tools/parity-harness/captures/
+            !tools/parity-harness/captures/.tools/
+          if-no-files-found: warn
+          retention-days: 14
+
+  unstable-input:
+    name: unstable-input (Tauri `unstable` vs typing, 59 cases)
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: tools/spikes/unstable-input
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: drift lab - the newest Tauri 2.x
+        if: env.DRIFT == 'true'
+        run: cargo update -p tauri -p tauri-build
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tools/spikes/unstable-input -> target
+          key: ${{ env.DRIFT }}
+      - name: Build (stable, then unstable)
+        shell: pwsh
+        run: |
+          $locked = if ($env:DRIFT -eq 'true') { @() } else { @('--locked') }
+          $env:CARGO_TARGET_DIR = "target/stable"; cargo build @locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:CARGO_TARGET_DIR = "target/unstable"; cargo build @locked --features unstable
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo tree -i tauri --depth 0 | Out-File -Encoding utf8 tauri-version.txt
+          Get-Content tauri-version.txt
+      - name: Keyboard layout US-International (dead keys)
+        shell: pwsh
+        run: |
+          $l = New-WinUserLanguageList en-US
+          $l[0].InputMethodTips.Clear()
+          $l[0].InputMethodTips.Add('0409:00020409')
+          Set-WinUserLanguageList $l -Force
+          Set-WinDefaultInputMethodOverride -InputTip '0409:00020409'
+          New-Item -ItemType Directory -Force out | Out-Null
+          Get-WinUserLanguageList | Format-List | Out-File out/language-list.txt
+      - name: Run the modes
+        shell: pwsh
+        run: |
+          $out = (Resolve-Path out).Path
+          # unstable-child-focused: the child built with Tauri's default
+          # focused(true) instead of focused(false) (what the plugin uses);
+          # a control that shows why the plugin's guests are unfocused.
+          $runs = @(
+            @{ name = 'stable'; mode = 'stable'; exe = 'target/stable/debug/unstable-input-spike.exe'; focused = '0' },
+            @{ name = 'unstable-nochild'; mode = 'unstable-nochild'; exe = 'target/unstable/debug/unstable-input-spike.exe'; focused = '0' },
+            @{ name = 'unstable-child'; mode = 'unstable-child'; exe = 'target/unstable/debug/unstable-input-spike.exe'; focused = '0' },
+            @{ name = 'unstable-child-focused'; mode = 'unstable-child'; exe = 'target/unstable/debug/unstable-input-spike.exe'; focused = '1' }
+          )
+          foreach ($r in $runs) {
+            $env:SPIKE_MODE = $r.mode
+            $env:SPIKE_CHILD_FOCUSED = $r.focused
+            $env:SPIKE_OUT = "$out/$($r.name).json"
+            $p = Start-Process -FilePath $r.exe -PassThru -RedirectStandardError "$out/$($r.name).log" -RedirectStandardOutput "$out/$($r.name).stdout.log"
+            if (-not $p.WaitForExit(600000)) { Stop-Process -Id $p.Id -Force; Write-Host "timeout: $($r.name)" }
+            Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+          }
+      - name: Gate (stable, unstable without and with a child webview, all cases pass)
+        shell: pwsh
+        run: |
+          # The spike's case matrix on Windows: 58 cases, plus the Alt-Tab
+          # case of the child-webview mode (59). The focused(true) control is
+          # informational: it documents tauri#15903-style focus theft (F2).
+          $expected = @{ 'stable' = 58; 'unstable-nochild' = 58; 'unstable-child' = 59 }
+          $rows = @('| mode | cases | failed | gate |', '|---|---|---|---|')
+          $bad = 0
+          foreach ($name in @('stable', 'unstable-nochild', 'unstable-child', 'unstable-child-focused')) {
+            $file = "out/$name.json"
+            if (-not (Test-Path $file)) {
+              $rows += "| $name | - | - | no result |"
+              if ($expected.ContainsKey($name)) { $bad++ }
+              continue
+            }
+            $s = (Get-Content $file -Raw | ConvertFrom-Json).summary
+            if ($expected.ContainsKey($name)) {
+              $ok = ($s.failed -eq 0) -and ($s.cases -eq $expected[$name])
+              if (-not $ok) { $bad++ }
+              $gate = if ($ok) { "ok ($($expected[$name])/$($expected[$name]))" } else { "FAIL (want $($expected[$name]) cases, 0 failed)" }
+            } else {
+              $gate = 'informational'
+            }
+            $rows += "| $name | $($s.cases) | $($s.failed) | $gate |"
+            if ($s.failed -gt 0) { Write-Host "$name failures: $($s.failures | ConvertTo-Json -Compress -Depth 6)" }
+          }
+          $md = "### unstable-input (Windows)`n`n" + ($rows -join "`n") + "`n`nTauri: $(Get-Content tauri-version.txt -Raw)`n"
+          Write-Host $md
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $md
+          if ($bad) { exit 1 }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: unstable-input-windows
+          path: tools/spikes/unstable-input/out/
+          if-no-files-found: warn
+          retention-days: 14
+
+  webview2-minimum:
+    name: WebView2 minimum (fixed-version runtimes 98 and 97)
+    needs: build
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: tools/parity-harness
+    env:
+      # The plugin's floor is 98.0.1108.44 (W0c ruling 5). Microsoft no longer
+      # offers Fixed Version cabs this old, so the runtimes come from the
+      # WebView2.Runtime.X64 packages on nuget.org, which repackage them:
+      # each package is pinned by the SHA-512 nuget.org's catalog records for
+      # it, and every executable and DLL in it must carry a valid Authenticode
+      # signature (the browser binaries Microsoft's) before anything runs.
+      FLOOR_RUNTIME: 98.0.1108.56
+      FLOOR_SHA512: IDwlKkzy9r5h0qQEmWtgMYhRHFaQjNrt9ysAoNpBv3jDVnNmQas3e46U6vPn1D2JCQRsCy+CJSgGqoVXO794BA==
+      BELOW_RUNTIME: 97.0.1072.76
+      BELOW_SHA512: KOnUBBWtEtMDhyXULj7prudlQ+6LPO67EWQndvCS6KCbwX6rSFYjnBx84TkMtHYyHJUHv8dqNcow8MFhRnPBSA==
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -99,28 +315,192 @@ jobs:
         run: npm ci --workspaces=false --no-audit --no-fund
       - name: ow-electron binary
         shell: bash
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: ''
         run: |
           node -e "require('fs').accessSync(require('@overwolf/ow-electron'))" \
             || node node_modules/@overwolf/ow-electron/install.js
-          node -e "console.log(require('@overwolf/ow-electron/package.json').version)"
-      # The runner's display starts at 1024 x 768, smaller than most lab
-      # windows: each host then fits the window to the screen its own way and
-      # the scenarios no longer compare like with like.
+      - name: fixed-version runtimes (download, SHA-512, Authenticode, sandbox ACL)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'webview2'
+          foreach ($rt in @(@{ v = $env:FLOOR_RUNTIME; sha = $env:FLOOR_SHA512 }, @{ v = $env:BELOW_RUNTIME; sha = $env:BELOW_SHA512 })) {
+            $pkg = Join-Path $env:RUNNER_TEMP "webview2.runtime.x64.$($rt.v).nupkg"
+            Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/webview2.runtime.x64/$($rt.v)/webview2.runtime.x64.$($rt.v).nupkg" -OutFile $pkg
+            $bytes = [IO.File]::ReadAllBytes($pkg)
+            $sha = [Convert]::ToBase64String([Security.Cryptography.SHA512]::Create().ComputeHash($bytes))
+            if ($sha -ne $rt.sha) { throw "SHA-512 of $($rt.v) is $sha, expected $($rt.sha)" }
+            $dir = Join-Path $root $rt.v
+            $zip = [IO.Path]::ChangeExtension($pkg, '.zip')
+            Move-Item $pkg $zip
+            Expand-Archive -Path $zip -DestinationPath $dir
+            $folder = Join-Path $dir 'contentFiles/any/any/WebView2'
+            # nuget.org escapes spaces in entry names; restore them.
+            Get-ChildItem -Path $folder -Recurse -Directory | Where-Object { $_.Name -match '%20' } |
+              Sort-Object { $_.FullName.Length } -Descending |
+              ForEach-Object { Rename-Item $_.FullName ($_.Name -replace '%20', ' ') }
+            if (-not (Test-Path (Join-Path $folder 'msedgewebview2.exe'))) { throw "no msedgewebview2.exe in $folder" }
+            $pe = Get-ChildItem -Path $folder -Recurse -File -Include *.exe, *.dll
+            $unsigned = @()
+            foreach ($f in $pe) {
+              $sig = Get-AuthenticodeSignature -FilePath $f.FullName
+              if ($sig.Status -ne 'Valid') { $unsigned += "$($f.Name): $($sig.Status)" }
+            }
+            if ($unsigned.Count) { throw "files without a valid signature in $($rt.v):`n$($unsigned -join "`n")" }
+            foreach ($name in @('msedgewebview2.exe', 'msedge.dll', 'EmbeddedBrowserWebView.dll')) {
+              $f = Get-ChildItem -Path $folder -Recurse -File -Filter $name | Select-Object -First 1
+              if (-not $f) { throw "$name missing in $($rt.v)" }
+              $subject = (Get-AuthenticodeSignature -FilePath $f.FullName).SignerCertificate.Subject
+              if ($subject -notmatch 'O=Microsoft Corporation') { throw "$name of $($rt.v) is signed by $subject" }
+            }
+            Write-Host "$($rt.v): $($pe.Count) signed binaries, SHA-512 ok"
+            # A fixed-version runtime's renderer sandbox needs read and
+            # execute for the AppContainer SIDs (Microsoft's distribution notes).
+            icacls $folder /grant '*S-1-15-2-2:(OI)(CI)(RX)' /T /Q | Out-Null
+            icacls $folder /grant '*S-1-15-2-1:(OI)(CI)(RX)' /T /Q | Out-Null
+            "WV2_$($rt.v -replace '\.', '_')=$folder" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          }
       - name: display 1920 x 1080
         shell: pwsh
         run: |
           try { Set-DisplayResolution -Width 1920 -Height 1080 -Force } catch { Write-Warning "display resolution unchanged: $_" }
-          Get-CimInstance Win32_VideoController | Format-Table Name, CurrentHorizontalResolution, CurrentVerticalResolution
-      - name: lab (ow-electron, then ow-tauri, per scenario; parity-diff; Windows checks)
-        env:
-          SCENARIOS: ${{ inputs.scenarios || 'all' }}
-        run: node ci/windows-lab.mjs --shard ${{ matrix.shard }}/4 --scenarios "$env:SCENARIOS"
+      - name: at the floor - sizes and local-frame on both hosts (ow-tauri on the fixed runtime)
+        shell: pwsh
+        run: |
+          $env:WEBVIEW2_BROWSER_EXECUTABLE_FOLDER = (Get-Item "env:WV2_$($env:FLOOR_RUNTIME -replace '\.', '_')").Value
+          node ci/windows-lab.mjs --scenarios sizes,local-frame --out captures/webview2-floor
+          $lab = $LASTEXITCODE
+          node ci/webview2-min.mjs --capture captures/WT-sizes --runtime $env:FLOOR_RUNTIME --expect supported
+          if ($lab -or $LASTEXITCODE) { exit 1 }
+      - name: below the floor - ads fail closed (ow-tauri only)
+        if: always()
+        shell: pwsh
+        run: |
+          $env:WEBVIEW2_BROWSER_EXECUTABLE_FOLDER = (Get-Item "env:WV2_$($env:BELOW_RUNTIME -replace '\.', '_')").Value
+          Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          foreach ($d in @("$env:APPDATA/dev.ow-tauri.parity-harness", "$env:LOCALAPPDATA/dev.ow-tauri.parity-harness", "$env:APPDATA/ow-electron")) {
+            if (Test-Path $d) { Remove-Item -Recurse -Force $d }
+          }
+          node run.mjs --host tauri --no-build --ci-visible --mode test --home real --no-wait --scenario sizes --duration 40 --run-id WT-sizes-below-floor
+          node ci/webview2-min.mjs --capture captures/WT-sizes-below-floor --runtime $env:BELOW_RUNTIME --expect unsupported
+          if ($LASTEXITCODE) { exit 1 }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: windows-lab-captures-${{ matrix.shard }}
+          name: webview2-minimum-captures
           path: |
             tools/parity-harness/captures/
             !tools/parity-harness/captures/.tools/
           if-no-files-found: warn
           retention-days: 14
+
+  macos-drift:
+    name: macOS drift subset (invisible lab, test ads)
+    if: github.event_name == 'schedule' || inputs.drift == true
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tools/parity-harness/tauri-app/src-tauri -> target
+      - name: install (npm workspaces) and build the JavaScript API
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build --workspace tauri-plugin-overwolf-api
+      - name: build the harness app (lab feature)
+        run: node tools/parity-harness/tauri-app/build.mjs
+      - name: install the harness with the newest ow-electron and ow-cli latest
+        working-directory: tools/parity-harness
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: ''
+        run: |
+          npm ci --workspaces=false --no-audit --no-fund
+          npm install --no-save --workspaces=false --no-audit --no-fund @overwolf/ow-electron@latest @overwolf/ow-cli@latest
+          node -e "console.log('ow-electron', require('@overwolf/ow-electron/package.json').version)"
+      - name: lab (drift subset; ow-tauri invisible, window monitor on)
+        working-directory: tools/parity-harness
+        run: node ci/windows-lab.mjs --scenarios all --out captures/macos-drift
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: windows-lab-summary-macos
+          path: |
+            tools/parity-harness/captures/macos-drift/summary.json
+            tools/parity-harness/captures/macos-drift/summary.md
+          if-no-files-found: warn
+          retention-days: 30
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: macos-drift-captures
+          path: |
+            tools/parity-harness/captures/
+            !tools/parity-harness/captures/.tools/
+            !tools/parity-harness/captures/profiles/
+          if-no-files-found: warn
+          retention-days: 14
+
+  report:
+    name: Report
+    needs: [lab, unstable-input, webview2-minimum, macos-drift]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Only the weekly run writes: it opens or updates the drift issue.
+      issues: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: windows-lab-summary-*
+          path: summaries
+      - name: summary
+        shell: bash
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Lab results"
+            echo
+            echo "| job | result |"
+            echo "|---|---|"
+            jq -r 'to_entries[] | "| \(.key) | \(.value.result) |"' <<<"$RESULTS"
+            echo
+            find summaries -name summary.md | sort | xargs -r cat
+          } > report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: weekly drift - open or update the issue
+        if: github.event_name == 'schedule' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Weekly drift lab failed"
+          {
+            echo "The weekly drift lab ($RUN_URL) found a difference between ow-tauri and the newest"
+            echo "ow-electron \`latest\` with Overwolf's live ad page (test ads only). CONTRIBUTING.md names who"
+            echo "patches it (7-day target)."
+            echo
+            head -c 60000 report.md
+          } > body.md
+          number="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file body.md
+          else
+            gh issue create --title "$title" --body-file body.md
+          fi
