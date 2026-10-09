@@ -129,8 +129,9 @@ Privacy switches and email hashes:
 | `set_anonymous_analytics_preference(enabled) -> Result<()>` | stores the user's choice in `ow-tauri.json`. `false` applies from the next launch's burst. Error: `io`. |
 | `set_analytics_user_enabled(enabled) -> Result<()>` | the app-level switch, only with `analytics.userSwitch`; stored in `ow-tauri.json`. Errors: `unsupported` without `userSwitch`, `io`. |
 | `generate_user_email_hashes(email) -> EmailHashes` | hashes the normalised address in `emailHashes.encoding`, then sends and stores the hashes as `set_user_email_hashes` does |
-| `set_user_email_hashes(&EmailHashes)` | sends the hashes to every ad and stores them as `eHashes` in `ow-electron.json`, as ow-electron does. Empty hashes are ignored, and so is every call after `disable_ads_fpd()` (one warning). |
-| `clear_user_email_hashes() -> Result<()>` | forgets the hashes and removes `eHashes`. Errors: `io`, `backend`. |
+| `set_user_email_hashes(&EmailHashes)` | stores the fields that are set as `eHashes` in `ow-electron.json` (in the order `sha1`, `md5`, `sha256`) and sends them to every running ad. Empty hashes store and send `{}`. Ignored after `disable_ads_fpd()` (one warning). |
+| `set_user_email_hashes_value(Option<Value>)` | `setUserEmailHashes(value)` with the exact JavaScript argument. `Some(value)` stores `value` as given, `null` included. `None` (`undefined`) removes `eHashes`. Every running ad gets one `eHashes` message with the value, or `{}` for `None` and falsy values. After `disable_ads_fpd()`, `Some` is ignored (one warning) and `None` still removes. A failed write is logged. |
+| `clear_user_email_hashes() -> Result<()>` | the same as `set_user_email_hashes_value(None)`: removes `eHashes` and sends `{}` to every running ad. Error: `io`. |
 
 Analytics:
 

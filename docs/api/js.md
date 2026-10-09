@@ -130,16 +130,27 @@ sends the hashes to the ads and stores them. The address itself is never
 stored or logged. Returns `{ sha1?, md5?, sha256? }`, lower-case hex by
 default (`emailHashes.encoding` in [CONFIG.md](../CONFIG.md#emailhashes)).
 
-### `setUserEmailHashes(hashes?: EmailHashes): Promise<void>`
+### `setUserEmailHashes(hashes?: EmailHashes | null | string): Promise<void>`
 
-Sends and stores hashes your app computed. Empty hashes are ignored. Calls
-after `disableAdsFPD()` are ignored with one warning in the log. Without an
-argument the call does nothing.
+Sends and stores hashes your app computed, as ow-electron does:
+
+- A value is stored as `eHashes` exactly as given. This includes `null`,
+  `{}`, `''` and objects with missing or extra keys.
+- No argument, or `undefined`, removes `eHashes` from `ow-electron.json`.
+- Every running ad gets one `eHashes` message. Its data is the value, or
+  `{}` when the value is `undefined`, `null`, `''` or another falsy value.
+- Ads started or reloaded later get nothing.
+
+After `disableAdsFPD()`, a value is ignored with one warning in the log.
+A call without a value still removes the stored hashes. A failed write is
+only logged; the call still resolves.
 
 ### `clearUserEmailHashes(): Promise<void>`
 
-Forgets the hashes and removes `eHashes` from `ow-electron.json`. Rejects
-with `io` or `backend` when the file cannot be written.
+Does what `setUserEmailHashes()` without an argument does: removes
+`eHashes` from `ow-electron.json` and sends `{}` to every running ad. It
+also works after `disableAdsFPD()`. Rejects with `io` when the file cannot
+be written.
 
 ## Analytics switches
 

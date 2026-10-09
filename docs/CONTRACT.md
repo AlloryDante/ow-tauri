@@ -248,8 +248,8 @@ and `invalid-argument` (malformed arguments).
 | `disable_ads_optimization` | `default` | none | `null` | |
 | `disable_ads_fpd` | `default` | none | `null` | |
 | `generate_user_email_hashes` | `email-hashes` | `email` | `{ sha1, md5, sha256 }` | |
-| `set_user_email_hashes` | `email-hashes` | `hashes?` | `null` | |
-| `clear_user_email_hashes` | `email-hashes` | none | `null` | `io`, `backend` |
+| `set_user_email_hashes` | `email-hashes` | `hashes: { value? }` | `null` | |
+| `clear_user_email_hashes` | `email-hashes` | none | `null` | `io` |
 | `set_external_payment_user_id` | `analytics` | `options?` | `null` | `network` |
 | `set_analytics_user_enabled` | `analytics` | `enabled` | `null` | `unsupported` (without `analytics.userSwitch`), `io` |
 | `set_anonymous_analytics_preference` | `analytics` | `enabled` | `null` | `io` |
@@ -283,14 +283,24 @@ These commands mirror `app.overwolf` of ow-electron.
   `emailHashes.encoding` (`hex`, as ow-electron), then sends and stores them
   as `set_user_email_hashes` does. Empty or blank input gives empty hashes.
   Shared vectors: `crates/tauri-plugin-overwolf/tests/fixtures/email-hashes.json`.
-- **`set_user_email_hashes(hashes)`** sends `eHashes` to every existing ad
-  guest (D.5) and writes `eHashes` to `ow-electron.json` (F.2), as
-  ow-electron does [OBS]. Empty hashes are ignored, and so is every call
-  after `disableAdsFPD()`. A call without `hashes` changes nothing.
-  ow-electron clears `eHashes` when it gets `undefined`; see
-  [OPEN-QUESTIONS](OPEN-QUESTIONS.md) for the difference.
-- **`clear_user_email_hashes()`** (plugin option) forgets the hashes and
-  removes `eHashes` from `ow-electron.json`. It sends nothing to guests.
+- **`set_user_email_hashes({ value })`** does what ow-electron's
+  `setUserEmailHashes(value)` does [OBS]. The JavaScript API passes its
+  argument as `value`; a missing `value` is `undefined`, and `null` stays
+  `null`.
+  - A `value` is written to `ow-electron.json` as `eHashes` exactly as
+    given (F.2): `null`, `{}`, `""`, missing or extra keys, in the app's
+    key order.
+  - A missing `value` removes `eHashes`, so the file returns to its bytes
+    from before the set.
+  - Every existing ad guest gets one `eHashes` message (D.5) whose data is
+    the value, or `{}` when the value is missing or falsy.
+  - After `disableAdsFPD()` a `value` is ignored (one warning). A missing
+    `value` still removes `eHashes` and sends `{}`.
+  - A failed write is logged and the command still succeeds.
+- **`clear_user_email_hashes()`** (plugin option) is the missing-`value`
+  case: it removes `eHashes` and sends `{}` to every existing guest, also
+  after `disableAdsFPD()`. It fails with `io` when the file cannot be
+  written.
 - **Switches.** `disable_anonymous_analytics` (E.3),
   `disable_ads_optimization` (D.2) and `disable_ads_fpd` (D.5) only reduce
   what is sent. `set_anonymous_analytics_preference(false)` stores the choice
@@ -793,7 +803,7 @@ plugin sends the same:
 |---|---|---|
 | `consent` | string | a consent page saves (D.6.6): **twice**, first the TCF string (`saveConsent`), then the stored, URL-encoded unified string `cmp%3D...` (`saveUnifiedConsent`). To every existing guest, also one still loading; not resent after a reload [OBS] |
 | `customTracking` | object or `null` | the element's `customTracking` changed, and again after every later reload of that guest [OBS] |
-| `eHashes` | `{ sha1, md5, sha256 }` (empty strings for missing ones) | `setUserEmailHashes()` or `generateUserEmailHashes()`; to every existing guest; not resent after a reload [OBS]. Never after `disableAdsFPD()` |
+| `eHashes` | the value passed to `setUserEmailHashes(value)` as given, or `{}` when it is `undefined` or falsy; `{ sha1, md5, sha256 }` from `generateUserEmailHashes()` | every `setUserEmailHashes()`, `generateUserEmailHashes()` and `clearUserEmailHashes()` call; to every existing guest; not resent after a reload or to a new guest [OBS]. After `disableAdsFPD()` only the `{}` of a clear is sent |
 | `window-minimized` | none | the embedder window was minimized, after the guest document turned `hidden` [OBS: both labs] |
 | `window-hidden` | none | the embedder window was hidden; on macOS also right after `window-minimized`; on Windows a minimize sends `window-minimized` only [OBS: both labs]. Nothing is sent when the window is shown again |
 | `sendCommand` | array of the arguments | `element.sendCommand(...args)` (B.3.3) [OBS] |
@@ -1368,7 +1378,7 @@ Exact shape and encoding, as ow-electron writes it [OBS]:
 | `cmp.timeStamp` | **Unix seconds**, refreshed on every launch by the startup consent page |
 | `cmp.unifiedConsentString` | stored **URL-encoded**: `cmp%3D<tcf>%26ac%3D<ac>` |
 | `utmParams` | written by Overwolf's installer; absent for apps installed any other way [OBS] [TYPES] |
-| `eHashes` | `{ sha1, md5, sha256 }`: the last email hashes the app set (A.2.2), written after `cmp`, replaced by every later call, absent until the first [OBS]. Removed by `clearUserEmailHashes()` |
+| `eHashes` | the last value the app passed to `setUserEmailHashes(value)` (A.2.2), stored as given (`{ sha1, md5, sha256 }` from `generateUserEmailHashes()`). Written after `cmp`, replaced by every later call, absent until the first [OBS]. Removed by `setUserEmailHashes()` without a value and by `clearUserEmailHashes()` |
 
 Rules:
 

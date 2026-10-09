@@ -557,8 +557,8 @@ Plugin code looks windows up with `get_window` and `get_webview`, because
 which ow-electron uses for the same uid:
 
 - **`ow-electron.json`** is shared with ow-electron, byte for byte. The
-  plugin writes only `firstLaunch`, `cmp` and `eHashes`. It never removes
-  other keys, and their order is kept.
+  plugin writes only `firstLaunch`, `cmp` and `eHashes`. It removes no key
+  but `eHashes`, and the order of the other keys is kept.
 - **`ow-tauri.json`** holds ow-tauri's own switches and preferences.
 
 Writes are read-modify-write under a lock, through a temporary file renamed

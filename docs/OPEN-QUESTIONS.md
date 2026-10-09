@@ -294,15 +294,19 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 - **Question.** How does `setUserEmailHashes` reach the ad page, and is
   `disableAdsFPD()` the only switch?
 - **Status.** Answered. One detail **pending harness** (R3-3).
-- **Answer.** As an `eHashes` host message (`{ sha1, md5, sha256 }`) to every
-  existing ad guest, after `setUserEmailHashes()` and also after
-  `generateUserEmailHashes()`; never as a `__overwolf__` key; not resent when a
-  guest reloads; no request and no file (CONTRACT D.5). ow-tauri never scans
-  user data for email addresses.
+- **Answer.** As one `eHashes` host message to every existing ad guest,
+  after `setUserEmailHashes(value)` and also after
+  `generateUserEmailHashes()`. The data is the value as given, or `{}` when
+  it is `undefined` or falsy; `generateUserEmailHashes()` sends
+  `{ sha1, md5, sha256 }`. Never as a `__overwolf__` key; not resent when a
+  guest reloads; no request. The value is also stored as `eHashes` in
+  `ow-electron.json`, and `undefined` removes it (CONTRACT A.2.2, D.5, F.2).
+  ow-tauri never scans user data for email addresses.
 - **Source.** Observed;
   https://dev.overwolf.com/ow-electron/monetization/advertising/user-identity.
 - **Open.** R3-3: what happens to hash calls after `disableAdsFPD()`.
-  Interim: ignored.
+  Interim: a value is ignored; `undefined` and `clearUserEmailHashes()`
+  still remove the stored hashes and send `{}`.
 
 ### OQ-13: host-to-guest messages
 
