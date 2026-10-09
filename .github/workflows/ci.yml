@@ -225,6 +225,23 @@ jobs:
       - name: relative links and anchors in every Markdown file
         run: node scripts/check-links.mjs
 
+  release-checks:
+    name: Release checks
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      # Node built-ins only: no install step (docs/RELEASING.md).
+      - name: release scripts' tests
+        run: node --test "scripts/release/*.test.mjs"
+      - name: one version in every manifest and lockfile
+        run: node scripts/release/version-sync.mjs check
+      - name: identity check (gate G9)
+        run: node scripts/release/identity-check.mjs
+
   supply-chain:
     name: Supply chain
     if: github.event_name != 'schedule'
