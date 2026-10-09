@@ -122,7 +122,8 @@ const USAGE = `Usage: node run.mjs [options]
                           (may raise a system screen-recording prompt)
   --corrupt-state KIND    before launch, replace the ow-electron state file of the
                           --home profile with: ${Object.keys(CORRUPTIONS).join(', ')}
-                          (corrupt-state scenario; needs a profile from an earlier run)
+                          (corrupt-state scenario; needs a profile from an earlier run,
+                          or --home real with --ci-visible in the CI lab)
   --run-id ID             capture folder name (default: timestamp + mode)
   --no-wait               do not wait for a quiet machine before launching
   --help`;
@@ -221,7 +222,10 @@ function parseCli() {
   if (values['corrupt-state'] !== undefined) {
     if (!(values['corrupt-state'] in CORRUPTIONS))
       fail(`--corrupt-state must be one of ${Object.keys(CORRUPTIONS).join(', ')}`);
-    if (!values.home.startsWith('profile:'))
+    // The Windows CI lab has no home isolation: it seeds the real home
+    // (ci/windows-lab.mjs) and corrupts that state file.
+    const ciHome = values.home === 'real' && values['ci-visible'];
+    if (!values.home.startsWith('profile:') && !ciHome)
       fail('--corrupt-state needs --home profile:NAME (a state file from an earlier run)');
   }
   if (!['hidden', 'transparent'].includes(values.present))

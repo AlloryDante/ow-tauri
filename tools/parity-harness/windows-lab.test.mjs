@@ -7,13 +7,23 @@ import { after, test } from 'node:test';
 
 import {
   classCounts,
+  CORRUPTIONS,
   durationOf,
+  entriesOf,
+  entryId,
   LAB_SCENARIOS,
+  MACOS_DRIFT_SCENARIOS,
+  planOf,
   resetDir,
   resetState,
+  rowFailed,
+  runArgs,
   shard,
   stateDirs,
+  summaryMarkdown,
 } from './ci/windows-lab.mjs';
+import { captureFacts, UNSUPPORTED_MESSAGE, verdict } from './ci/webview2-min.mjs';
+import { SECTION_5_2 } from './lib/scenarios.mjs';
 import {
   adformatFacts,
   compositeAt,
@@ -302,9 +312,165 @@ test('shards split the lab by run time and cover every scenario once', () => {
   const totals = [1, 2, 3, 4].map((i) =>
     shard(LAB_SCENARIOS, i, 4).reduce((n, s) => n + durationOf(s), 0),
   );
-  assert.ok(Math.max(...totals) - Math.min(...totals) <= 150, String(totals));
-  assert.equal(durationOf('A'), 90);
+  assert.ok(Math.max(...totals) - Math.min(...totals) <= 300, String(totals));
+  // Two hosts, each 90 s plus the launch overhead.
+  assert.equal(durationOf('A'), 2 * (90 + 40));
+  // A seeded entry launches twice per host; an ow-tauri-only one on one host.
+  assert.equal(durationOf('corrupt-state:empty'), 2 * 2 * (30 + 40));
+  assert.equal(durationOf('dialog-probe'), 30 + 40);
   assert.deepEqual(shard(['audio', 'lab-layers'], 1, 1), ['audio', 'lab-layers']);
+});
+
+test('the Windows lab covers every Windows check of DESIGN §5.2 and the record-first scenarios', () => {
+  const lab = new Set(LAB_SCENARIOS.map((e) => planOf(e).scenario));
+  // build-identity runs in its own installer job (windows-lab.yml);
+  // exit-terminate is [NSApp terminate:], which only macOS has.
+  const elsewhere = new Set(['build-identity', 'exit-terminate']);
+  for (const item of SECTION_5_2) {
+    if (item.lab === 'macos') continue;
+    for (const name of item.scenarios) {
+      if (elsewhere.has(name)) continue;
+      assert.ok(lab.has(name), `§5.2 #${item.n} ${name}`);
+    }
+  }
+  for (const name of [
+    'email-hashes-clear',
+    'last-window-during-consent',
+    'last-window-before-consent',
+    'last-window-consent-saved',
+    'last-window-after-consent',
+    'gesture-timing',
+  ])
+    assert.ok(lab.has(name), name);
+  for (const kind of CORRUPTIONS) assert.ok(LAB_SCENARIOS.includes(`corrupt-state:${kind}`), kind);
+  // macOS-only checks stay out (exit-terminate is [NSApp terminate:]).
+  for (const name of ['exit-terminate', 'recreate-reload', 'recreate-reload-off', 'crash-fallback'])
+    assert.ok(!lab.has(name), name);
+  assert.equal(new Set(LAB_SCENARIOS).size, LAB_SCENARIOS.length);
+  for (const name of MACOS_DRIFT_SCENARIOS) planOf(name);
+});
+
+test('lab entries: corrupt-state kinds, seeds and ow-tauri-only scenarios', () => {
+  assert.deepEqual(planOf('corrupt-state:wrong-types'), {
+    entry: 'corrupt-state:wrong-types',
+    scenario: 'corrupt-state',
+    hosts: ['electron', 'tauri'],
+    seeded: true,
+    extra: ['--corrupt-state', 'wrong-types'],
+  });
+  assert.equal(planOf('no-analytics-persisted').seeded, true);
+  assert.equal(planOf('sizes').seeded, false);
+  assert.deepEqual(planOf('dialog-probe').hosts, ['tauri']);
+  assert.throws(() => planOf('corrupt-state'), /needs a kind/);
+  assert.throws(() => planOf('corrupt-state:bogus'), /needs a kind/);
+  assert.throws(() => planOf('sizes:x'), /only corrupt-state/);
+  assert.throws(() => planOf('nope'), /unknown scenario/);
+  assert.deepEqual(entriesOf('sizes, corrupt-state'), [
+    'sizes',
+    ...CORRUPTIONS.map((k) => `corrupt-state:${k}`),
+  ]);
+  assert.deepEqual(entriesOf('all', ['A', 'cmp']), ['A', 'cmp']);
+  assert.throws(() => entriesOf('sizes,nope'), /unknown scenario/);
+  assert.equal(entryId('corrupt-state:null'), 'corrupt-state-null');
+});
+
+test('launch arguments: the real home on Windows, own homes and profiles on macOS', () => {
+  const cs = planOf('corrupt-state:array');
+  assert.deepEqual(runArgs(cs, 'tauri', 'WT-x', { platform: 'win32' }), [
+    'run.mjs',
+    '--host',
+    'tauri',
+    '--mode',
+    'test',
+    '--home',
+    'real',
+    '--ci-visible',
+    '--no-wait',
+    '--run-id',
+    'WT-x',
+    '--no-build',
+    '--scenario',
+    'corrupt-state',
+    '--corrupt-state',
+    'array',
+  ]);
+  // The seed launch is a plain launch of the scenario.
+  assert.ok(
+    !runArgs(cs, 'electron', 'WE-x-seed', { seed: true, platform: 'win32' }).includes(
+      '--corrupt-state',
+    ),
+  );
+  const mac = runArgs(cs, 'electron', 'WE-x', { platform: 'darwin' });
+  assert.equal(mac[mac.indexOf('--home') + 1], 'profile:lab-electron-corrupt-state-array');
+  assert.ok(!mac.includes('--ci-visible'));
+  const a = runArgs(planOf('A'), 'electron', 'WE-A', { platform: 'darwin' });
+  assert.equal(a[a.indexOf('--home') + 1], 'isolated');
+  assert.deepEqual(a.slice(-6), [
+    '--present',
+    'transparent',
+    '--layout',
+    '400x600',
+    '--duration',
+    '90',
+  ]);
+  // Every launch is test ads only.
+  for (const args of [mac, a]) assert.equal(args[args.indexOf('--mode') + 1], 'test');
+});
+
+test('a row fails on a failed launch, a missing comparison, a BUG or a failed check', () => {
+  const ok = { status: 0, exit: { code: 0 } };
+  const base = { compared: true, diffFound: true, counts: {}, checks: [], bugs: [] };
+  assert.equal(rowFailed({ ...base, electron: ok, tauri: ok }), false);
+  assert.equal(rowFailed({ ...base, electron: ok, tauri: { status: 1 } }), true);
+  assert.equal(
+    rowFailed({ ...base, electron: ok, tauri: { status: 0, exit: { timedOut: true } } }),
+    true,
+  );
+  assert.equal(rowFailed({ ...base, electron: ok, tauri: ok, diffFound: false }), true);
+  assert.equal(rowFailed({ ...base, electron: ok, tauri: ok, counts: { BUG: 1 } }), true);
+  assert.equal(
+    rowFailed({ ...base, electron: ok, tauri: ok, checks: [{ pass: false, advisory: true }] }),
+    false,
+  );
+  assert.equal(rowFailed({ ...base, electron: ok, tauri: ok, checks: [{ pass: false }] }), true);
+  // An ow-tauri-only row needs no comparison.
+  assert.equal(rowFailed({ ...base, compared: false, diffFound: false, tauri: ok }), false);
+});
+
+test('the summary lists every BUG difference under the table', () => {
+  const md = summaryMarkdown('1/8', [
+    {
+      scenario: 'messages',
+      compared: true,
+      diffFound: true,
+      electron: { status: 0, exit: { code: 0 } },
+      tauri: { status: 0, exit: { code: 0 } },
+      counts: { BUG: 1, variance: 2, 'intended:deviation': 1 },
+      checks: [],
+      bugs: [
+        {
+          section: 'call',
+          key: 'isCMPRequired',
+          field: 'missing',
+          electron: 'called',
+          tauri: 'a|b',
+        },
+      ],
+    },
+    {
+      scenario: 'dialog-probe',
+      compared: false,
+      diffFound: false,
+      tauri: { status: 0, exit: { code: 0 } },
+      counts: {},
+      checks: [],
+      bugs: [],
+    },
+  ]);
+  assert.match(md, /\| messages \| exit 0 \| exit 0 \| 1 \| 2 \| 1 \| 0 \| - \| FAIL \|/);
+  assert.match(md, /\| dialog-probe \| - \| exit 0 \| n\/a \|.*\| ok \|/);
+  assert.match(md, /#### BUG differences/);
+  assert.match(md, /\| messages \| call \| isCMPRequired \| missing \| called \| a\\\|b \|/);
 });
 
 test('the state folders of both hosts are reset between runs', () => {
@@ -590,4 +756,45 @@ test('the Tauri app window is found by its label, an ow-electron one by its page
     ],
   });
   assert.deepEqual(appWindowLoaded(e).bounds, rect(0, 0, 1000, 720));
+});
+
+test('WebView2 minimum: a floor runtime loads ads, an older one creates no guest', () => {
+  const at = (name, webview, files) => {
+    const dir = run(name, files);
+    writeFileSync(join(dir, 'overwolf.json'), JSON.stringify({ versions: { webview } }));
+    return dir;
+  };
+  const floor = at('wv-98', '98.0.1108.56', {
+    'events.jsonl': [{ kind: 'guest-probe', webContentsId: 'owad-1', label: 'dom-ready-0' }],
+    'page-events.jsonl': [{ webContentsId: 'main', event: 'display_ad_loaded' }],
+  });
+  const facts = captureFacts(floor);
+  assert.deepEqual(facts, {
+    webview: '98.0.1108.56',
+    guests: ['owad-1'],
+    adsLoaded: 1,
+    messageSeen: false,
+  });
+  assert.equal(verdict(facts, { runtime: '98.0.1108.56', expect: 'supported' }).ok, true);
+  // The runtime the app reports must be the fixed one under test.
+  assert.match(
+    verdict(facts, { runtime: '98.0.1108.62', expect: 'supported' }).problems[0],
+    /ran on WebView2 98.0.1108.56/,
+  );
+  assert.equal(verdict(facts, { runtime: '98.0.1108.56', expect: 'unsupported' }).ok, false);
+
+  const old = at('wv-97', '97.0.1072.76', {
+    'events.jsonl': [{ kind: 'app', event: 'ready' }],
+    'page-events.jsonl': [{ webContentsId: 'main', kind: 'error', message: UNSUPPORTED_MESSAGE }],
+  });
+  const oldFacts = captureFacts(old);
+  assert.equal(oldFacts.messageSeen, true);
+  assert.equal(verdict(oldFacts, { runtime: '97.0.1072.76', expect: 'unsupported' }).ok, true);
+  const noAds = verdict(oldFacts, { runtime: '97.0.1072.76', expect: 'supported' });
+  assert.deepEqual(noAds.problems, [
+    'no ad guest was created',
+    'no test ad loaded (display_ad_loaded)',
+  ]);
+  // No snapshot at all: the app never reached its page.
+  assert.equal(captureFacts(join(root, 'missing')).webview, null);
 });
