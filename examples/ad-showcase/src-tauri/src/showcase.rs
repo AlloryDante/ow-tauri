@@ -102,7 +102,7 @@ pub fn run() -> tauri::Result<()> {
         // Single instance first: a second launch focuses this app and the
         // plugin writes nothing in the second process (docs/INTEROP.md).
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(window) = app.get_window(MAIN) {
+            if let Some(window) = find_window(app, MAIN) {
                 let _ = window.unminimize();
                 show(&window);
                 let _ = window.set_focus();
@@ -493,6 +493,21 @@ fn bounds<R: Runtime>(window: &Window<R>) -> serde_json::Value {
     })
 }
 
+/// The window `label`. `get_window`, not `get_webview_window`: a window
+/// that hosts an ad has several webviews (docs/GETTING-STARTED.md, "Living
+/// with `unstable`"). Linux has no ads and no Tauri `unstable` API; there
+/// every window keeps its one webview.
+fn find_window<R: Runtime>(app: &AppHandle<R>, label: &str) -> Option<Window<R>> {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        app.get_window(label)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        app.get_webview_window(label).map(|w| w.as_ref().window())
+    }
+}
+
 /// Runs `then` on the window after [`ACTION_SPAN`], if it still exists.
 fn later<R: Runtime>(window: &Window<R>, then: impl FnOnce(&Window<R>) + Send + 'static) {
     let app = window.app_handle().clone();
@@ -500,7 +515,7 @@ fn later<R: Runtime>(window: &Window<R>, then: impl FnOnce(&Window<R>) + Send + 
         std::thread::sleep(ACTION_SPAN);
         let main = app.clone();
         let _ = app.run_on_main_thread(move || {
-            if let Some(window) = main.get_window(MAIN) {
+            if let Some(window) = find_window(&main, MAIN) {
                 then(&window);
             }
         });
@@ -515,9 +530,7 @@ fn later<R: Runtime>(window: &Window<R>, then: impl FnOnce(&Window<R>) + Send + 
 /// An unknown action, or no showcase window.
 #[tauri::command]
 pub fn showcase_window_action<R: Runtime>(app: AppHandle<R>, action: String) -> Result<(), String> {
-    // `get_window`, not `get_webview_window`: a window that hosts an ad has
-    // several webviews (README "Living with `unstable`").
-    let window = app.get_window(MAIN).ok_or("no showcase window")?;
+    let window = find_window(&app, MAIN).ok_or("no showcase window")?;
     let failed = |e: tauri::Error| e.to_string();
     match action.as_str() {
         "hide-3s" => {

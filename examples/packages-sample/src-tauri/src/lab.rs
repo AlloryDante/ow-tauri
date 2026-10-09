@@ -348,9 +348,7 @@ pub fn e2e_reveal<R: Runtime>(webview: Webview<R>, label: String) -> Result<Valu
     if !consent_window(&label) {
         return Err("only a consent window".to_owned());
     }
-    let window = webview
-        .app_handle()
-        .get_window(&label)
+    let window = crate::sample::find_window(webview.app_handle(), &label)
         .ok_or_else(|| format!("no window {label}"))?;
     let url = window
         .webviews()

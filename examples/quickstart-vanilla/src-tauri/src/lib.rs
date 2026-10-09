@@ -6,8 +6,13 @@ pub fn run() {
         // Register single-instance first: a second launch focuses this app, and the overwolf plugin
         // writes nothing in the second process before it exits (README, "Other plugins").
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // `get_window`: a window that hosts an ad has more than one webview.
-            if let Some(window) = app.get_window("main") {
+            // `get_window`: a window that hosts an ad has more than one webview. Linux has no ads and
+            // no Tauri `unstable` API, so the window keeps its one webview there.
+            #[cfg(any(windows, target_os = "macos"))]
+            let window = app.get_window("main");
+            #[cfg(not(any(windows, target_os = "macos")))]
+            let window = app.get_webview_window("main");
+            if let Some(window) = window {
                 let _ = window.unminimize();
                 let _ = window.set_focus();
             }

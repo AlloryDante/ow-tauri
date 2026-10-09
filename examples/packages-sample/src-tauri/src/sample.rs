@@ -48,7 +48,7 @@ pub fn run() -> tauri::Result<()> {
         // Single instance first: a second launch focuses this app and the
         // Overwolf plugin writes nothing in the second process.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            if let Some(window) = app.get_window(MAIN) {
+            if let Some(window) = find_window(app, MAIN) {
                 let _ = window.unminimize();
                 show(&window);
                 let _ = window.set_focus();
@@ -258,6 +258,20 @@ fn relaunch_if_pending<R: Runtime>(app: &AppHandle<R>) {
             Err(error) => log::error!("relaunch failed: {error}"),
         },
         Err(error) => log::error!("relaunch failed: {error}"),
+    }
+}
+
+/// The window `label`. `get_window`, not `get_webview_window`: a window
+/// that hosts an ad has several webviews. Linux has no ads and no Tauri
+/// `unstable` API; there every window keeps its one webview.
+pub fn find_window<R: Runtime>(app: &AppHandle<R>, label: &str) -> Option<Window<R>> {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        app.get_window(label)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        app.get_webview_window(label).map(|w| w.as_ref().window())
     }
 }
 

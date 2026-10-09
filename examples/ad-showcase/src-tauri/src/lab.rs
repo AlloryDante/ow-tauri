@@ -193,9 +193,7 @@ pub fn e2e_record<R: Runtime>(webview: Webview<R>, entry: Value) -> Result<(), S
 #[tauri::command]
 pub fn e2e_windows<R: Runtime>(webview: Webview<R>) -> Result<Value, String> {
     main_only(&webview, "e2e_windows")?;
-    let windows: Vec<Value> = webview
-        .app_handle()
-        .windows()
+    let windows: Vec<Value> = app_windows(webview.app_handle())
         .into_iter()
         .map(|(label, window)| {
             let webviews: Vec<Value> = window
@@ -217,6 +215,23 @@ pub fn e2e_windows<R: Runtime>(webview: Webview<R>) -> Result<Value, String> {
         })
         .collect();
     Ok(Value::Array(windows))
+}
+
+/// The app's windows. Tauri lists windows with its `unstable` API, which
+/// ads turn on (Windows and macOS); Linux has no ads, and there every window
+/// is a webview window.
+fn app_windows<R: Runtime>(app: &AppHandle<R>) -> Vec<(String, Window<R>)> {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        app.windows().into_iter().collect()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        app.webview_windows()
+            .into_iter()
+            .map(|(label, window)| (label, window.as_ref().window()))
+            .collect()
+    }
 }
 
 /// An app page URL with its origin as `<app>`; other URLs as they are.
