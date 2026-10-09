@@ -1,33 +1,41 @@
 # tauri-plugin-overwolf-api
 
-The JavaScript API of `tauri-plugin-overwolf`: Overwolf
-ads (`<owadview>`), consent (CMP), analytics and identity calls, and the Overwolf-hosted updater for
-a Tauri 2 app.
+The JavaScript API of
+[`tauri-plugin-overwolf`](https://crates.io/crates/tauri-plugin-overwolf):
+Overwolf ads (`<owadview>`), consent, email hashes, the analytics switches,
+identity and the Windows updater, for Tauri 2 apps.
 
-It is a thin layer over Tauri's IPC. Everything Overwolf receives is produced by the Rust plugin;
-this package only calls its commands and runs the `<owadview>` element in your page.
+It is a thin layer over Tauri's IPC. The Rust plugin produces everything
+Overwolf receives; this package calls its commands and runs the `<owadview>`
+element in your page. It is ESM only, has no Node dependencies, and runs in
+your app's webviews.
+
+This project is not affiliated with or endorsed by Overwolf.
 
 ## Install
 
 ```sh
-npm install tauri-plugin-overwolf-api
+npm add tauri-plugin-overwolf-api@1.0.0-rc.1
 ```
 
-Register the Rust plugin (`tauri-plugin-overwolf`) in your app and grant `overwolf:default` to the
-windows that call it. The opt-in permission sets are `overwolf:machine-id`,
-`overwolf:email-hashes`, `overwolf:analytics` and `overwolf:updater`.
+Register the Rust plugin in your app
+([getting started](https://github.com/AlloryDante/ow-tauri/blob/main/docs/GETTING-STARTED.md))
+and grant `overwolf:default` to the **webviews** that call it, never to the
+windows: an ad is a child webview inside your window, and a capability that
+names the window would also cover the ad. The opt-in sets are
+`overwolf:machine-id`, `overwolf:email-hashes`, `overwolf:analytics` and
+`overwolf:updater`
+([permissions](https://github.com/AlloryDante/ow-tauri/blob/main/docs/api/permissions.md)).
 
 ## Entry points
 
-| Import                              | What it is                                                 |
-| ----------------------------------- | ---------------------------------------------------------- |
-| `tauri-plugin-overwolf-api`         | `getInfo()`, consent, analytics, email hashes, window name |
-| `tauri-plugin-overwolf-api/adview`  | the `<owadview>` element (a side-effect import)            |
-| `tauri-plugin-overwolf-api/updater` | `check()`, in the shape of `@tauri-apps/plugin-updater`    |
-| `tauri-plugin-overwolf-api/jsx`     | types only: `<owadview>` as a React JSX element            |
-| `tauri-plugin-overwolf-api/testing` | `mockOverwolf()`, a fake plugin for unit tests             |
-
-The package is ESM only and has no Node dependencies; it runs in the app's webviews.
+| Import | What it is |
+|---|---|
+| `tauri-plugin-overwolf-api` | `getInfo()`, consent, email hashes, analytics switches, window name, errors |
+| `tauri-plugin-overwolf-api/adview` | the `<owadview>` element (a side-effect import) |
+| `tauri-plugin-overwolf-api/updater` | `check()` and `Update`, in the shape of `@tauri-apps/plugin-updater` |
+| `tauri-plugin-overwolf-api/jsx` | types only: `<owadview>` as a React JSX element |
+| `tauri-plugin-overwolf-api/testing` | `mockOverwolf()`, a fake plugin for unit tests |
 
 ## Ads
 
@@ -41,11 +49,10 @@ import 'tauri-plugin-overwolf-api/adview';
 </div>
 ```
 
-The element mounts an ad guest over its box while it is in the document and visible, keeps the
-guest's geometry in step, and dispatches the ad events (`display_ad_loaded`, `impression`, ...) on
-the element as plain DOM events. Events that arrive before the mount completes are delivered after
-it; events of a guest that was destroyed or replaced are dropped. One runtime serves the page even
-when several bundles include this package.
+Each element gets a native ad webview over its box while it is in the
+document. Ad events (`display_ad_loaded`, `impression`, ...) are dispatched
+on the element as plain DOM events, as in ow-electron. Size the container,
+not the element. The ad always paints above your page.
 
 ## Calls
 
@@ -53,12 +60,14 @@ when several bundles include this package.
 import { getInfo, isCMPRequired, openAdPrivacySettingsWindow } from 'tauri-plugin-overwolf-api';
 
 const info = await getInfo();
+console.log(info.uid, info.testAd);
 if (await isCMPRequired()) await openAdPrivacySettingsWindow();
 ```
 
-Failed calls reject with an `OverwolfError` whose `code` is one of `unsupported`,
-`invalid-argument`, `not-found`, `forbidden` (also a command the window's capability does not
-allow), `io`, `network`, `verification`, `backend`, `config` or `tauri`.
+A failed call rejects with an `OverwolfError` whose `code` is one of
+`unsupported`, `invalid-argument`, `not-found`, `forbidden` (including a
+command the webview's capability does not allow), `io`, `network`,
+`verification`, `backend`, `config` or `tauri`.
 
 ## Updater
 
@@ -69,19 +78,28 @@ const update = await check();
 if (update) await update.downloadAndInstall();
 ```
 
-Windows only; needs the `overwolf:updater` permission and the crate's `updater` feature.
+Windows only. Needs the `overwolf:updater` permission and the crate's
+`updater` feature.
 
 ## Testing
 
 ```ts
-import { mockOverwolf, settle } from 'tauri-plugin-overwolf-api/testing';
+import { mockOverwolf } from 'tauri-plugin-overwolf-api/testing';
 
 const overwolf = mockOverwolf({ info: { testAd: true } });
-// ... exercise app code, then:
+// ... run your code, then:
 overwolf.callsOf('set_window_name');
 overwolf.restore();
 ```
 
+## Documentation
+
+- [JavaScript API](https://github.com/AlloryDante/ow-tauri/blob/main/docs/api/js.md)
+- [`<owadview>` reference](https://github.com/AlloryDante/ow-tauri/blob/main/docs/api/owadview.md)
+- [Ad formats](https://github.com/AlloryDante/ow-tauri/blob/main/docs/AD-FORMATS.md)
+- [Test helpers](https://github.com/AlloryDante/ow-tauri/blob/main/docs/api/testing.md)
+- [Troubleshooting](https://github.com/AlloryDante/ow-tauri/blob/main/docs/TROUBLESHOOTING.md)
+
 ## License
 
-MIT OR Apache-2.0.
+MIT or Apache-2.0, at your option.

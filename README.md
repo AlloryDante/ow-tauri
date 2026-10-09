@@ -1,171 +1,161 @@
 # ow-tauri
 
-Move an Overwolf app from ow-electron to Tauri 2 and keep Overwolf's ads
-system exactly as ow-electron runs it: `<owadview>` ads, the consent flow,
-email hashes and the anonymous app analytics, with the same requests, in the
-same order, with the same identifiers. The only intended difference is the
-host label (`tauri` where ow-electron says `electron`).
+Overwolf ads, consent and app analytics for Tauri 2 apps.
 
-ow-tauri is vendor-neutral and MIT-licensed. It is written so that Overwolf can
-review it, re-run its parity checks and adopt it.
+`tauri-plugin-overwolf` gives a Tauri app what ow-electron gives an Electron
+app: the `<owadview>` ad element, Overwolf's consent flow, email hashes, the
+anonymous app analytics, the app uid and machine ids, and Overwolf's update
+feed on Windows. Overwolf receives the same data it receives from an
+ow-electron app, with one intended difference: the host label says `tauri`
+where ow-electron says `electron`.
 
-> **Status: preview, ads system first.** The plugin, the npm package and both
-> examples are implemented and checked against ow-electron 42.11.4 in a lab
-> on macOS and Windows ([docs/PARITY.md](docs/PARITY.md#lab-checks)). Neither
-> the crate nor the npm package is published yet, and nothing here is
-> endorsed by Overwolf. Gaming packages (GEP, overlay, recorder, utility, CRN) are
-> **deferred**: `app.overwolf.packages` keeps its shape and reports packages
-> as unavailable, as ow-electron does where they are not available. As in
-> ow-electron, ads are live unless you start with `--test-ad` (or
-> `OW_TAURI_TEST_AD=1`); serving live ads from a Tauri host in production
-> needs Overwolf's approval for your app (OQ-20). See
-> [docs/PARITY.md](docs/PARITY.md) and
-> [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md).
+<!-- image: docs/images/showcase/sizes -->
 
-## Why
+> **Status: 1.0.0-rc.1, a release candidate.** Overwolf has not yet confirmed
+> live ads in production or console uploads for apps built on Tauri; see
+> [docs/OVERWOLF-ONBOARDING.md](docs/OVERWOLF-ONBOARDING.md). This project is
+> not affiliated with or endorsed by Overwolf.
 
-An ow-electron app is an Electron app plus Overwolf's runtime. Tauri apps are
-smaller and use the system webview, but they have no Node main process, no
-`<webview>` tag and no Overwolf runtime. ow-tauri fills those three gaps:
+## Packages
 
-1. **Your main-process code keeps running.** It runs in a hidden, privileged
-   "main" webview. A bundler alias `electron -> ow-tauri/electron` gives it
-   `app`, `BrowserWindow`, `ipcMain` and friends, and `app.overwolf` keeps its
-   shape. See [ADR 0001](docs/adr/0001-hidden-main-webview.md) and
-   [ADR 0002](docs/adr/0002-electron-subset-alias.md).
-2. **Your renderer keeps its preload API.** Preload scripts run as Tauri
-   initialization scripts; `ipcRenderer.invoke` reaches `ipcMain.handle` with the
-   same channel strings.
-3. **Your ads keep working.** `document.createElement('owadview')` still works;
-   each element is backed by a native child webview that loads Overwolf's ad
-   page with the request headers ow-electron sends, after the same hidden
-   consent window has run. See
-   [ADR 0003](docs/adr/0003-owadview-native-child-webviews.md),
-   [ADR 0013](docs/adr/0013-request-shaping-per-os.md) and
-   [ADR 0015](docs/adr/0015-startup-consent-window.md).
-
-## What you get
-
-| Area | ow-electron | ow-tauri |
+| Package | Registry | What it is |
 |---|---|---|
-| `<owadview>` ads, events, high-impact, performance ads | built in | native child webview per element; same plain DOM events and `__overwolf__` data |
-| Ad request headers (`Referer`, `Origin`, `x-ow-*`) | built in | same on Windows; macOS sends them on the ad document only (documented gap); Linux the same |
-| Startup consent window, consent cookies, settings window | built in | same hidden window on every launch, same cookies, same state file encoding |
-| Email hashes, `disableAdsFPD`, `disableAdsOptimization` | built in | implemented |
-| Anonymous app analytics | built in | the same requests in the same order, labelled `tauri` through `analytics.hostLabel` |
-| App uid, muid, muidV2, phase percent | built in | same uid rule; same machine-id derivation |
-| `app.overwolf.packages` | built in | same shape; reports packages as unavailable (no events, observed results) |
-| GEP, overlay, recorder, utility, CRN packages | Windows packages | deferred; the runtime interface is a design appendix |
-| Signing (`requireSigning`, `enableOWCertSigning`) | ow-electron-builder | `ow-tauri sign`: the same flow, except the asar step (Tauri has no asar) |
-| Updates from Overwolf's feed | electron-updater | built-in compatible update client; NSIS hooks for Overwolf's install and uninstall work |
+| `tauri-plugin-overwolf` | crates.io | the Tauri plugin (Rust) |
+| `tauri-plugin-overwolf-api` | npm | the JavaScript API and the `<owadview>` runtime |
+| `tauri-plugin-overwolf-cli` | npm | the `ow-tauri` command: `init`, `migrate`, `doctor`, `sign`, `sign-exe` |
+| `tauri-plugin-overwolf-unstable` | crates.io | a helper the plugin uses to turn on Tauri's `unstable` feature; you never add it yourself |
 
-The full member-by-member status is in [docs/CONTRACT.md](docs/CONTRACT.md);
-how each row is checked against ow-electron is in
-[docs/PARITY.md](docs/PARITY.md).
+## Platforms
 
-### Per platform
+| Platform | Status |
+|---|---|
+| Windows 10 and 11, x64 | supported; ads need WebView2 98.0.1108.44 or newer |
+| macOS 14 or newer, Apple Silicon | supported |
+| Windows arm64, Intel Macs, macOS before 14 | best effort |
+| Linux | builds and runs; ads report `unsupported` |
 
-| Feature | Windows (WebView2) | macOS (WKWebView) | Linux (WebKitGTK) |
-|---|---|---|---|
-| Main process, windows, IPC, dialogs, screen, shell, files | yes | yes | yes |
-| `<owadview>` ads, test ads, consent | yes, lab-checked | yes, lab-checked; ad request headers on the ad document only | ads load; guests cannot overlap the page yet |
-| Ad request headers (`Referer`, `Origin`, `x-ow-*`) | every request | ad document only | ad document only |
-| Anonymous analytics, email hashes, uid, muid | yes | yes | yes |
-| Updates from Overwolf's feed | yes | self-hosted feed (Overwolf serves Windows setups only) | self-hosted feed, signed with `updater.pubkey` |
-| NSIS installer with Overwolf's install and uninstall steps | yes | n/a | n/a |
-| GEP, overlay, recorder, utility, CRN | deferred | deferred | deferred |
-
-The gaps are listed in
-[docs/PARITY.md](docs/PARITY.md#known-platform-gaps).
-
-### Ad formats
-
-| Format | How the app asks for it | Test mode | Status |
-|---|---|---|---|
-| Standard display (7 sizes) | `<owadview>` in a sized container | fills | same events as ow-electron |
-| Standard video | the same, 400x300 or 400x600 | plays a test video | same events, same mute timeline |
-| House ads | Dev Console set-up, no code | not served (on either host) | same configuration request |
-| High impact | `adstyle="high-impact-ad;"` | fills | same events |
-| Interstitial (performance) | `<owadview performance>` on `<body>` | fills | same DOM, input pass-through and end sequence (Windows, macOS) |
-| Reward | `adstyle="rewarded-ad;"`, at least 400x300 | plays a test video | same events, also across hides and shows |
-| In-stream | no `<owadview>` API | none | not supported on either host |
-
-How to use each format, and what to expect, is in
-[docs/AD-FORMATS.md](docs/AD-FORMATS.md). The
-[ad showcase](examples/ad-showcase/README.md) shows every format from one
-code base on both hosts.
-
-## Repository layout
-
-```
-crates/tauri-plugin-overwolf/   Rust plugin: identity, state file, ads host, request
-                                shaping, consent, analytics, packages manager,
-                                updater, IPC router
-packages/ow-tauri/              npm package "ow-tauri": ./main, ./electron, ./renderer,
-                                ./testing, typings and the "ow-tauri sign" CLI
-examples/packages-sample/       Overwolf's official ow-electron sample, ported
-examples/ad-showcase/           every ad format, built for ow-electron and ow-tauri
-                                from the same sources
-tools/parity-harness/           runs ow-electron and ow-tauri side by side and
-                                compares what they send
-docs/                           architecture, contract, parity, migration, ad formats,
-                                API reference index, ADRs, open questions, port map
-```
+The `tauri` crate must be 2.12.1 or newer, below 3. See
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
 ## Quick start
 
-The step-by-step guide is [docs/MIGRATION.md](docs/MIGRATION.md). In short,
-for an existing ow-electron app (ow-tauri is not published yet, so both
-halves come from a clone of this repository):
+In a Tauri 2 app:
 
 ```sh
-# 1. JS runtime and Tauri CLI; remove @overwolf/ow-electron, -builder, electron-updater
-npm install --save-dev <clone>/ow-tauri-0.1.0.tgz @tauri-apps/cli@2.12.1 @tauri-apps/api@2.12.1
-#    (the tarball comes from `npm pack --workspace ow-tauri` in the clone)
-
-# 2. Rust plugin in src-tauri/Cargo.toml, as a git or path dependency
-#    tauri = { version = "2.12.1", features = ["unstable"] }
-#    tauri-plugin-overwolf = { path = "<clone>/crates/tauri-plugin-overwolf" }
-
-# 3. Alias electron in your bundler and in tsconfig paths
-#    resolve: { alias: { electron: 'ow-tauri/electron' } }
-
-# 4. Keep package.json, including its "overwolf" and "build.overwolf" blocks
-
-# 5. Build your bundles, then run with test ads (without them, ads are live):
-#    package.json scripts: "start-ad": "tauri dev -- -- --test-ad"
-npm run build && npm run start-ad
+cd src-tauri
+cargo add tauri-plugin-overwolf@1.0.0-rc.1
+cargo add tauri-plugin-overwolf@1.0.0-rc.1 --build --no-default-features --features build
+cd ..
+npm add tauri-plugin-overwolf-api@1.0.0-rc.1
+npm add -D tauri-plugin-overwolf-cli@1.0.0-rc.1
+npm exec --no -- ow-tauri init --author "Example Studio" --name "Example App"
 ```
 
-The [packages sample](examples/packages-sample/README.md) is a complete,
-ported app to copy from: its `src-tauri/` folder, webpack configs and
-`tsconfig.json` are the templates the guide uses.
+`init` adds the `plugins.overwolf` block (with test ads on), the
+`overwolf:default` permission for your first window's webview, the Windows installer
+hooks and a `.gitignore` line.
+
+`src-tauri/build.rs`:
+
+```rust
+fn main() {
+    tauri_plugin_overwolf::build::run().expect("tauri-plugin-overwolf build step failed");
+    tauri_build::build();
+}
+```
+
+`src-tauri/src/lib.rs`:
+
+```rust
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let builder = tauri::Builder::default().plugin(tauri_plugin_overwolf::init());
+
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_web_content_process_terminate(
+        tauri_plugin_overwolf::web_content_process_terminate_hook(),
+    );
+
+    builder
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+```
+
+In `src/main.ts`:
+
+```ts
+import 'tauri-plugin-overwolf-api/adview';
+```
+
+In `index.html`:
+
+```html
+<div style="width: 400px; height: 300px">
+  <owadview cid="main-mrec" slotsize="400x300"></owadview>
+</div>
+```
+
+Then `npm run tauri dev`. The full walkthrough, with the React version, is
+[docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
+
+Two rules to know from the start:
+
+- **Grant permissions to webviews, not windows.** An ad is a child webview
+  inside your window; a capability that names the window would also cover
+  the ad. Use `"webviews": ["main"]`
+  ([docs/api/permissions.md](docs/api/permissions.md)).
+- **Run the CLI with `npm exec --no -- ow-tauri`**, not `npx ow-tauri`, so
+  it always runs the copy in your project.
+
+## Coming from ow-electron
+
+Your `<owadview>` HTML stays. `ow-tauri migrate` writes the
+`plugins.overwolf` block that keeps your app's uid, so Overwolf and your
+users see the same app, with the same consent and first-launch state. Your
+main-process code moves to Rust and Tauri plugins. See
+[docs/MIGRATION.md](docs/MIGRATION.md).
+
+Overwolf packages (game events, overlay, recorder) are not available on
+Tauri.
 
 ## Documentation
 
-- [docs/MIGRATION.md](docs/MIGRATION.md): moving an ow-electron app to ow-tauri, step by step, with the API mapping tables
-- [docs/AD-FORMATS.md](docs/AD-FORMATS.md): every ad format, how to show it and what to expect
-- [docs/api/](docs/api/README.md): the API reference per area, and how to build it (`npm run docs:api`)
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): components, process model, data flows, security
-- [docs/CONTRACT.md](docs/CONTRACT.md): commands, events, JS API, IPC, guest shim, consent, request shaping, analytics, state file, manifest, signing, packages, updater; the package runtime design in Appendix P
-- [docs/PARITY.md](docs/PARITY.md): what parity with ow-electron means, how the harness proves it, and how to re-run it
-- [docs/adr/](docs/adr/): architecture decision records
-- [docs/PORT-MAP.md](docs/PORT-MAP.md): every file of the upstream sample and where it goes
-- [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md): what is answered, what was decided, and what Overwolf still needs to confirm
-- [SECURITY.md](SECURITY.md): threat model and reporting
+| Page | For |
+|---|---|
+| [GETTING-STARTED](docs/GETTING-STARTED.md) | adding the plugin to an app, step by step |
+| [CONFIG](docs/CONFIG.md) | every `plugins.overwolf` key |
+| [api/](docs/api/README.md) | the JavaScript API, `<owadview>`, the Rust API, permissions and test helpers |
+| [AD-FORMATS](docs/AD-FORMATS.md) | display, video, high-impact, interstitial and reward ads |
+| [MIGRATION](docs/MIGRATION.md) | moving an ow-electron app |
+| [INTEROP](docs/INTEROP.md) | single-instance, window-state, updater and other official plugins |
+| [TROUBLESHOOTING](docs/TROUBLESHOOTING.md) | no fill, macOS input, errors and their fixes |
+| [PRODUCTION-CHECKLIST](docs/PRODUCTION-CHECKLIST.md) | before a release |
+| [OVERWOLF-ONBOARDING](docs/OVERWOLF-ONBOARDING.md) | from test ads to live ads |
+| [COMPATIBILITY](docs/COMPATIBILITY.md) | Tauri, Rust, Node and OS versions |
+| [SECURITY](docs/SECURITY.md) | the threat model and what your app must do |
+| [PARITY](docs/PARITY.md) | how the data is compared with ow-electron |
 
-- [CHANGELOG.md](CHANGELOG.md): what changed, release by release
+## Examples
 
-A guide for package runtime authors waits for the packages work (CONTRACT
-Appendix P).
+| Example | Shows |
+|---|---|
+| [quickstart-vanilla](examples/quickstart-vanilla) | the GETTING-STARTED app |
+| [quickstart-react](examples/quickstart-react) | the same in React 19 |
+| [ad-showcase](examples/ad-showcase) | every ad format and size |
+| [packages-sample](examples/packages-sample) | Overwolf's ow-electron sample, moved to Tauri |
 
-## Requirements
+## Repository layout
 
-- Rust 1.90+ (edition 2024); developed on 1.98
-- Node.js 22.12+
-- Tauri 2.12.1 or a newer 2.x; the plugin enables Tauri's `unstable` feature
-  (child webviews)
-- Windows 10+ (WebView2), macOS 12+, or Linux with WebKitGTK 4.1
+| Path | Contents |
+|---|---|
+| `crates/tauri-plugin-overwolf` | the plugin |
+| `crates/tauri-plugin-overwolf-unstable` | the `unstable` helper crate |
+| `packages/api`, `packages/cli` | the npm packages |
+| `packages/guest-shims` | scripts the plugin injects into its own ad and consent webviews |
+| `examples/` | the example apps |
+| `tools/parity-harness` | the lab that compares the plugin's traffic with ow-electron's |
+| `docs/` | the documentation |
 
 ## Contributing and security
 
@@ -173,8 +163,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
 ## License
 
-MIT, see [LICENSE](LICENSE). The upstream sample in `examples/packages-sample`
-keeps its own MIT notice (Copyright Overwolf Ltd.).
+The crates and npm packages are licensed under MIT or Apache-2.0, at your
+option. `examples/packages-sample` keeps the MIT notice of its upstream
+(Copyright Overwolf Ltd.).
 
-Overwolf and ow-electron are trademarks of Overwolf Ltd. This project is not
-affiliated with or endorsed by Overwolf.
+Overwolf and ow-electron are trademarks of Overwolf Ltd.

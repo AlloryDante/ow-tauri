@@ -1,151 +1,120 @@
 # tauri-plugin-overwolf
 
-The Rust half of [ow-tauri](../../README.md): a Tauri 2 plugin that gives an
-app ported from ow-electron the same Overwolf runtime services it had before.
+Overwolf ads, consent and app analytics for Tauri 2 apps.
 
-- app identity (uid, muid, phase percent) and the per-app state file
-- `<owadview>` ads hosted in native child webviews, with the guest page shim
-- consent (CMP) windows and storage, email hashes, ad-optimisation switches
-- anonymous app analytics
-- the `app.overwolf.packages` manager with a pluggable package runtime
-- an electron-updater-compatible update client
-- the IPC router behind the `ow-tauri/electron` subset
+The plugin gives a Tauri app what ow-electron gives an Electron app: the
+`<owadview>` ad element, Overwolf's consent flow, email hashes, the anonymous
+app analytics, the app uid and machine ids, and Overwolf's update feed on
+Windows. Overwolf receives the same data it receives from an ow-electron app,
+except that the host label says `tauri` where ow-electron says `electron`.
 
-The public surface is specified in [docs/CONTRACT.md](../../docs/CONTRACT.md)
-and the design in [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md).
+The JavaScript half is the npm package
+[`tauri-plugin-overwolf-api`](https://www.npmjs.com/package/tauri-plugin-overwolf-api).
 
-## Status
+This project is not affiliated with or endorsed by Overwolf.
 
-| Area | Contract | State |
-|---|---|---|
-| Configuration, environment and switches | A.1 | done |
-| Main webview: bootstrap, lifecycle, IPC routing | A.2.1, C | done |
-| Windows, screen, shell, dialogs, global shortcuts, scoped files | A.2.3 | done |
-| UI window commands (`overwolf:renderer`) | A.2.5 | done, without `adview_*` |
-| Host messages and errors | A.3, A.4 | done |
-| Rust API (`Builder`, `OverwolfExt`) | A.5 | identity, flags, quit, second instance |
-| Main webview liveness, soft restart, crash limit, quit sequence | A.6 | done |
-| State files and log | F | done |
-| Manifest, uid, `build::embed_manifest` | G | done |
-| Ads, consent, analytics, updater | A.2.2, A.2.6 to A.2.8, D, E, I | stubs, later milestones |
-| Packages | A.2.4, H | reported as unavailable; no simulated backends |
+## Platforms
 
-## Usage
+Windows 10/11 x64 (WebView2 98.0.1108.44 or newer) and macOS 14 or newer on
+Apple Silicon are supported. Windows arm64, Intel Macs and older macOS are
+best effort. Linux builds, but ads report `unsupported`. Mobile builds answer
+`unsupported` to every command. Requires `tauri` 2.12.1 or newer (below 3)
+and Rust 1.90.
 
-```toml
-# src-tauri/Cargo.toml
-[dependencies]
-tauri-plugin-overwolf = "0.1"
+## Install
 
-[build-dependencies]
-tauri-plugin-overwolf = { version = "0.1", default-features = false }
+```sh
+cd src-tauri
+cargo add tauri-plugin-overwolf@1.0.0-rc.1
+cargo add tauri-plugin-overwolf@1.0.0-rc.1 --build --no-default-features --features build
 ```
 
+| Feature | Default | What it adds |
+|---|---|---|
+| `plugin` | on | the Tauri plugin |
+| `ads` | on | the ads; turns on Tauri's `unstable` feature on Windows and macOS |
+| `updater` | off | Overwolf's update client (Windows) |
+| `build` | off | the build step, for `[build-dependencies]` |
+
+## Use
+
+`src-tauri/build.rs`:
+
 ```rust
-// src-tauri/build.rs
 fn main() {
-    tauri_plugin_overwolf::build::embed_manifest("../package.json")
-        .expect("package.json overwolf manifest");
+    tauri_plugin_overwolf::build::run().expect("tauri-plugin-overwolf build step failed");
     tauri_build::build();
 }
 ```
 
+`src-tauri/src/lib.rs`:
+
 ```rust
-// src-tauri/src/main.rs
-tauri::Builder::default()
-    .plugin(
-        tauri_plugin_overwolf::Builder::new()
-            .manifest_json(tauri_plugin_overwolf::embedded_manifest!())
-            .build(),
-    )
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
-```
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let builder = tauri::Builder::default().plugin(tauri_plugin_overwolf::init());
 
-The plugin creates the hidden main webview `ow-main` and grants it
-`overwolf:main` through a runtime capability. Grant `overwolf:renderer` to
-the `BrowserWindow` webviews in a capability file, by webview label only:
+    // macOS: lets the plugin recover an ad whose web content process died.
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_web_content_process_terminate(
+        tauri_plugin_overwolf::web_content_process_terminate_hook(),
+    );
 
-```json
-{
-  "identifier": "ow-tauri-renderer",
-  "local": true,
-  "webviews": ["bw-*"],
-  "permissions": ["overwolf:renderer"]
+    builder
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
 }
 ```
 
-It registers `tauri-plugin-opener`, `tauri-plugin-dialog` and
-`tauri-plugin-global-shortcut` itself unless the app already did. No webview
-is granted their permissions; the plugin calls them from Rust.
-
-### Overwolf signing (Windows release builds)
-
-Run `npx ow-tauri sign` before `tauri build` with `OW_CLI_EMAIL`,
-`OW_CLI_API_KEY` and `OW_BUILD_KEY` set. It writes `ow-tauri-signed/` next
-to `package.json`; a release build of `embed_manifest` takes the signed uid
-from it and, with the `embed-resource` feature on the build-dependency,
-links the `OWEINTEGRITY/OWE` resource into the Windows exe:
-
-```toml
-[build-dependencies]
-tauri-plugin-overwolf = { version = "0.1", default-features = false, features = ["embed-resource"] }
-```
+`src-tauri/tauri.conf.json`:
 
 ```json
 {
-  "bundle": {
-    "resources": {
-      "../ow-tauri-signed/integrity.dll": "integrity.dll",
-      "../ow-tauri-signed/_metadata.json": "_metadata.json"
-    },
-    "windows": {
-      "signCommand": {
-        "cmd": "npx.cmd",
-        "args": ["ow-tauri", "sign-exe", "%1", "--fallback", "signtool sign /fd sha256 /a %1"]
-      }
+  "plugins": {
+    "overwolf": {
+      "author": "Example Studio",
+      "name": "Example App",
+      "ads": { "testAd": true }
     }
   }
 }
 ```
 
-`sign-exe` sends the app exe to Overwolf's certificate service when the app
-is eligible and asks for it (`enableOWCertSigning`), and runs `--fallback`
-(your own signing) for every other binary. It finds the app exe from
-`tauri.conf.json` (`mainBinaryName`, else Cargo's binary name or
-`productName`); pass `--app-exe <name.exe>` to name it. Use the object form:
-Tauri starts a string `signCommand` without a shell, so `npx` cannot start
-on Windows. `ow-tauri sign --dry-run` prints the request without sending
-it.
+`author` and `name` give the app's Overwolf uid, as in ow-electron. A
+release build needs them (or `uid`).
 
-As with Overwolf's builder, a Windows release build fails when signing is
-required (`build.overwolf.requireSigning` is not `false`, or
-`OW_REQUIRE_SIGNING` is on) and `ow-tauri sign` has not produced output for
-this version. Set `OW_TAURI_ALLOW_UNSIGNED=1` for a local unsigned release
-build; it then only warns. `ow-tauri sign` touches `package.json`, so the
-next build picks its output up, and `write_nsis_installer_hooks` uses the
-signed uid as well.
+`src-tauri/capabilities/default.json`:
 
-When the app exe is signed with Overwolf's certificate, set
-`plugins.overwolf.updater.publisherNames` to the name on your own
-certificate (the one that signs the installer): the updater cannot use the
-app exe's signer as the installer's publisher and otherwise skips that
-check, as electron-updater does without a `publisherName`.
+```json
+{
+  "identifier": "default",
+  "webviews": ["main"],
+  "permissions": ["core:default", "overwolf:default"]
+}
+```
 
-## Tests
+Select **webviews**, not windows: an ad is a child webview inside your
+window, and a capability that names the window would also cover the ad.
 
-- `cargo test -p tauri-plugin-overwolf`: unit and property tests of the pure
-  modules (router ordering and back-pressure, quit sequence, scopes, uid).
-- `cargo test -p ow-tauri-acl-tests`: every command from every webview class
-  on Tauri's mock runtime, with the ACL compiled from `permissions/`, plus
-  IPC routing through real commands (`tests/acl-app`).
+From Rust:
 
-## Requirements
+```rust
+use tauri_plugin_overwolf::OverwolfExt;
 
-- Rust 1.90 or newer (edition 2024)
-- tauri 2.12.1 or newer with the `unstable` feature (child webviews,
-  see [ADR 0003](../../docs/adr/0003-owadview-native-child-webviews.md))
+let ow = app.overwolf();
+println!("uid {}, test ads {}", ow.uid(), ow.is_test_ad());
+```
+
+## Documentation
+
+- [Getting started](https://github.com/AlloryDante/ow-tauri/blob/main/docs/GETTING-STARTED.md)
+- [Rust API](https://github.com/AlloryDante/ow-tauri/blob/main/docs/api/rust.md) and [docs.rs](https://docs.rs/tauri-plugin-overwolf)
+- [Configuration](https://github.com/AlloryDante/ow-tauri/blob/main/docs/CONFIG.md)
+- [Permissions](https://github.com/AlloryDante/ow-tauri/blob/main/docs/api/permissions.md)
+- [Migrating from ow-electron](https://github.com/AlloryDante/ow-tauri/blob/main/docs/MIGRATION.md)
+- [Troubleshooting](https://github.com/AlloryDante/ow-tauri/blob/main/docs/TROUBLESHOOTING.md)
+- [Compatibility](https://github.com/AlloryDante/ow-tauri/blob/main/docs/COMPATIBILITY.md)
 
 ## License
 
-MIT, see [LICENSE](../../LICENSE).
+MIT or Apache-2.0, at your option.
