@@ -9,7 +9,12 @@ feed on Windows. Overwolf receives the same data it receives from an
 ow-electron app, with one intended difference: the host label says `tauri`
 where ow-electron says `electron`.
 
-<!-- image: docs/images/showcase/sizes -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/showcase/layouts-dark.webp">
+  <img alt="The ad-showcase example in test mode: the page list on the left, a 160x600 test ad and a 400x600 video test ad in the middle, and the live event timeline on the right." src="docs/images/showcase/layouts-light.webp">
+</picture>
+
+<sub>The <a href="examples/ad-showcase">ad-showcase</a> example running on Tauri with Overwolf test ads. Every <code>&lt;owadview&gt;</code> event shows up in the timeline on the right.</sub>
 
 > **Status: 1.0.0-rc.1, a release candidate.** Overwolf has not yet confirmed
 > live ads in production or console uploads for apps built on Tauri; see
@@ -135,6 +140,83 @@ Tauri.
 | [COMPATIBILITY](docs/COMPATIBILITY.md) | Tauri, Rust, Node and OS versions |
 | [SECURITY](docs/SECURITY.md) | the threat model and what your app must do |
 | [PARITY](docs/PARITY.md) | how the data is compared with ow-electron |
+
+## See it working
+
+The [ad-showcase](examples/ad-showcase) example puts every ad format on its own page. It runs the same
+renderer on ow-electron and on Tauri, so the two can be compared side by side. The pictures below are
+Overwolf test ads (the TEST badge in the top bar); the app id is a placeholder and shown masked.
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/showcase/sizes-dark.webp">
+  <img alt="The Sizes page with 160x600, 336x280, 400x300 video and 300x250 test ads." src="docs/images/showcase/sizes-light.webp">
+</picture>
+
+<b>Sizes.</b> All seven Overwolf ad sizes, each its own <code>&lt;owadview&gt;</code>. A slot loads once half of it is in view.
+
+</td>
+<td width="50%" valign="top">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/showcase/high-impact-dark.webp">
+  <img alt="The High impact page with a takeover test ad filling the left zone." src="docs/images/showcase/high-impact-light.webp">
+</picture>
+
+<b>High impact.</b> A <code>high-impact-ad;</code> slot takes over its zone; the zone's other ads hide and come back when it is removed.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/showcase/interstitial-dark.webp">
+  <img alt="The Interstitial page with a full-window test ad over a dimmed page." src="docs/images/showcase/interstitial-light.webp">
+</picture>
+
+<b>Interstitial.</b> A <code>performance</code> ad covers the window. Input passes through while it loads; after it loads it stays until the user closes it.
+
+</td>
+<td width="50%" valign="top">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/showcase/reward-playing-dark.webp">
+  <img alt="The Reward page while the rewarded video test ad plays." src="docs/images/showcase/reward-playing-light.webp">
+</picture>
+
+<b>Reward: playing.</b> A <code>rewarded-ad;</code> video slot stays hidden until the player presses Watch, then plays.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/showcase/reward-granted-dark.webp">
+  <img alt="The Reward page after the grant: 100 coins and every step checked." src="docs/images/showcase/reward-granted-light.webp">
+</picture>
+
+<b>Reward: granted.</b> Coins are granted once, on <code>complete</code> after a <code>play</code>. The grant happens in the app; Overwolf documents no server-side check.
+
+</td>
+<td width="50%" valign="top">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/showcase/controls-dark.webp">
+  <img alt="The Controls page with a playing video test ad and its control buttons." src="docs/images/showcase/controls-light.webp">
+</picture>
+
+<b>Controls.</b> Mute, hide, scroll out of view, hide or minimize the window. Every action is a row in the timeline.
+
+</td>
+</tr>
+</table>
+
+How to run it, in test and live mode: [examples/ad-showcase](examples/ad-showcase).
 
 ## Examples
 
