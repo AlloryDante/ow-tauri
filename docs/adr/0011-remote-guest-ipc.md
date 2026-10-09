@@ -1,6 +1,6 @@
 # ADR 0011: Give each remote guest one scoped, rate-limited command
 
-- Status: Accepted
+- Status: Accepted (amended 2026-10-08)
 - Date: 2026-10-06
 
 ## Context
@@ -63,3 +63,4 @@ guest webview is allowed to call, with any arguments, as often as they like.
 - 2026-10-06, harness round 2: the hidden default-consent window
   `ow-cmp-default` (opened by the first settings-window call, CONTRACT D.6.4)
   gets the same capability.
+- 2026-10-08, [ADR 0020](0020-native-gesture-authority.md): a reported `__host:gesture` no longer allows an open. Only native user activation does, with a per-guest and a per-app cap. A JavaScript `cmpURL` must match `consent.allowedCmpOrigins`. The runtime capabilities name webviews (`owad-*` and `ow-cmp*`), never windows.

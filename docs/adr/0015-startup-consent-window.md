@@ -1,6 +1,6 @@
 # ADR 0015: Run ow-electron's hidden startup consent window on every launch
 
-- Status: Accepted
+- Status: Accepted (amended 2026-10-08)
 - Date: 2026-10-06
 
 ## Context
@@ -79,3 +79,4 @@ The owner's decision: behave exactly like ow-electron's consent flow.
   call also opens a hidden default-consent window (`ow-cmp-default`) that
   writes a fresh default consent, copied from ow-electron and asked of
   Overwolf (OQ-38).
+- 2026-10-08, Tauri-native pivot ([ADR 0018](0018-lifecycle-ready-exit.md)): the round starts at `RunEvent::Ready`, with the launch burst. `cmp-eu-only` now has a client timeout, `consent.euOnlyTimeoutMs` (60 s). A timeout counts as a failed request: `isCMPRequired()` resolves `true` and the startup window still opens. This is a listed deviation (PARITY). A JavaScript `cmpURL` must match `consent.allowedCmpOrigins`. If the last app window closes during the round, the startup window closes once its page has saved, or at `consent.readyTimeoutMs`.

@@ -1,6 +1,6 @@
 # ADR 0010: Deliver host messages over one IPC channel per webview
 
-- Status: Accepted
+- Status: Superseded by ADR 0017 (2026-10-08)
 - Date: 2026-10-06
 
 ## Context
@@ -62,3 +62,7 @@ reload.
   depend on page code. Rejected.
 - **Return invoke results as command responses.** Simple, but breaks the
   ordering guarantee. Rejected.
+
+## Amendments
+
+- 2026-10-08, Tauri-native pivot: superseded by [ADR 0017](0017-tauri-native-pivot.md). There is no IPC router and there are no host messages. App webviews call Tauri commands. Each `<owadview>` mount gets its own Tauri `Channel` for its element events (CONTRACT B.3.5).

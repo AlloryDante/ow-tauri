@@ -1,6 +1,6 @@
 # ADR 0004: Packages: report them as unavailable, defer the package runtime
 
-- Status: Accepted (amended 2026-10-06, scope cut)
+- Status: Accepted (amended 2026-10-08)
 - Date: 2026-10-06
 
 ## Context
@@ -68,3 +68,4 @@ distribution), and asks for exact ow-electron parity everywhere.
   `packagesBackend` reduced to `none` and `native`; unavailable packages
   report the observed ow-electron results instead of `failed-to-initialize`;
   the runtime interface becomes a deferred design (CONTRACT Appendix P).
+- 2026-10-08, Tauri-native pivot ([ADR 0017](0017-tauri-native-pivot.md)): reviewed. 1.0 has no `packages` API at all. There is nothing to report as unavailable, and `packagesBackend` is removed. CONTRACT H states this. The runtime design that was Appendix P is no longer part of the contract.

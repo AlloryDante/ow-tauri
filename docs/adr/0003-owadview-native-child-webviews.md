@@ -1,6 +1,6 @@
 # ADR 0003: Implement `<owadview>` with a MutationObserver and native child webviews
 
-- Status: Accepted (amended 2026-10-07)
+- Status: Accepted (amended 2026-10-08)
 - Date: 2026-10-06
 
 ## Context
@@ -110,3 +110,4 @@ renders test creatives and reports events.
   the newest performance guest is raised above the others after each mount,
   and it passes input through until its first `performance_ad_loaded`
   (CONTRACT B.3.4). The host now passes six message types (D.5).
+- 2026-10-08, Tauri-native pivot ([ADR 0017](0017-tauri-native-pivot.md)): the app imports `tauri-plugin-overwolf-api/adview`, which registers the element; nothing is injected. Any app webview the capability allows can embed an ad. Guests are labelled `owad-<n>`, skipping labels already taken. Events reach the element over one Tauri `Channel` per mount. `unstable` is enabled only for Windows and macOS ([ADR 0023](0023-unstable-and-macos-input.md)); Linux reports `unsupported`. The element no longer receives `did-start-navigation`, `load-commit` or `console-message` (CONTRACT B.3.5).

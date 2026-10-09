@@ -1,6 +1,6 @@
 # ADR 0009: Keep the main webview alive and give it one lifecycle
 
-- Status: Accepted (amended 2026-10-06)
+- Status: Superseded by ADR 0017 and ADR 0018 (2026-10-08)
 - Date: 2026-10-06
 - Extends: [ADR 0001](0001-hidden-main-webview.md)
 
@@ -103,3 +103,4 @@ registry, `ipcMain` handlers, hotkeys, package listeners) exists only there.
   signals per platform and the crash history in `ow-tauri.json`
   (decision 6); relaunches start at `RunEvent::Exit` (decision 7, new); an
   exit request without a main webview skips the sequence (decision 8).
+- 2026-10-08, Tauri-native pivot: superseded by [ADR 0017](0017-tauri-native-pivot.md), because there is no main webview to keep alive, and by [ADR 0018](0018-lifecycle-ready-exit.md): the plugin starts at `RunEvent::Ready`, drains at `RunEvent::Exit` and never holds the exit.

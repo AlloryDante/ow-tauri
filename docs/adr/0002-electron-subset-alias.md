@@ -1,6 +1,6 @@
 # ADR 0002: Provide an Electron-compatible subset behind a bundler alias
 
-- Status: Accepted
+- Status: Superseded by ADR 0017 (2026-10-08)
 - Date: 2026-10-06
 
 ## Context
@@ -57,3 +57,4 @@ defines frozen globals.
 
 - 2026-10-06, contract review: the preload-isolation consequence now states
   plainly that every script in a UI window can reach every `ipcMain` handler.
+- 2026-10-08, Tauri-native pivot: superseded by [ADR 0017](0017-tauri-native-pivot.md). ow-tauri ships no Electron API and no bundler alias. Apps use Tauri's own APIs and `tauri-plugin-overwolf-api` ([ADR 0021](0021-package-split.md)).
