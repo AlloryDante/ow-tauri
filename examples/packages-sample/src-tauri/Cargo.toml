@@ -1,0 +1,81 @@
+# The packages sample's Tauri app: Overwolf's ow-electron packages sample
+# rebuilt on tauri-plugin-overwolf. One window (`main`) with the React page;
+# everything Overwolf-specific is the plugin, the page calls it through
+# tauri-plugin-overwolf-api.
+#
+# A standalone Cargo workspace with its own Cargo.lock; versions match the
+# root `[workspace.dependencies]`.
+[workspace]
+
+[package]
+name = "ow-tauri-packages-sample"
+description = "Overwolf's packages sample as a Tauri 2 app on tauri-plugin-overwolf."
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "ow-tauri-packages-sample"
+path = "src/main.rs"
+doctest = false
+
+[features]
+# The invisible lab (`e2e/README.md`): the plugin's lab mode, loopback
+# endpoints for analytics and the consent experiment (the plugin's
+# `test-util` hooks), invisible windows and the driver's commands. Off by
+# default; never enable it in a shipped build (the plugin refuses it in
+# release builds).
+lab = [
+  "tauri-plugin-overwolf/lab",
+  "tauri-plugin-overwolf/test-util",
+  "dep:objc2",
+]
+
+[dependencies]
+tauri = { version = "2.12.1", features = [] }
+# In your app: `tauri-plugin-overwolf = "1"`; here the repository's crate.
+tauri-plugin-overwolf = { path = "../../../crates/tauri-plugin-overwolf" }
+tauri-plugin-log = "2.10.0"
+# `generate_context!` embeds the plugin configuration with it.
+serde_json = "1"
+# A second launch focuses the running app (registered first).
+tauri-plugin-single-instance = "2.5.2"
+
+# The Overwolf update feed (the Updater page). The plugin's updater runs on
+# Windows only; elsewhere `check()` answers `unsupported`, so the feature is
+# turned on for Windows targets only.
+[target.'cfg(windows)'.dependencies]
+tauri-plugin-overwolf = { path = "../../../crates/tauri-plugin-overwolf", features = ["updater"] }
+
+# The lab's invisible windows (src/lab/native.rs, macOS); only with `lab`.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6.5", optional = true }
+
+[build-dependencies]
+tauri-build = { version = "2.7.1", features = [] }
+tauri-plugin-overwolf = { path = "../../../crates/tauri-plugin-overwolf", default-features = false, features = ["build"] }
+
+[lints.rust]
+missing_docs = "deny"
+# Only the lab's native window calls (src/lab/native.rs, feature `lab`) call
+# Objective-C.
+unsafe_code = "deny"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Tauri commands take their arguments by value.
+needless_pass_by_value = "allow"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

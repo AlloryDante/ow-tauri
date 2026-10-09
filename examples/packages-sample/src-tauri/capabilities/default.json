@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The sample window's webview: core events, Overwolf ads, consent and identity (overwolf:default), machine ids, e-mail hashes, the analytics preferences and the Windows updater. Matched by webview label, so the ad guests in the window get nothing.",
+  "webviews": ["main"],
+  "permissions": [
+    "core:default",
+    "overwolf:default",
+    "overwolf:machine-id",
+    "overwolf:email-hashes",
+    "overwolf:analytics",
+    "overwolf:updater"
+  ]
+}
