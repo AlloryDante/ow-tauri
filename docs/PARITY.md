@@ -62,9 +62,11 @@ Two halves, diffed field by field:
    and option.
 2. **The ow-tauri side: the Tauri edition of the harness**
    (`tools/parity-harness/tauri-app`, `node run.mjs --host tauri`). The same
-   harness app on ow-tauri: a minimal Tauri app whose main webview runs each
-   scenario through the `ow-tauri/electron` facade, step by step as the
-   ow-electron app does. The plugin's `lab` Cargo feature (off by default,
+   harness app on ow-tauri: a minimal Tauri app whose Rust driver
+   (`tauri-app/src-tauri/src/driver.rs`) runs each scenario through the
+   plugin's Rust API (`app.overwolf()`) and, in the ad window's page, its
+   JavaScript API, step by step as the ow-electron app does.
+   The plugin's `lab` Cargo feature (off by default,
    never shipped) writes a trace in the ow-electron capture shapes: host
    requests as sent, guest requests (on Windows through WebView2's
    `Network.requestWillBeSent` events), cookies, the state file, element
