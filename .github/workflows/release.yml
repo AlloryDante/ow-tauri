@@ -1,0 +1,354 @@
+name: Release
+
+# Publishes the two crates and the two npm packages in lockstep
+# (docs/RELEASING.md). Started by hand only.
+#
+# - dry_run: true (default): every check, the packages are built and packed,
+#   nothing is published. When the manifests still carry another version,
+#   the run bumps them inside the runner only (a rehearsal) and warns.
+# - dry_run: false: the same checks must pass on main for the exact version
+#   in the manifests, then the publish jobs wait for approval in the
+#   `release` environment.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, without a leading v (for example 1.0.0-rc.1)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry run: check and pack only, publish nothing'
+        required: true
+        type: boolean
+        default: true
+
+# Every job declares what it needs.
+permissions: {}
+
+# One release at a time; never cancel one that is publishing.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # The upstream sample lists @overwolf/ow-electron; no job runs Electron.
+  ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+defaults:
+  run:
+    shell: bash
+
+# Third-party actions are pinned by commit SHA (tag in the trailing comment);
+# Dependabot keeps them current. No caches: a release builds from scratch.
+
+jobs:
+  verify:
+    name: Verify ${{ inputs.version }}${{ inputs.dry_run && ' (dry run)' || '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read # check out the repository
+      actions: read # read the CI runs of this commit
+    outputs:
+      dist-tag: ${{ steps.inputs.outputs.dist-tag }}
+      prerelease: ${{ steps.inputs.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Inputs (version format, branch)
+        id: inputs
+        env:
+          VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          tag="$(node scripts/release/version-sync.mjs dist-tag "$VERSION")"
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Releases are made from main (this run: $GITHUB_REF)."
+            exit 1
+          fi
+          prerelease=false
+          if [ "$tag" = "next" ]; then prerelease=true; fi
+          echo "dist-tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Version $VERSION, npm dist-tag $tag, prerelease $prerelease, dry run $DRY_RUN, commit $GITHUB_SHA"
+
+      - name: Release scripts' own tests
+        run: node --test "scripts/release/*.test.mjs"
+
+      - name: Version in every manifest
+        id: versions
+        env:
+          VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if node scripts/release/version-sync.mjs check --expect "$VERSION"; then
+            echo "rehearsal=false" >> "$GITHUB_OUTPUT"
+          elif [ "$DRY_RUN" = "true" ]; then
+            echo "::warning::Rehearsal: the manifests do not carry $VERSION yet. This run bumps them inside the runner only; the real release needs the bump committed on main first (docs/RELEASING.md)."
+            node scripts/release/version-sync.mjs set "$VERSION"
+            node scripts/release/changelog.mjs stamp "$VERSION"
+            echo "rehearsal=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::The manifests do not carry $VERSION. Run 'node scripts/release/version-sync.mjs set $VERSION', commit and push to main, wait for CI, then start this workflow again."
+            exit 1
+          fi
+
+      - name: CHANGELOG section (dated)
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/release/changelog.mjs check "$VERSION" --dated
+          mkdir -p "$RUNNER_TEMP/dist"
+          node scripts/release/changelog.mjs section "$VERSION" > "$RUNNER_TEMP/dist/notes.md"
+
+      - name: Identity check (no personal or lab identity in tracked files)
+        run: node scripts/release/identity-check.mjs
+
+      - name: CI passed on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          passed="$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+            -f head_sha="$GITHUB_SHA" -f event=push -f status=success --jq '.total_count')"
+          if [ "$passed" -gt 0 ]; then
+            echo "CI passed on $GITHUB_SHA."
+          elif [ "$DRY_RUN" = "true" ]; then
+            echo "::warning::No successful CI run (push to main) for $GITHUB_SHA. The real release refuses this commit."
+          else
+            echo "::error::No successful CI run (push to main) for $GITHUB_SHA. Wait for CI or fix it first."
+            exit 1
+          fi
+
+      - name: npm install
+        run: npm ci --no-audit --no-fund
+
+      - name: Generated scripts match their sources
+        run: npm run check:generated
+
+      - name: npm packages (publint, are-the-types-wrong)
+        run: npm run check:packages
+
+      - name: npm pack --dry-run (file lists)
+        run: npm pack --dry-run --workspace tauri-plugin-overwolf-api --workspace tauri-plugin-overwolf-cli
+
+      - name: npm pack (the tarballs the publish job uploads)
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/dist/npm"
+          npm pack --workspace tauri-plugin-overwolf-api --workspace tauri-plugin-overwolf-cli \
+            --pack-destination "$RUNNER_TEMP/dist/npm"
+          ls -l "$RUNNER_TEMP/dist/npm"
+
+      - name: Linux system dependencies (Tauri prerequisites)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+
+      # Packs both crates and builds the plugin from its .crate against the
+      # packed helper crate (a local registry overlay), so the plugin's
+      # dependency on tauri-plugin-overwolf-unstable resolves before either
+      # crate is on crates.io.
+      - name: cargo package (both crates, verified by a build)
+        env:
+          REHEARSAL: ${{ steps.versions.outputs.rehearsal }}
+        run: |
+          set -euo pipefail
+          dirty=()
+          if [ "$REHEARSAL" = "true" ]; then dirty=(--allow-dirty); fi
+          cargo package -p tauri-plugin-overwolf-unstable -p tauri-plugin-overwolf --locked "${dirty[@]}"
+          cargo package -p tauri-plugin-overwolf-unstable -p tauri-plugin-overwolf --locked --list "${dirty[@]}"
+
+      - name: cargo publish --workspace --dry-run
+        env:
+          REHEARSAL: ${{ steps.versions.outputs.rehearsal }}
+        run: |
+          set -euo pipefail
+          dirty=()
+          if [ "$REHEARSAL" = "true" ]; then dirty=(--allow-dirty); fi
+          # Verified by the build above.
+          cargo publish --workspace --dry-run --locked --no-verify "${dirty[@]}"
+
+      - name: Release files, checksums and notes
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          dist="$RUNNER_TEMP/dist"
+          mkdir -p "$dist/crates"
+          cp "target/package/tauri-plugin-overwolf-unstable-$VERSION.crate" \
+             "target/package/tauri-plugin-overwolf-$VERSION.crate" "$dist/crates/"
+          (cd "$dist" && sha256sum npm/*.tgz crates/*.crate > SHA256SUMS)
+          {
+            echo
+            echo '## Packages'
+            echo
+            echo "- crates.io: [tauri-plugin-overwolf $VERSION](https://crates.io/crates/tauri-plugin-overwolf/$VERSION), [tauri-plugin-overwolf-unstable $VERSION](https://crates.io/crates/tauri-plugin-overwolf-unstable/$VERSION)"
+            echo "- npm: [tauri-plugin-overwolf-api $VERSION](https://www.npmjs.com/package/tauri-plugin-overwolf-api/v/$VERSION), [tauri-plugin-overwolf-cli $VERSION](https://www.npmjs.com/package/tauri-plugin-overwolf-cli/v/$VERSION)"
+            echo
+            echo '## SHA-256 of the attached files'
+            echo
+            echo '```'
+            cat "$dist/SHA256SUMS"
+            echo '```'
+          } >> "$dist/notes.md"
+          {
+            echo "## Release $VERSION"
+            echo
+            cat "$dist/notes.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ inputs.version }}
+          path: ${{ runner.temp }}/dist
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-crates:
+    name: Publish crates
+    needs: verify
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: read # check out the repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Rust toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+
+      # The helper crate first: the plugin depends on it. Each step skips a
+      # version that is already on crates.io, so a failed run can be
+      # restarted. --no-verify: the verify job built both from their .crate.
+      - name: Publish tauri-plugin-overwolf-unstable
+        env:
+          VERSION: ${{ inputs.version }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          crate=tauri-plugin-overwolf-unstable
+          if curl -fsS "https://index.crates.io/ta/ur/$crate" | grep -q "\"vers\":\"$VERSION\""; then
+            echo "$crate $VERSION is already on crates.io."
+          else
+            cargo publish -p "$crate" --locked --no-verify
+          fi
+
+      - name: Wait until crates.io serves tauri-plugin-overwolf-unstable
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+            if curl -fsS "https://index.crates.io/ta/ur/tauri-plugin-overwolf-unstable" | grep -q "\"vers\":\"$VERSION\""; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::tauri-plugin-overwolf-unstable $VERSION did not appear in the crates.io index within 10 minutes."
+          exit 1
+
+      - name: Publish tauri-plugin-overwolf
+        env:
+          VERSION: ${{ inputs.version }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          crate=tauri-plugin-overwolf
+          if curl -fsS "https://index.crates.io/ta/ur/$crate" | grep -q "\"vers\":\"$VERSION\""; then
+            echo "$crate $VERSION is already on crates.io."
+          else
+            cargo publish -p "$crate" --locked --no-verify
+          fi
+
+  publish-npm:
+    name: Publish npm packages
+    needs: [verify, publish-crates]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read # read the release files
+      id-token: write # npm provenance (Sigstore)
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ inputs.version }}
+          path: dist
+
+      # The tarballs the verify job packed and checked. Each one is skipped
+      # when that version is already on npm, so a failed run can be restarted.
+      - name: npm publish (provenance, public)
+        env:
+          VERSION: ${{ inputs.version }}
+          DIST_TAG: ${{ needs.verify.outputs.dist-tag }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c SHA256SUMS)
+          for name in tauri-plugin-overwolf-api tauri-plugin-overwolf-cli; do
+            if npm view "$name@$VERSION" version >/dev/null 2>&1; then
+              echo "$name $VERSION is already on npm."
+              continue
+            fi
+            npm publish "dist/npm/$name-$VERSION.tgz" --provenance --access public --tag "$DIST_TAG"
+          done
+
+  github-release:
+    name: Tag and GitHub release
+    needs: [verify, publish-crates, publish-npm]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # create the tag and the release
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-${{ inputs.version }}
+          path: dist
+
+      - name: Create v${{ inputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists."
+            exit 0
+          fi
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then flags=(--prerelease); else flags=(--latest); fi
+          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "v$VERSION" --notes-file dist/notes.md "${flags[@]}" \
+            dist/npm/*.tgz dist/crates/*.crate dist/SHA256SUMS
