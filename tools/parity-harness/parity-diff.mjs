@@ -716,7 +716,18 @@ function guestProbeCount(runDir) {
   return readdirSync(runDir).filter((f) => /^guest-\d+-dom-ready-0\.json$/.test(f)).length;
 }
 
-function consentCookies(runDir) {
+/**
+ * The consent cookies a run stored. A cookie's lifetime is counted from when
+ * it was recorded: the record's `wall` (Unix ms), else the run's start plus
+ * the record's `t` (ow-electron's records carry only `t`), never the time of
+ * the diff, so an older baseline keeps its lifetime.
+ * @param {string} runDir
+ * @param {string | undefined} [startedAt] the run's `meta.startedAt`
+ */
+export function consentCookies(runDir, startedAt) {
+  const start = startedAt ? Date.parse(startedAt) : NaN;
+  const recordedAt = (e) =>
+    e.wall ?? (Number.isFinite(start) && typeof e.t === 'number' ? start + e.t : Date.now());
   return readJsonl(join(runDir, 'cookie-changes.jsonl'))
     .filter((e) => ['euconsent-v2', 'acconsent'].includes(e.cookie?.name) && !e.removed)
     .map((e) => ({
@@ -729,7 +740,7 @@ function consentCookies(runDir) {
       sameSite: e.cookie.sameSite,
       session: e.cookie.session,
       lifetimeDays: e.cookie.expirationDate
-        ? Math.round((e.cookie.expirationDate * 1000 - (e.wall ?? Date.now())) / 86_400_000)
+        ? Math.round((e.cookie.expirationDate * 1000 - recordedAt(e)) / 86_400_000)
         : null,
       wall: e.wall,
     }));
@@ -801,7 +812,7 @@ export function loadCapture(runDir) {
     pageReloads: pageReloads(runDir),
     reloadRequests: pageReloadRequests(runDir),
     guestCount: guestProbeCount(runDir),
-    consentCookies: consentCookies(runDir),
+    consentCookies: consentCookies(runDir, meta.startedAt),
     stateAfter: stateFile(runDir, 'after'),
     stateBefore: stateFile(runDir, 'before'),
     liveLoads: readJsonl(join(runDir, 'live-loads.jsonl')).filter((l) => !l.fill).length,
@@ -1410,7 +1421,21 @@ export function guestCreationSpread(kinds, spread, allowed) {
   );
 }
 
-function compareIdentity(e, t, out) {
+/** The `surface` of a Tauri-native app's `overwolf.json` snapshot. */
+export const TAURI_NATIVE_SURFACE = 'tauri-plugin-overwolf-api';
+/** The data members of ow-electron's `app.overwolf` a Tauri-native app reports. */
+export const TAURI_NATIVE_MEMBERS = ['muid', 'phasePercent', 'uid', 'utmParams'];
+
+/** A snapshot's changes to the compared data members only. */
+export function nativeChanges(changed) {
+  return Object.fromEntries(
+    Object.entries(changed ?? {}).filter(([k]) =>
+      TAURI_NATIVE_MEMBERS.some((m) => k === `members.${m}`),
+    ),
+  );
+}
+
+export function compareIdentity(e, t, out) {
   const em = e.overwolf?.snapshots?.[0];
   const tm = t.overwolf?.snapshots?.[0];
   if (!em || !tm) {
@@ -1423,9 +1448,34 @@ function compareIdentity(e, t, out) {
     });
     return;
   }
-  if (stable(em.env) !== stable(tm.env))
+  // A Tauri-native app has no `app.overwolf` object: its snapshot holds the
+  // data members ow-electron exposes there, read through the plugin's API,
+  // and the JavaScript API's functions. Only the data is compared; the API
+  // surface and the main-process environment are reported.
+  const native = tm.surface === TAURI_NATIVE_SURFACE;
+  if (native) {
+    out.push({
+      section: 'identity',
+      key: 'api surface',
+      field: 'functions',
+      electron: Object.keys(em.members ?? {}).filter((k) => !TAURI_NATIVE_MEMBERS.includes(k)),
+      tauri: t.overwolf.apiSurface ?? null,
+      informational: true,
+    });
+    if (stable(em.env) !== stable(tm.env))
+      out.push({
+        section: 'identity',
+        key: 'env',
+        field: 'env',
+        electron: Object.keys(em.env ?? {}),
+        tauri: Object.keys(tm.env ?? {}),
+        informational: true,
+      });
+  } else if (stable(em.env) !== stable(tm.env))
     out.push({ section: 'identity', key: 'env', field: 'env', electron: em.env, tauri: tm.env });
-  const ek = Object.keys(em.members ?? {});
+  const ek = Object.keys(em.members ?? {}).filter(
+    (k) => !native || TAURI_NATIVE_MEMBERS.includes(k),
+  );
   const tk = Object.keys(tm.members ?? {});
   if (stable(ek) !== stable(tk))
     out.push({
@@ -1510,7 +1560,9 @@ function compareIdentity(e, t, out) {
   for (const s of (e.overwolf.snapshots ?? []).slice(1)) {
     const other = tSnaps.get(s.label);
     if (!other) continue;
-    if (stable(normaliseDeep(s.changed)) !== stable(normaliseDeep(other.changed))) {
+    const changed = native ? nativeChanges(s.changed) : s.changed;
+    const otherChanged = native ? nativeChanges(other.changed) : other.changed;
+    if (stable(normaliseDeep(changed)) !== stable(normaliseDeep(otherChanged))) {
       out.push({
         section: 'call',
         key: `snapshot ${s.label}`,

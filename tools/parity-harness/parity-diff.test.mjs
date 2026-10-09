@@ -15,6 +15,8 @@ import {
   callsDifferOnlyByPendingSystemInfo,
   classify,
   compareAdformats,
+  compareIdentity,
+  consentCookies,
   consentDuringAttach,
   consentGated,
   fewerPageReloads,
@@ -1125,4 +1127,114 @@ test('customTracking re-sends that follow extra page reloads are variance', () =
   };
   assert.equal(classify({ ...d, reloadResends: true }).class, 'variance');
   assert.equal(classify({ ...d, reloadResends: false }).class, 'BUG');
+});
+
+test("a consent cookie's lifetime counts from when it was recorded, not from the diff", () => {
+  const dir = mkdtempSync(join(tmpdir(), 'parity-cookies-'));
+  const startedAt = '2020-01-01T00:00:00.000Z';
+  const start = Date.parse(startedAt);
+  const year = 365 * 86_400_000;
+  const cookie = (name, at) => ({
+    name,
+    domain: '.overwolf.com',
+    path: '/',
+    expirationDate: (at + year) / 1000,
+  });
+  writeFileSync(
+    join(dir, 'cookie-changes.jsonl'),
+    [
+      // ow-electron: `t` only (ms after the run started).
+      { t: 5000, cause: 'explicit', removed: false, cookie: cookie('euconsent-v2', start + 5000) },
+      // ow-tauri: `wall` (Unix ms of the read).
+      { t: 9000, wall: start + 7000, removed: false, cookie: cookie('acconsent', start + 7000) },
+    ]
+      .map((e) => JSON.stringify(e))
+      .join('\n') + '\n',
+  );
+  const got = consentCookies(dir, startedAt);
+  assert.deepEqual(
+    got.map((c) => [c.name, c.lifetimeDays]),
+    [
+      ['euconsent-v2', 365],
+      ['acconsent', 365],
+    ],
+  );
+  // Without the run's start, a `t`-only record still measures from now
+  // (the old reading): years later the lifetime has run out.
+  assert.ok(consentCookies(dir)[0].lifetimeDays < 0);
+});
+
+test('a Tauri-native identity compares the data members only, and reports the API surface', () => {
+  const electron = {
+    overwolf: {
+      appName: 'App',
+      appVersion: '1.0.0',
+      platform: 'darwin',
+      arch: 'arm64',
+      snapshots: [
+        {
+          label: 'module-load',
+          env: { OVERWOLF_APP_UID: 'uid-1' },
+          members: {
+            __settings__: { type: 'object', value: { a: 1 } },
+            disableAdsFPD: { type: 'function', length: 0 },
+            muid: { type: 'string', value: 'm-1' },
+            phasePercent: { type: 'number', value: 24 },
+            uid: { type: 'string', value: 'uid-1' },
+            utmParams: { type: 'undefined', value: null },
+          },
+        },
+        { label: 'after disableAdsFPD', changed: { 'members.__settings__': { a: 2 } } },
+      ],
+      calls: [],
+    },
+  };
+  const tauri = (uid) => ({
+    actions: [],
+    overwolf: {
+      appName: 'App',
+      appVersion: '1.0.0',
+      platform: 'darwin',
+      arch: 'arm64',
+      apiSurface: ['disableAdsFPD', 'getInfo'],
+      snapshots: [
+        {
+          label: 'module-load',
+          surface: 'tauri-plugin-overwolf-api',
+          env: {},
+          members: {
+            muid: { type: 'string', value: 'm-1' },
+            phasePercent: { type: 'number', value: 24 },
+            uid: { type: 'string', value: uid },
+            utmParams: { type: 'undefined', value: null },
+          },
+        },
+        { label: 'after disableAdsFPD', changed: {} },
+      ],
+      calls: [],
+    },
+  });
+  const rows = [];
+  compareIdentity(electron, tauri('uid-1'), rows);
+  const compared = rows.filter((r) => !r.informational && r.field !== 'versions');
+  assert.deepEqual(compared, []);
+  assert.deepEqual(
+    rows.filter((r) => r.informational).map((r) => r.key),
+    ['api surface', 'env', 'process.versions'],
+  );
+  assert.deepEqual(rows.find((r) => r.key === 'api surface').tauri, ['disableAdsFPD', 'getInfo']);
+  // A different uid is still a difference.
+  const other = [];
+  compareIdentity(electron, tauri('uid-2'), other);
+  assert.deepEqual(
+    other.filter((r) => !r.informational).map((r) => r.key),
+    ['app.overwolf.uid'],
+  );
+  // An ow-electron-shaped snapshot (no surface) keeps the full comparison.
+  const legacy = tauri('uid-1');
+  delete legacy.overwolf.snapshots[0].surface;
+  const full = [];
+  compareIdentity(electron, legacy, full);
+  assert.ok(full.some((r) => r.key === 'env' && !r.informational));
+  assert.ok(full.some((r) => r.key === 'app.overwolf' && r.field === 'members'));
 });
