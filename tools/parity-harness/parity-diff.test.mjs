@@ -595,6 +595,8 @@ test("ow-electron's package manager traffic on Windows is a documented deviation
   assert.ok(PACKAGE_RUNTIME_FILE.test('logs\\owpm.log'));
   assert.ok(PACKAGE_RUNTIME_FILE.test('logs/owpm.log'));
   assert.ok(!PACKAGE_RUNTIME_FILE.test('logs/main.log'));
+  assert.ok(PACKAGE_RUNTIME_FILE.test('logs\\owpm.1.log'));
+  assert.ok(!PACKAGE_RUNTIME_FILE.test('logs/owpm.x.log'));
   assert.deepEqual(withoutPackageRuntime({ firstLaunch: true, 'owepm.enabled': true }), {
     firstLaunch: true,
   });

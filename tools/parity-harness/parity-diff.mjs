@@ -94,8 +94,12 @@ export function normalise(text) {
 export const PACKAGE_RUNTIME_REQUEST =
   /\/(Counter electron_pm_[a-z_]+|Counter electron_cs_error|InsertStats 4000(29|37|43|46))$/;
 
-/** The package manager's own state: its log and its switch in ow-electron.json. */
-export const PACKAGE_RUNTIME_FILE = /(^|[\\/])owpm\.log$/;
+/**
+ * The package manager's own state: its log, rotated to `owpm.1.log` when a
+ * launch finds one from the launch before (Windows lab, seeded launches),
+ * and its switch in ow-electron.json.
+ */
+export const PACKAGE_RUNTIME_FILE = /(^|[\\/])owpm(\.\d+)?\.log$/;
 
 /** ow-electron's own log, which it writes only when something logs. */
 const ELECTRON_LOG = /(^|[\\/])logs[\\/]ow-electron\.log$/;
