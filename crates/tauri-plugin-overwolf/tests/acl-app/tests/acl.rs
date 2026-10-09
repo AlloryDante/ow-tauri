@@ -25,7 +25,7 @@ mod common;
 
 use serde_json::{Value, json};
 use tauri::{WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_overwolf::{Builder, COMMANDS, OverwolfExt};
+use tauri_plugin_overwolf::{Builder, COMMANDS, MachineIds, OverwolfExt};
 
 use common::{ADVIEW_PAGE, CMP_PAGE, Outcome, app, code, invoke, origin, outcome, probe_body};
 
@@ -163,7 +163,12 @@ fn machine_ids_need_their_own_set() {
     let app = app("machine-ids", &["machine-id", "main"]);
     let ids = invoke(&app, "machine-id", origin(), "get_machine_ids", json!({})).unwrap();
     let ow = app.overwolf();
-    assert_eq!(ids, json!({ "muid": ow.muid(), "muidV2": ow.muid_v2() }));
+    // `muid` is `muidV2` when present (ow-electron's `app.overwolf.muid`);
+    // the first-generation id differs from it on Windows when the shared
+    // registry values do.
+    let want = MachineIds::new(ow.muid(), ow.muid_v2());
+    assert_eq!(ids, serde_json::to_value(&want).unwrap());
+    assert_eq!(ids["muidV2"], ow.muid_v2());
     assert!(!ids["muid"].as_str().unwrap().is_empty());
     let refused = invoke(&app, "main", origin(), "get_machine_ids", json!({}));
     assert_eq!(outcome(&refused), Outcome::Acl, "{refused:?}");
