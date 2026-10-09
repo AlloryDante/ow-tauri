@@ -563,8 +563,11 @@ which ow-electron uses for the same uid:
 
 Writes are read-modify-write under a lock, through a temporary file renamed
 over the original. On Windows a failed rename is retried 3 times, 50 ms
-apart. A file that cannot be parsed is moved to `.corrupt-<ms>` by the next
-write (the newest 3 copies are kept). Nothing is written before
+apart. An `ow-tauri.json` that cannot be parsed is moved to
+`ow-tauri.json.corrupt-<ms>` at `RunEvent::Ready` (the newest 3 copies are
+kept). An `ow-electron.json` that is not a valid state object reads as a
+first launch, and the next write starts a new object with no copy, as
+ow-electron resets it. Nothing is written before
 `RunEvent::Ready`. CONTRACT F has the full format, and
 [SECURITY.md](SECURITY.md#what-is-written-to-disk) lists every file and
 registry value.

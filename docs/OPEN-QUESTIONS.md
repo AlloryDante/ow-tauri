@@ -85,7 +85,7 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 | [OQ-24](#oq-24-installer-and-utm-parameters) | Distribution | installer and UTM parameters | Medium | Answered | F.2 |
 | [OQ-31](#oq-31-version-delta) | Distribution | version delta since 42.7.1 | Medium | Answered | [PARITY.md](PARITY.md) |
 | [OQ-39](#oq-39-javascript-dialogs) | Guest pages | `alert()`, `confirm()`, `prompt()` | Low | Closed (app webviews are the app's; guests are silenced) | D.3 |
-| [OQ-40](#oq-40-a-corrupt-ow-electronjson) | State | a corrupt `ow-electron.json` | Medium | Decided (copy the reset); open: lead (two stuck cases) | F.2 |
+| [OQ-40](#oq-40-a-corrupt-ow-electronjson) | State | a corrupt `ow-electron.json` | Medium | Decided (reset; `[]` and wrong types are a listed deviation) | F.2 |
 | [OQ-41](#oq-41-the-install-record-of-a-per-machine-install) | Distribution | install record of a per-machine install (HKLM) | Medium | Open: Overwolf | I.6 |
 | [OQ-42](#oq-42-a-uid-override-and-attribution) | Identity | a `uid` override and attribution | Medium | Open: Overwolf | G.2 |
 | [OQ-43](#oq-43-installer-signing-expectations) | Distribution | installer signing expectations | Medium | Open: Overwolf | G.4, I.3 |
@@ -778,8 +778,7 @@ describe ow-electron as observed; ow-tauri implements none of it.
 
 - **Question.** What should the host do when `ow-electron.json` cannot be
   used?
-- **Status.** Decided for parse failures. **Open: lead ruling** for two
-  cases.
+- **Status.** Decided.
 - **Answer.** Observed ow-electron behaviour:
   - Garbage, a truncated file, an empty file, `null` or a missing file:
     reset silently. `app_first_launch` is sent again, the consent page saves
@@ -789,12 +788,13 @@ describe ow-electron as observed; ow-tauri implements none of it.
   - Wrong types (for example `cmp: 42`): never repaired. Every consent save
     fails, and no `app_first_launch` is sent.
 
-  ow-tauri resets on a parse failure and sends the same requests. It also
-  keeps the unreadable file as `ow-electron.json.corrupt-<ms>`, the newest 3
-  copies (a local-only difference). Whether ow-tauri copies the two stuck
-  cases or resets them too is a lead ruling; a reset sends one extra
-  `app_first_launch`, then behaves normally. CONTRACT F.2.
-- **Source.** Observed (`corrupt-state` scenarios).
+  ow-tauri resets on a parse failure exactly as ow-electron does: silently,
+  with no backup copy, and with the same requests. It resets `[]` and
+  wrong-typed keys the same way. That sends one extra `app_first_launch`,
+  then the next launches are normal. This is an intended deviation, listed
+  in [PARITY](PARITY.md#deviations). One warning is logged. CONTRACT F.2.
+- **Source.** Observed (`corrupt-state` scenarios); lead decision for `[]`
+  and wrong types.
 
 ## Ad formats
 ## Ad formats

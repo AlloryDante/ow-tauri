@@ -439,7 +439,7 @@ land before the launch burst, as calls at module load do in ow-electron.
 At `RunEvent::Ready` the plugin, in order:
 
 1. writes the state it found missing (machine ids on Windows, a per-install
-   muid, a moved-aside corrupt file);
+   muid) and moves a corrupt `ow-tauri.json` aside (F.1);
 2. applies the persisted anonymous-analytics preference;
 3. marks the launch started;
 4. reads the app webview's user agent, waiting at most 2.5 s (E.1);
@@ -1358,9 +1358,10 @@ on Linux ([ADR 0007](adr/0007-state-file-continuity.md)).
 | `<appData>/ow-electron/<uid>/ow-tauri.json` | the plugin | F.3 |
 | `<appData>/<PN>/EBWebView-ow` | the plugin (Windows) | the ads data store (D.8.1). Cookies and web storage do not move between engines |
 
-Nothing is written before `RunEvent::Ready`. A file that does not parse is
-moved to `<name>.corrupt-<Unix ms>` before the next write recreates it; the
-newest 3 copies are kept. [SECURITY.md](SECURITY.md#what-is-written-to-disk)
+Nothing is written before `RunEvent::Ready`. An `ow-tauri.json` that does
+not parse is moved to `ow-tauri.json.corrupt-<Unix ms>` at
+`RunEvent::Ready`; the newest 3 copies are kept. A corrupt `ow-electron.json`
+is reset without a copy (F.2). [SECURITY.md](SECURITY.md#what-is-written-to-disk)
 lists every file and registry value the plugin writes.
 
 ### F.2 `ow-electron.json`
@@ -1384,13 +1385,19 @@ Rules:
 
 - Compact JSON. The plugin reads `firstLaunch`, `cmp.*` and `utmParams`, and
   writes `firstLaunch`, `cmp.*` and `eHashes`. It never writes `utmParams`,
-  never removes other keys, and keeps unknown keys, their values and their
-  positions.
+  removes no key but `eHashes`, and keeps unknown keys, their values and
+  their positions.
 - Writes are read-modify-write under a process lock, to a temp file in the
-  same directory that is renamed over the original. A file that is not a
-  JSON object is moved aside by the next write (F.1); until then its shared
-  values live in `ow-tauri.json` (`owElectronFallback`) and are never copied
-  back.
+  same directory that is renamed over the original.
+- A file that is not a valid state object is reset, as ow-electron resets
+  an unparseable file [OBS]: garbage, a truncated or empty file, `null`,
+  `[]`, or a `firstLaunch` that is not a boolean, a `cmp` that is not an
+  object, or a `utmParams` that is neither an object nor `null`. It reads
+  as a first launch, so `app_first_launch` is sent again and the consent
+  page saves again. The next write starts a new object; no copy is kept.
+  One warning is logged. ow-electron never repairs `[]` or wrong-typed
+  keys; resetting them once is a listed deviation
+  ([PARITY](PARITY.md#deviations), OQ-40).
 
 ### F.3 `ow-tauri.json`
 
@@ -1404,7 +1411,6 @@ The plugin's own file. Overwolf never reads it.
   "anonymousAnalytics": false,     // setAnonymousAnalyticsPreference (E.3)
   "analyticsUserEnabled": true,    // only with analytics.userSwitch
   "muid": "...",                   // per-install muid (E.4)
-  "owElectronFallback": {},        // F.2
   "createdBy": "ow-tauri <version>"
 }
 ```
