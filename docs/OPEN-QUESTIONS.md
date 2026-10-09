@@ -1,8 +1,15 @@
 # Open questions
 
-ow-tauri replicates ow-electron. This file lists every question that came up
-while specifying that, with its status, the answer and where the answer comes
-from. Ids are stable; numbers are not an order.
+ow-tauri is Overwolf's ow-electron SDK adapted to Tauri: the app is a plain
+Tauri app, and everything Overwolf receives is identical to ow-electron. This
+file lists every question that came up while specifying that, with its
+status, the answer and where the answer comes from. Ids are stable; numbers
+are not an order.
+
+The questions were first written for a design that emulated Electron. The
+Tauri-native rewrite ([ADR 0017](adr/0017-tauri-native-pivot.md)) closed the
+ones about the Electron API and took packages out of 1.0. It also raised four
+new questions for Overwolf (OQ-40 to OQ-43).
 
 Most questions are now settled: Overwolf's documentation answered some, black-box
 observation of ow-electron 42.11.4 with the parity harness (rounds 1, 2 and
@@ -21,7 +28,8 @@ Status:
 | **Decided** | no source pins it down; the owner or the lead decided, following "copy ow-electron" wherever it is observable |
 | **Open: Overwolf** | only Overwolf can answer; CONTRACT has a documented interim behaviour |
 | **Open: pending harness** | observable; harness item `R2-n` or `R3-n` ([PARITY.md](PARITY.md#harness-rounds)) will settle it; CONTRACT has an interim behaviour |
-| **Deferred** | belongs to the package runtime, which the scope cut defers ([ADR 0004](adr/0004-packages-backend-selection.md)) |
+| **Out of scope (1.0)** | belongs to the package runtime; 1.0 has no `packages` API ([ADR 0004](adr/0004-packages-backend-selection.md)) |
+| **Closed** | no longer applies to the Tauri-native plugin |
 
 Sources are written as: *observed* (the parity harness against ow-electron
 42.11.4, [PARITY.md](PARITY.md)), a `dev.overwolf.com` URL, *typings* (the
@@ -60,21 +68,25 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 | [OQ-08](#oq-08-consent-cookies) | Consent | consent cookies | High | Answered | D.6.3 |
 | [OQ-26](#oq-26-opencmpwindow-promise-timing) | Consent | `openCMPWindow` promise timing | Low | Answered | A.2.2 |
 | [OQ-38](#oq-38-default-consent-written-by-the-first-settings-window-call) | Consent | default consent written by the first settings-window call | Medium | Answered (copied); open: Overwolf (intended?) | D.6.4 |
-| [OQ-21](#oq-21-a-host-agnostic-package-runtime) | Packages | host-agnostic package runtime | High | Deferred; open: Overwolf | H, Appendix P |
-| [OQ-33](#oq-33-overlay-rendering-in-a-webview-host) | Packages | overlay rendering in a WebView host | High | Deferred; open: Overwolf | Appendix P |
-| [OQ-09](#oq-09-signing-and-integrity-for-tauri-builds) | Packages | signing for Tauri builds | High | Decided; open: Overwolf (integrity target) | G.4 |
-| [OQ-22](#oq-22-dev-mode) | Packages | dev mode | Medium | Decided; use deferred | A.1 |
-| [OQ-23](#oq-23-failure-reasons) | Packages | failure reasons | Low | Answered | H.1 |
-| [OQ-34](#oq-34-implicit-utility-package) | Packages | implicit `utility` package | Medium | Decided; deferred | Appendix P.6 |
-| [OQ-36](#oq-36-package-object-lifetime) | Packages | package object lifetime | Medium | Answered (no runtime); rest deferred | H.1, Appendix P.6 |
-| [OQ-37](#oq-37-throw-or-reject-for-unlisted-package-names) | Packages | throw or reject for unlisted names | Low | Answered; no-name case pending harness (R3-9) | H.1 |
-| [OQ-15](#oq-15-gep-payload-details) | Packages | GEP payload details | Medium | Deferred | Appendix P |
-| [OQ-16](#oq-16-overlay-game-launched-default) | Packages | overlay `game-launched` default | Low | Deferred | Appendix P.4 |
-| [OQ-25](#oq-25-crn) | Packages | CRN | Low | Deferred | Appendix P |
-| [OQ-18](#oq-18-updates-and-the-console) | Distribution | updates and the console | High | Answered (feed); open: Overwolf (Tauri installers) | I.1 |
+| [OQ-21](#oq-21-a-host-agnostic-package-runtime) | Packages | host-agnostic package runtime | High | Out of scope (1.0); open: Overwolf | H |
+| [OQ-33](#oq-33-overlay-rendering-in-a-webview-host) | Packages | overlay rendering in a WebView host | High | Out of scope (1.0); open: Overwolf | H |
+| [OQ-09](#oq-09-signing-and-integrity-for-tauri-builds) | Distribution | signing for Tauri builds | High | Decided; open: Overwolf (manifest, `fileHashes`, integrity target) | G.4 |
+| [OQ-22](#oq-22-dev-mode) | Packages | dev mode | Medium | Closed (no package runtime; the CLI reads its own credentials) | G.4 |
+| [OQ-23](#oq-23-failure-reasons) | Packages | failure reasons | Low | Out of scope (1.0) | H |
+| [OQ-34](#oq-34-implicit-utility-package) | Packages | implicit `utility` package | Medium | Out of scope (1.0) | H |
+| [OQ-36](#oq-36-package-object-lifetime) | Packages | package object lifetime | Medium | Out of scope (1.0) | H |
+| [OQ-37](#oq-37-throw-or-reject-for-unlisted-package-names) | Packages | throw or reject for unlisted names | Low | Out of scope (1.0) | H |
+| [OQ-15](#oq-15-gep-payload-details) | Packages | GEP payload details | Medium | Out of scope (1.0) | H |
+| [OQ-16](#oq-16-overlay-game-launched-default) | Packages | overlay `game-launched` default | Low | Out of scope (1.0) | H |
+| [OQ-25](#oq-25-crn) | Packages | CRN | Low | Out of scope (1.0) | H |
+| [OQ-18](#oq-18-updates-and-the-console) | Distribution | updates and the console | High | Answered (feed; Windows NSIS only); open: Overwolf (Tauri installers) | I.1 |
 | [OQ-24](#oq-24-installer-and-utm-parameters) | Distribution | installer and UTM parameters | Medium | Answered | F.2 |
 | [OQ-31](#oq-31-version-delta) | Distribution | version delta since 42.7.1 | Medium | Answered | [PARITY.md](PARITY.md) |
-| [OQ-39](#oq-39-javascript-dialogs) | Electron API | `alert()`, `confirm()`, `prompt()` presentation | Low | Decided; open: pending harness (needs a visible window) | B.2.6 |
+| [OQ-39](#oq-39-javascript-dialogs) | Guest pages | `alert()`, `confirm()`, `prompt()` | Low | Closed (app webviews are the app's; guests are silenced) | D.3 |
+| [OQ-40](#oq-40-a-corrupt-ow-electronjson) | State | a corrupt `ow-electron.json` | Medium | Decided (copy the reset); open: lead (two stuck cases) | F.2 |
+| [OQ-41](#oq-41-the-install-record-of-a-per-machine-install) | Distribution | install record of a per-machine install (HKLM) | Medium | Open: Overwolf | I.6 |
+| [OQ-42](#oq-42-a-uid-override-and-attribution) | Identity | a `uid` override and attribution | Medium | Open: Overwolf | G.2 |
+| [OQ-43](#oq-43-installer-signing-expectations) | Distribution | installer signing expectations | Medium | Open: Overwolf | G.4, I.3 |
 | [OQ-A1](#oq-a1-reward-ads) | Ad formats | reward ads: element, opt-in, grant signal, verification | High | Open: Overwolf | B.3.2, [AD-FORMATS.md](AD-FORMATS.md#reward) |
 | [OQ-A2](#oq-a2-unit) | Ad formats | valid `unit` values; ignored on standard slots | Medium | Open: Overwolf | B.3.2, D.2 |
 | [OQ-A3](#oq-a3-does-every-performance-ad-end-with-shutdown) | Ad formats | does every performance ad end with `shutdown` | Medium | Answered (no fill, error); open: Overwolf (dismiss, click) | B.3.4 |
@@ -149,6 +161,19 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 - **Open with Overwolf.** Do console dashboards (DAU, window time, installs,
   uninstalls) or the ad and consent pages depend on the `electron_` names or a
   numeric version? `ads.owVersionOverride` exists if the pages do.
+
+### OQ-42: a `uid` override and attribution
+
+- **Question.** `plugins.overwolf.uid` lets an app use any uid, including the
+  console-assigned one, which the formula cannot produce. Nothing stops an
+  app from naming another app's uid. Is that a concern for attribution?
+- **Status.** **Open: Overwolf.**
+- **Answer for now.** ow-electron uses a `package.json` `overwolf.uid`
+  verbatim, whoever wrote it. ow-tauri likewise sends whatever uid the
+  config names. Binding a uid to its owner is up to Overwolf's
+  console and signing (OQ-09). CONTRACT G.2.
+- **Open with Overwolf.** Does Overwolf check that ads, analytics or updates
+  for a uid come from that uid's signed app?
 
 ### OQ-04: analytics event catalogue
 
@@ -235,10 +260,10 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
   `Origin: https://www.overwolf.com`, forces that `Origin` on every guest
   subresource (third-party frames included), adds `x-ow-uid`, `x-ow-phase`
   and `x-ow-window` to `owads.min.js`, runs guests with web security off, and
-  uses the app UA. ow-tauri does all of it on Windows; on macOS only the
-  document request can be shaped with public API; on Linux subresource
-  shaping waits for a web-process extension. CONTRACT D.8 and
-  [ADR 0013](adr/0013-request-shaping-per-os.md).
+  uses the platform webview's default user agent with ow-electron's tokens
+  (CONTRACT E.1). ow-tauri does all of it on Windows. On macOS only the
+  document request can be shaped with public API. Linux has no ads in 1.0.
+  CONTRACT D.8 and [ADR 0013](adr/0013-request-shaping-per-os.md).
 - **Source.** Observed (test and live runs, and with app request hooks
   installed); owner decision.
 - **Open with Overwolf.** Is the macOS gap (no subresource `Origin`, no
@@ -532,17 +557,18 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 
 ## Packages
 
-The scope cut defers the package runtime: `app.overwolf.packages` behaves as
-ow-electron behaves where packages are unavailable (CONTRACT H).
+ow-tauri 1.0 has no `packages` API: no GEP, overlay, recorder, utility or CRN
+([ADR 0004](adr/0004-packages-backend-selection.md), CONTRACT H). The
+questions below stay open for a future package runtime. Their answers
+describe ow-electron as observed; ow-tauri implements none of it.
 
 ### OQ-21: a host-agnostic package runtime
 
 - **Question.** Will Overwolf ship GEP, overlay, recorder, utility and CRN in a
   form a non-Electron host can load?
-- **Status.** Deferred (owner decision). **Open: Overwolf.**
-- **Answer for now.** No package loads; no events; the observed results of
-  ow-electron on an unsupported host (CONTRACT H.1). The proposed interface is
-  kept as a deferred design (CONTRACT Appendix P).
+- **Status.** Out of scope (1.0). **Open: Overwolf.**
+- **Answer for now.** No packages API in 1.0. A runtime would need a form
+  of each package that a non-Electron host can load.
 - **Source.** Owner decision; observed;
   https://dev.overwolf.com/ow-electron/guides/dev-tools/non-windows-dev.
 
@@ -551,46 +577,24 @@ ow-electron behaves where packages are unavailable (CONTRACT H).
 - **Question.** How would Overwolf's overlay runtime render a Tauri app's
   overlay windows (capture of an ordinary window, a composition API, or not at
   all)? WebView2 has no off-screen rendering mode.
-- **Status.** Deferred. **Open: Overwolf.**
-
-### OQ-09: signing and integrity for Tauri builds
-
-- **Question.** What should Overwolf signing cover for a Tauri app (no asar,
-  no Node entry file), and how would a runtime verify it?
-- **Status.** Decided (what can be done now). **Open: Overwolf** (integrity
-  target).
-- **Answer.** `ow-tauri sign` reproduces the published builder's flow:
-  `/sign/electron` for the console-assigned uid and `_metadata.json`,
-  `integrity.dll`, the `OWEINTEGRITY/OWE` resource, Authenticode with the
-  developer's or Overwolf's certificate, and the builder's gating. `/sign/asar`
-  is not done and nothing is faked (CONTRACT G.4,
-  [ADR 0016](adr/0016-signing-approach.md)). Ads and analytics never depend on
-  signing.
-- **Source.** Builder;
-  https://dev.overwolf.com/ow-electron/guides/dev-tools/app-signing;
-  https://dev.overwolf.com/ow-electron/developers-console/releases-management/app-keys.
-- **Open with Overwolf.** Does `/sign/electron` accept a non-Electron
-  manifest, and is `electronVersion` required? What are `fileHashes` used for?
-  What integrity target should a Tauri build have? Does `integrity.dll` have a
-  host-agnostic interface?
+- **Status.** Out of scope (1.0). **Open: Overwolf.**
 
 ### OQ-22: dev mode
 
 - **Question.** How are the dev-mode credentials handled for a Tauri host?
-- **Status.** Decided; use deferred.
-- **Answer.** Read with the documented precedence (`OW_CLI_EMAIL` with
-  `OW_CLI_API_KEY`, else `OW_DEV_KEY`) in debug builds only, never sent
-  anywhere by ow-tauri, kept for a future package runtime (CONTRACT A.1).
+- **Status.** Closed for 1.0.
+- **Answer.** Dev mode unlocks packages, which 1.0 does not have. The plugin
+  reads no credentials at run time. Only the `ow-tauri` CLI reads
+  `OW_CLI_EMAIL` and `OW_CLI_API_KEY`, for signing (CONTRACT G.4).
 - **Source.** https://dev.overwolf.com/ow-electron/guides/dev-tools/dev-mode.
 
 ### OQ-23: failure reasons
 
 - **Question.** What does ow-electron emit for packages on hosts where they do
   not run?
-- **Status.** Answered.
+- **Status.** Out of scope (1.0); answered for ow-electron.
 - **Answer.** Nothing: no `loading`, `ready` or `failed-to-initialize`. The
-  `failed-to-initialize` listener signature is `(event, packageName)`
-  (CONTRACT H.1).
+  `failed-to-initialize` listener signature is `(event, packageName)`.
 - **Source.** Observed (macOS, `gep` and `overlay` listed);
   https://dev.overwolf.com/ow-electron/reference/Overwolf-electron-APIs/packages/interfaces/OverwolfPackageManager#onfailed-to-initialize.
 
@@ -598,59 +602,84 @@ ow-electron behaves where packages are unavailable (CONTRACT H).
 
 - **Question.** Should a host load `utility` whenever other packages are
   listed?
-- **Status.** Decided; deferred with the package runtime.
+- **Status.** Out of scope (1.0).
 - **Answer.** Yes, when a runtime exists: the documentation's `getChannel()`
   example lists `utility` next to the app's packages, and the builder adds it
-  whenever any package is listed. The earlier build warning is removed
-  (CONTRACT Appendix P.6).
+  whenever any package is listed.
 - **Source.** https://dev.overwolf.com/ow-electron/guides/dev-tools/package-channels;
   builder.
 
 ### OQ-36: package object lifetime
 
 - **Question.** When does `app.overwolf.packages.<name>` exist?
-- **Status.** Answered for hosts without packages; the lifetime with a
-  runtime is deferred.
-- **Answer.** `undefined` for every package while no package runtime exists,
-  as in ow-electron (CONTRACT H.1). The proposed lifetime with a runtime is in
-  CONTRACT Appendix P.6.
+- **Status.** Out of scope (1.0).
+- **Answer.** Observed: `undefined` for every package on an ow-electron host
+  without packages.
 - **Source.** Observed.
 
 ### OQ-37: throw or reject for unlisted package names
 
 - **Question.** Do `setChannel` and `getAvailableChannels` throw synchronously
   or reject?
-- **Status.** Answered. The no-name case is **pending harness** (R3-9).
+- **Status.** Out of scope (1.0).
 - **Answer.** Both reject asynchronously, with
   `setChannel - package '<name>' is not registered in this app` and
   `getAvailableChannels - package '<name>' is not registered in this app`,
   even for a listed name on a host without packages. `getChannel()` resolves
   `{}`; `hasPendingUpdates()` returns its object synchronously; `relaunch()`
-  returns `undefined` (CONTRACT H.1).
+  returns `undefined`.
 - **Source.** Observed;
   https://dev.overwolf.com/ow-electron/guides/dev-tools/package-channels#error-cases.
-- **Open.** R3-9: `getAvailableChannels()` with no names. Interim: resolves
-  `{}`.
 
 ### OQ-15: GEP payload details
 
 - **Question.** What is the fourth `game-detected` argument, and are
   `new-info-update` / `new-game-event` values raw strings or parsed JSON?
-- **Status.** Deferred.
+- **Status.** Out of scope (1.0).
 
 ### OQ-16: overlay `game-launched` default
 
 - **Question.** What happens if no listener calls `inject()` or `dismiss()`?
-- **Status.** Deferred. The deferred design proposes dismiss (CONTRACT
-  Appendix P.4).
+- **Status.** Out of scope (1.0).
 
 ### OQ-25: CRN
 
 - **Question.** Where do CRN notifications come from, and what does a host need
   to provide?
-- **Status.** Deferred.
+- **Status.** Out of scope (1.0).
 
 ## Distribution
+
+### OQ-09: signing and integrity for Tauri builds
+
+- **Question.** What should Overwolf signing cover for a Tauri app (no asar,
+  no Node entry file, no `package.json`), and how would a runtime verify it?
+- **Status.** Decided (what can be done now). **Open: Overwolf** (manifest,
+  `fileHashes`, integrity target).
+- **Answer.** `ow-tauri sign` runs the published builder's flow:
+  - `/sign/electron` for the console-assigned uid, with a `packageJson` body
+    built from the merged Tauri config (`name`, `productName`, `version`,
+    `author`, `overwolf.uid` when set, `main`);
+  - `fileHashes` keyed by `--main`, else `plugins.overwolf.signing.entry`,
+    else an error;
+  - `_metadata.json`, `integrity.dll` and the `OWEINTEGRITY/OWE` resource,
+    which the build step links into a Windows release build;
+  - Authenticode with the developer's or Overwolf's certificate
+    (`ow-tauri sign-exe`).
+
+  The CLI checks that the signed uid equals the uid the app computes at run
+  time; `--write-uid` pins it in `tauri.conf.json`. `/sign/asar` is not done
+  and nothing is faked (CONTRACT G.4,
+  [ADR 0016](adr/0016-signing-approach.md)). Ads and analytics never depend
+  on signing.
+- **Source.** Builder;
+  https://dev.overwolf.com/ow-electron/guides/dev-tools/app-signing;
+  https://dev.overwolf.com/ow-electron/developers-console/releases-management/app-keys.
+- **Open with Overwolf.** Does `/sign/electron` accept a manifest built from
+  Tauri config, and is `electronVersion` required? What are `fileHashes` used
+  for, and which file should they cover in a Tauri app? What integrity target
+  should a Tauri build have? Does `integrity.dll` have a host-agnostic
+  interface?
 
 ### OQ-18: updates and the console
 
@@ -661,9 +690,11 @@ ow-electron behaves where packages are unavailable (CONTRACT H).
 - **Answer.** The console serves an electron-updater generic feed per app at
   `https://electron-updates.overwolf.com/electron-updates/electron/<app id>`,
   Windows only (`latest.yml` with `IsAdminRightsRequired` and
-  `blockMapSize`; `latest-mac.yml` and `latest-linux.yml` return 404). The
-  owner decided to use Overwolf's feed; macOS and Linux use a self-hosted
-  feed of the same shape (CONTRACT I.1).
+  `blockMapSize`; `latest-mac.yml` and `latest-linux.yml` return 404).
+  ow-tauri's update client reads that feed and is Windows-only in 1.0. It
+  installs NSIS `setup.exe` files only; MSI is unsupported. macOS and Linux
+  apps use their own update path, such as `tauri-plugin-updater`
+  (CONTRACT I.1).
 - **Source.**
   https://dev.overwolf.com/ow-electron/developers-console/releases-management/release-management#setting-up-electron-auto-updates;
   observed (the public feed of the official sample's app id); owner decision.
@@ -671,12 +702,41 @@ ow-electron behaves where packages are unavailable (CONTRACT H).
   through `ow electron upload` and serve it? Testing it needs an upload to a
   test channel, which needs the app owner's explicit approval.
 
+### OQ-41: the install record of a per-machine install
+
+- **Question.** Where should the install record live when a Tauri NSIS
+  installer installs for all users?
+- **Status.** **Open: Overwolf.**
+- **Answer for now.** The installer hooks write `InstallLocation`, `version`
+  and `ShortcutName` under `Software\OverwolfElectron\<uid>` in the install
+  context, as Overwolf's builder does: HKCU for a per-user install (Tauri's
+  default), HKLM for `bundle.windows.nsis.installMode: "perMachine"`, and
+  either for `"both"` (CONTRACT I.6). The state folder and the machine ids stay per user.
+- **Open with Overwolf.** Does anything at Overwolf read the record from
+  HKLM, or should a per-machine install also write it under HKCU?
+
+### OQ-43: installer signing expectations
+
+- **Question.** What does Overwolf expect of the installer a Tauri app
+  uploads: signed by the developer, by Overwolf, or either?
+- **Status.** **Open: Overwolf.**
+- **Answer for now.** ow-tauri does not assume an Overwolf certificate. A
+  release build with the update client must name its own publisher
+  (`updater.publisherNames`) or a minisign key (`updater.pubkey`), and the
+  client fails closed on a mismatch (CONTRACT I.3). When the signing
+  service enables Overwolf certificate signing for the app,
+  `ow-tauri sign-exe` sends the app executable to it, as Overwolf's builder
+  does (CONTRACT G.4).
+- **Open with Overwolf.** Will installers served from the console be
+  re-signed by Overwolf? If so, which certificate subject should apps put in
+  `publisherNames`?
+
 ### OQ-24: installer and UTM parameters
 
 - **Question.** How does UTM data reach an app?
 - **Status.** Answered.
 - **Answer.** `utmParams` is read from `ow-electron.json`, where Overwolf's
-  installer writes it; when absent, `app.overwolf.utmParams` is `undefined`
+  installer writes it; when absent, `getInfo()` reports no `utmParams`
   (CONTRACT F.2). An app installed by a Tauri installer has none, like an
   ow-electron app with its own installer.
 - **Source.** Observed; typings ("Overwolf installer provided UTM params").
@@ -693,25 +753,44 @@ ow-electron behaves where packages are unavailable (CONTRACT H).
 - **Source.** Observed;
   https://dev.overwolf.com/ow-electron/getting-started/changelog/ow-changelog.
 
-## Electron API
+## Guest pages
 
 ### OQ-39: JavaScript dialogs
 
-- **Question.** How does ow-electron present a page's `alert()`, `confirm()`
-  and `prompt()`: message box title or caption, sheet or separate window,
-  and what does `prompt()` return?
-- **Status.** Decided. **Open: pending harness.**
-- **Answer.** ow-tauri shows `alert()` and `confirm()` as native message
-  boxes with "OK" (and "Cancel"), attached to a visible window, and returns
-  `null` from `prompt()` without a dialog (CONTRACT B.2.6). A
-  `beforeunload` prompt keeps the page without a dialog, as the typings
-  describe for `will-prevent-unload`.
-- **Source.** Typings (`safeDialogs`, `disableDialogs`,
-  `will-prevent-unload`); lead decision for the rest.
-- **Why still open.** Observing the dialogs needs a visible window, which
-  the invisible lab never opens. A lab on a dedicated machine can observe
-  them and settle the caption and `prompt()`.
+- **Question.** How should `alert()`, `confirm()` and `prompt()` behave?
+- **Status.** Closed.
+- **Answer.** ow-tauri adds no Electron API, so dialogs in the app's own
+  webviews behave as Tauri and the platform webview make them behave. In ad
+  guests and consent windows, the guest shim silences them: `alert()`
+  returns at once, `confirm()` returns `false` and `prompt()` returns
+  `null`, so an ad can never block the app (CONTRACT D.3).
+- **Source.** Lead decision.
 
+## State
+
+### OQ-40: a corrupt `ow-electron.json`
+
+- **Question.** What should the host do when `ow-electron.json` cannot be
+  used?
+- **Status.** Decided for parse failures. **Open: lead ruling** for two
+  cases.
+- **Answer.** Observed ow-electron behaviour:
+  - Garbage, a truncated file, an empty file, `null` or a missing file:
+    reset silently. `app_first_launch` is sent again, the consent page saves
+    again, and the next launch is normal.
+  - `[]`: never repaired. Consent is never stored, and `app_first_launch` is
+    sent on every launch.
+  - Wrong types (for example `cmp: 42`): never repaired. Every consent save
+    fails, and no `app_first_launch` is sent.
+
+  ow-tauri resets on a parse failure and sends the same requests. It also
+  keeps the unreadable file as `ow-electron.json.corrupt-<ms>`, the newest 3
+  copies (a local-only difference). Whether ow-tauri copies the two stuck
+  cases or resets them too is a lead ruling; a reset sends one extra
+  `app_first_launch`, then behaves normally. CONTRACT F.2.
+- **Source.** Observed (`corrupt-state` scenarios).
+
+## Ad formats
 ## Ad formats
 
 Questions from the ad-format work (round 3 and the ad-format lab). The
