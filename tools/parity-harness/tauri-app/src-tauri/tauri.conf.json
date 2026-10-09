@@ -15,12 +15,5 @@
   "bundle": {
     "active": false,
     "icon": ["icons/icon.png", "icons/icon.ico"]
-  },
-  "plugins": {
-    "overwolf": {
-      "main": {
-        "url": "main.html"
-      }
-    }
   }
 }

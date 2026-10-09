@@ -1,41 +1,66 @@
 // Builds the Tauri edition of the parity harness app: the web assets into
-// dist/ (bundled with the workspace's rolldown and ow-tauri), then the Rust
-// shell in debug. `run.mjs --host tauri` calls buildTauriApp() once per run.
+// dist/ (web/harness.js bundled with the workspace's rolldown, the plugin's
+// JavaScript API inlined), then the Rust app in debug (the plugin's `lab`
+// feature). `run.mjs --host tauri` calls buildTauriApp() once per run.
 //
 //   node tauri-app/build.mjs          # build and print the binary path
 
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+import { SCENARIOS } from '../lib/scenarios.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..', '..');
 const distDir = join(here, 'dist');
 const crateDir = join(here, 'src-tauri');
 
-/** Bundles web/main.js (ow-tauri/electron inlined) and copies the pages. */
+/**
+ * The app files the scenarios' `open-window` actions load (Tauri serves only
+ * what the build embeds; ow-electron's harness writes them on demand).
+ * @returns {string[]}
+ */
+export function extraWindowFiles() {
+  const files = new Set(['blank.html']);
+  for (const scenario of Object.values(SCENARIOS)) {
+    for (const action of scenario.config?.actions ?? []) {
+      if (action.do === 'open-window' && !action.url) files.add(action.file ?? 'blank.html');
+    }
+  }
+  files.delete('index.html');
+  return [...files].sort();
+}
+
+/** The page an extra window shows (as ow-electron's harness writes it). */
+export function extraWindowPage(file) {
+  return `<!doctype html><meta charset="utf-8"><title>page ${basename(file)}</title><body style="background:#202020"></body>\n`;
+}
+
+/** Bundles web/harness.js and copies the pages. */
 export async function buildWeb() {
   const require = createRequire(join(repoRoot, 'package.json'));
   // A file URL: on Windows a bare absolute path reads as a URL scheme (`d:`).
   const { build } = await import(pathToFileURL(require.resolve('rolldown')).href);
+  rmSync(distDir, { recursive: true, force: true });
   mkdirSync(distDir, { recursive: true });
   await build({
-    input: join(here, 'web', 'main.js'),
+    input: join(here, 'web', 'harness.js'),
     platform: 'browser',
-    resolve: {
-      alias: { electron: 'ow-tauri/electron' },
-      modules: [join(repoRoot, 'node_modules'), 'node_modules'],
-    },
-    output: { file: join(distDir, 'main.js'), format: 'esm' },
+    resolve: { modules: [join(repoRoot, 'node_modules'), 'node_modules'] },
+    output: { file: join(distDir, 'harness.js'), format: 'iife' },
     logLevel: 'warn',
   });
-  for (const file of ['main.html', 'index.html', 'page-shim.js']) {
+  for (const file of ['index.html', 'page-shim.js']) {
     copyFileSync(join(here, 'web', file), join(distDir, file));
   }
   // The harness page itself is shared with the ow-electron app.
   copyFileSync(join(here, '..', 'app', 'page.js'), join(distDir, 'page.js'));
+  for (const file of extraWindowFiles()) {
+    writeFileSync(join(distDir, file), extraWindowPage(file));
+  }
 }
 
 /**

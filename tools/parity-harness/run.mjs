@@ -108,6 +108,8 @@ const USAGE = `Usage: node run.mjs [options]
                           loopback, used by --features, stays reachable)
   --offline-allow H1,H2   with --offline: hosts that still go direct (for example
                           content.overwolf.com so the consent page loads)
+  --online                ignore a scenario preset's --offline (an ow-tauri run
+                          always goes online; record its ow-electron twin so)
   --position X,Y          move the ad window there after it is shown
   --overwolf-uid UID      set package.json overwolf.uid
   --window-monitor        macOS: record this app's windows (CGWindowList) in
@@ -140,6 +142,7 @@ function parseCli() {
       scenario: { type: 'string' },
       features: { type: 'string' },
       offline: { type: 'boolean' },
+      online: { type: 'boolean' },
       'offline-allow': { type: 'string' },
       position: { type: 'string' },
       'overwolf-uid': { type: 'string' },
@@ -168,6 +171,7 @@ function parseCli() {
     process.exit(2);
   };
   let scenario = null;
+  const fromPreset = new Set();
   if (values.scenario) {
     scenario = SCENARIOS[values.scenario];
     if (!scenario) fail(`unknown --scenario ${values.scenario}`);
@@ -175,19 +179,32 @@ function parseCli() {
     if (preset.quitStyle) preset['quit-style'] = preset.quitStyle;
     delete preset.quitStyle;
     for (const [key, value] of Object.entries(preset)) {
-      if (values[key] === undefined)
+      if (values[key] === undefined) {
         values[key] = typeof value === 'number' ? String(value) : value;
+        fromPreset.add(key);
+      }
     }
   }
   for (const [key, value] of Object.entries(DEFAULTS)) {
     if (values[key] === undefined) values[key] = value;
+  }
+  if (values.online) {
+    if (values.offline && !fromPreset.has('offline'))
+      fail('--online and --offline exclude each other');
+    // Compare with an ow-tauri run, which always goes online.
+    values.offline = false;
   }
   if (!['test', 'live'].includes(values.mode)) fail(`--mode must be test or live`);
   if (!['electron', 'tauri'].includes(values.host)) fail('--host must be electron or tauri');
   if (values.host === 'tauri') {
     // Electron switches and hooks with no Tauri counterpart.
     for (const option of ['offline', 'features', 'webrequest', 'screencapture']) {
-      if (values[option]) fail(`--${option} is not available with --host tauri`);
+      if (!values[option]) continue;
+      // A scenario preset's offline switch is Electron's proxy; the Tauri
+      // run goes online and parity-diff sets aside what only the offline
+      // baseline lacks (electronIncomplete).
+      if (fromPreset.has(option)) values[option] = false;
+      else fail(`--${option} is not available with --host tauri`);
     }
     if (process.platform !== 'darwin' && !values['ci-visible'])
       fail('--host tauri runs on macOS only (window monitor), or with --ci-visible on CI');

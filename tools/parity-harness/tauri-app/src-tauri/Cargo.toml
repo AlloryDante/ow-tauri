@@ -1,7 +1,8 @@
-# The Tauri edition of the parity harness app: a thin shell around
-# tauri-plugin-overwolf built with the `lab` feature. The harness logic runs
-# in the plugin's hidden main webview (`web/main.js`), as ow-electron runs
-# `app/main.cjs`. Built and launched by `node run.mjs --host tauri`.
+# The Tauri edition of the parity harness app: a plain Tauri app on
+# tauri-plugin-overwolf built with the `lab` feature (debug only). It runs
+# the scenarios ow-electron's harness app (`app/main.cjs`) runs, on Tauri
+# windows and the plugin's Rust and JavaScript APIs. Built and launched by
+# `node run.mjs --host tauri`.
 #
 # A standalone Cargo workspace with its own Cargo.lock; versions match the
 # root `[workspace.dependencies]`. Never published, never bundled.
@@ -25,10 +26,13 @@ doctest = false
 
 [dependencies]
 tauri = { version = "2.12.1", features = ["unstable"] }
+semver = "1"
 serde_json = "1"
+sha2 = "0.11"
 tauri-plugin-overwolf = { path = "../../../../crates/tauri-plugin-overwolf", features = ["lab"] }
 
-# The native lab probes (src/native.rs); versions as in the plugin.
+# The native lab probes (src/native.rs) and guards (src/macos_lab.rs);
+# versions as in the plugin.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"
 block2 = "0.6.2"
@@ -51,8 +55,8 @@ tauri-build = { version = "2.7.1", features = [] }
 
 [lints.rust]
 missing_docs = "deny"
-# Only src/native.rs (macOS) and src/native_win.rs (Windows) lab probes call
-# native APIs.
+# Only the lab probes and guards (src/native.rs, src/macos_lab.rs on macOS,
+# src/native_win.rs on Windows) call native APIs.
 unsafe_code = "deny"
 rust_2018_idioms = { level = "warn", priority = -1 }
 

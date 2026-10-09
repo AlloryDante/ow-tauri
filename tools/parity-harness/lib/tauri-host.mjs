@@ -16,10 +16,20 @@ import { fileURLToPath } from 'node:url';
 
 const harnessDir = dirname(dirname(fileURLToPath(import.meta.url)));
 
-/** The ow-tauri version under test (packages/ow-tauri/package.json). */
+/**
+ * The ow-tauri version under test: the plugin crate's version (the
+ * workspace's `[workspace.package] version`, which the crate inherits).
+ */
 export function owTauriVersion() {
-  const pkg = join(harnessDir, '..', '..', 'packages', 'ow-tauri', 'package.json');
-  return JSON.parse(readFileSync(pkg, 'utf8')).version;
+  const read = (path) => readFileSync(join(harnessDir, '..', '..', ...path), 'utf8');
+  const own = read(['crates', 'tauri-plugin-overwolf', 'Cargo.toml']).match(
+    /^version\s*=\s*"([^"]+)"/m,
+  );
+  if (own) return own[1];
+  const workspace = read(['Cargo.toml']).match(
+    /^\[workspace\.package\][^[]*?^version\s*=\s*"([^"]+)"/ms,
+  );
+  return workspace ? workspace[1] : null;
 }
 
 /**
