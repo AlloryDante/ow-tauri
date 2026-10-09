@@ -4,6 +4,9 @@
 //! - ad guest documents (`owad-*` webviews): each new document of the ad
 //!   page is probed at load (`guest-<n>-dom-ready-<k>.json`, and again 10 s
 //!   later), with the probe ow-electron's harness runs at `dom-ready`;
+//! - every request an ad guest's page and its same-origin frames make, as
+//!   the page's resource timing lists it (`guest-requests.jsonl`, read every
+//!   second): the guest-originated analytics `parity-diff.mjs` compares;
 //! - consent page documents (`ow-cmp*` windows): `cmp-pages.jsonl`;
 //! - cookies of the default website data store (macOS): `cookie-changes.jsonl`.
 //!
@@ -30,6 +33,28 @@ const POLL: Duration = Duration::from_millis(250);
 /// How often the cookies are read.
 const COOKIE_POLL: Duration = Duration::from_millis(500);
 
+/// How often the guests' new requests are read.
+const REQUEST_POLL: Duration = Duration::from_secs(1);
+
+/// The requests of a guest's page and its same-origin frames listed since
+/// the last call (resource timing entries; the buffer is raised once per
+/// frame so entries are not dropped): `[timeOrigin, href, [[frame, url,
+/// initiatorType], ...]]`.
+const GUEST_REQUESTS: &str = r"JSON.stringify((() => {
+  const out = [];
+  const walk = (w, path) => {
+    let list;
+    try { list = w.performance.getEntriesByType('resource'); } catch (e) { return; }
+    try { if (!w.__parityResBuffer) { w.performance.setResourceTimingBufferSize(100000); w.__parityResBuffer = true; } } catch (e) {}
+    const from = w.__parityResSeen || 0;
+    for (let i = from; i < list.length; i++) out.push([path, list[i].name, list[i].initiatorType]);
+    w.__parityResSeen = list.length;
+    for (let i = 0; i < w.frames.length; i++) walk(w.frames[i], path + '/' + i);
+  };
+  walk(window, '');
+  return [performance.timeOrigin, location.href.slice(0, 300), out];
+})())";
+
 /// Ad guest webview labels.
 pub fn is_guest(label: &str) -> bool {
     label.starts_with("owad-")
@@ -45,9 +70,9 @@ fn is_cmp(label: &str) -> bool {
 const DOC_STATE: &str =
     "JSON.stringify([location.href, performance.timeOrigin, document.readyState])";
 
-/// ow-electron's harness `GUEST_PROBE` (`app/main.cjs`), plus the page's
-/// resource list (`labResources`, every request of the page so far, which
-/// the fill-impression count reads).
+/// ow-electron's harness `GUEST_PROBE` (`app/main.cjs`), plus the resource
+/// list of the page and its same-origin frames (`labResources`, every
+/// request so far, which the fill-impression count reads).
 pub const GUEST_PROBE: &str = r"(() => {
   const describe = (v, depth) => {
     if (v === null || v === undefined) return v === null ? null : { undefined: true };
@@ -78,8 +103,12 @@ pub const GUEST_PROBE: &str = r"(() => {
   const top = Object.getOwnPropertyDescriptor(window, '__overwolf__');
   let storage = {};
   try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); storage[k] = localStorage.getItem(k); } } catch (e) { storage = { error: String(e) }; }
-  let labResources = [];
-  try { labResources = performance.getEntriesByType('resource').map((e) => e.name); } catch (e) {}
+  const labResources = [];
+  const resources = (w) => {
+    try { for (const e of w.performance.getEntriesByType('resource')) labResources.push(e.name); } catch (e) { return; }
+    for (let i = 0; i < w.frames.length; i++) resources(w.frames[i]);
+  };
+  resources(window);
   return {
     href: location.href, referrer: document.referrer, userAgent: navigator.userAgent,
     visibilityState: document.visibilityState, hasFocus: document.hasFocus(),
@@ -269,6 +298,38 @@ fn check_guests(app: &AppHandle<Wry>) {
     }
 }
 
+/// One pass over the guests: their new requests (`guest-requests.jsonl`).
+fn check_requests(app: &AppHandle<Wry>) {
+    let h = harness::get();
+    for (label, state) in eval_each(app, is_guest, GUEST_REQUESTS) {
+        let Some([origin, href, list]) = state
+            .as_array()
+            .and_then(|a| <&[Value; 3]>::try_from(a.as_slice()).ok())
+        else {
+            continue;
+        };
+        for entry in list.as_array().into_iter().flatten() {
+            let Some([frame, url, kind]) = entry
+                .as_array()
+                .and_then(|a| <&[Value; 3]>::try_from(a.as_slice()).ok())
+            else {
+                continue;
+            };
+            h.record(
+                "guest-requests.jsonl",
+                json!({
+                    "label": label,
+                    "timeOrigin": origin,
+                    "href": href,
+                    "frame": frame,
+                    "url": url,
+                    "initiatorType": kind,
+                }),
+            );
+        }
+    }
+}
+
 /// Consent page documents already probed (label -> time origin).
 static CMP_DOCS: std::sync::Mutex<BTreeMap<String, u64>> = std::sync::Mutex::new(BTreeMap::new());
 
@@ -405,6 +466,13 @@ pub fn start(app: &AppHandle<Wry>) {
             check_guests(&docs);
             check_cmp(&docs);
             std::thread::sleep(POLL);
+        }
+    });
+    let requests = app.clone();
+    std::thread::spawn(move || {
+        loop {
+            check_requests(&requests);
+            std::thread::sleep(REQUEST_POLL);
         }
     });
     let cookies = app.clone();

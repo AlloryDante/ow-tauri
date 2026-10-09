@@ -812,6 +812,8 @@ export function loadCapture(runDir) {
     pageReloads: pageReloads(runDir),
     reloadRequests: pageReloadRequests(runDir),
     guestCount: guestProbeCount(runDir),
+    guestRequests: guestRequests(runDir, meta.host ?? 'electron'),
+    gestures: gestureCases(runDir, meta.host ?? 'electron'),
     consentCookies: consentCookies(runDir, meta.startedAt),
     stateAfter: stateFile(runDir, 'after'),
     stateBefore: stateFile(runDir, 'before'),
@@ -858,6 +860,21 @@ const WEBVIEW_OWN = [
  * the document that makes it intended.
  */
 const RULES = [
+  {
+    when: (d) => d.section === 'guest-request' && d.partial === true,
+    cls: 'not-mirrored',
+    why: "ow-tauri's record of this run is the guest probes' resource lists (no guest-requests.jsonl), which miss what a document sent after its last probe; re-record for a verdict",
+  },
+  {
+    when: (d) => d.section === 'guest-request' && d.adDriven === true,
+    cls: 'variance',
+    why: "the ad page's analytics of the ads served and their playback (waterfall, video states, rewarded flow) depend on the ads and on playback speed, as the element events' counts do",
+  },
+  {
+    when: (d) => d.section === 'guest-request' && d.followsLoads === true,
+    cls: 'variance',
+    why: "the ad page sends owads_first_load once per document and its teardown names once per ended document; the documents differ exactly as the element events' dom-ready counts do, and those are judged there",
+  },
   {
     when: (d) => d.section === 'guest' && d.osClickFocus === true,
     cls: 'variance',
@@ -2433,6 +2450,386 @@ function compareVisibility(e, t, out) {
   }
 }
 
+// --- Guest-originated requests (CONTRACT E.5) ------------------------------
+
+/**
+ * The ad page's analytics that go out once per ad page document (its
+ * lifecycle). Their counts are compared per document (`owads_first_load`).
+ */
+export const GUEST_PER_LOAD = new Set([
+  'owads_first_load',
+  'owads_oam_path',
+  'oam_first_load',
+  'oam_app_subdomain',
+  'oam_fpid',
+]);
+
+/**
+ * The ad page's analytics driven by the ads served and their playback (the
+ * provider waterfall, video states, rewarded flow): counts vary as the
+ * element events' do.
+ */
+export const GUEST_AD_DRIVEN =
+  /^oam_(provider_loaded|waterfall_start|rewarded_\w+)$|^owads_(impression_video_state|video_info|performance_ad_dismissed|scl_impression|initial_start|initial_duration)$/;
+
+/**
+ * The ad page's analytics sent when one of its documents ends (the slot
+ * removed, the page reloading itself): one per ended document.
+ */
+export const GUEST_TEARDOWN = new Set(['owads_ad_container_duration', 'owads_shutdown']);
+
+/** The session id format of the ad page's analytics (`ad_uid`: ms, `_`, a number). */
+const SESSION_ID = /^\d{13}_\d+$/;
+
+/**
+ * One guest-originated request: `{name}` for an `owads_*` / `oam_*`
+ * Counter (with its `ad_uid` session id when it carries one), `{stats}` for
+ * an InsertStats post (its `Kind` when the body is known), else null.
+ * @param {string} url
+ * @param {string | null} [body]
+ */
+export function guestRequestOf(url, body = null) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  if (/\/tracking\/InsertStats$/.test(u.pathname)) {
+    const kind = /"Kind"\s*:\s*(\d+)/.exec(body ?? '');
+    return { stats: kind ? Number(kind[1]) : null };
+  }
+  if (!/\/analytics\/Counter$/.test(u.pathname)) return null;
+  const name = u.searchParams.get('Name') ?? '';
+  if (!/^(owads|oam)_/.test(name)) return null;
+  let extra = u.searchParams.get('Extra');
+  let session = null;
+  for (let i = 0; i < 3 && typeof extra === 'string'; i++) {
+    try {
+      extra = JSON.parse(extra);
+    } catch {
+      try {
+        extra = decodeURIComponent(extra);
+      } catch {
+        break;
+      }
+    }
+  }
+  if (extra && typeof extra === 'object' && typeof extra.ad_uid === 'string')
+    session = extra.ad_uid;
+  return { name, session };
+}
+
+/**
+ * The requests the run's ad guests sent: ow-electron's net log (requests
+ * whose initiator is a page, not the app or the host), ow-tauri's
+ * `guest-requests.jsonl` (the harness reads each guest's resource timing,
+ * macOS), else the plugin's `guest-network.jsonl` (Windows), else the guest
+ * probes' `labResources` (the latest probe of each guest). `source` names
+ * which; null when the run recorded none.
+ * @param {string} runDir
+ * @param {string} host
+ */
+export function guestRequests(runDir, host) {
+  const out = [];
+  const add = (url, body) => {
+    const r = guestRequestOf(url, body);
+    if (r) out.push(r);
+  };
+  if (host !== 'tauri') {
+    const all = readJson(join(runDir, 'netlog-requests.json'));
+    if (!all) return { source: null, requests: out };
+    for (const r of all) {
+      const from = r.initiator ?? 'not an origin';
+      if (from === 'not an origin' || /^(file:|null$)/.test(from)) continue;
+      add(r.url, r.uploadBody?.text ?? null);
+    }
+    return { source: 'netlog', requests: out };
+  }
+  const stream = readJsonl(join(runDir, 'guest-requests.jsonl'));
+  if (stream.length) {
+    for (const r of stream) add(r.url);
+    return { source: 'guest-requests', requests: out };
+  }
+  const wire = readJsonl(join(runDir, 'guest-network.jsonl'));
+  if (wire.length) {
+    const seen = new Set();
+    for (const r of wire) {
+      if (!r.url || seen.has(`${r.label}|${r.requestId}`)) continue;
+      seen.add(`${r.label}|${r.requestId}`);
+      add(r.url);
+    }
+    return { source: 'guest-network', requests: out };
+  }
+  const latest = new Map();
+  for (const f of readdirSync(runDir)) {
+    const m = /^guest-(\d+)-.*\.json$/.exec(f);
+    if (!m) continue;
+    const resources = readJson(join(runDir, f))?.labResources ?? [];
+    if (resources.length >= (latest.get(m[1])?.length ?? 0)) latest.set(m[1], resources);
+  }
+  if (!latest.size) return { source: null, requests: out };
+  for (const resources of latest.values()) for (const url of resources) add(url);
+  return { source: 'probes', requests: out };
+}
+
+/**
+ * Counts of a run's guest requests: per Counter name, InsertStats posts
+ * (and their kinds), session ids (distinct, missing, malformed) and the ad
+ * page documents (`owads_first_load`).
+ * @param {Array<{name?: string, session?: string | null, stats?: number | null}>} requests
+ */
+export function guestRequestFacts(requests) {
+  const names = {};
+  const sessions = new Set();
+  let unsessioned = 0;
+  let malformed = 0;
+  let stats = 0;
+  const kinds = new Set();
+  for (const r of requests) {
+    if ('stats' in r) {
+      stats += 1;
+      if (r.stats !== null) kinds.add(r.stats);
+      continue;
+    }
+    names[r.name] = (names[r.name] ?? 0) + 1;
+    if (r.session === null || r.session === undefined) unsessioned += 1;
+    else {
+      sessions.add(r.session);
+      if (!SESSION_ID.test(r.session)) malformed += 1;
+    }
+  }
+  return {
+    names,
+    loads: names.owads_first_load ?? 0,
+    stats,
+    kinds: [...kinds].sort(),
+    sessions: sessions.size,
+    unsessioned,
+    malformed,
+  };
+}
+
+/** Total `dom-ready` element events of a run (ad page documents the page saw). */
+function domReadyTotal(elementEvents) {
+  return Object.entries(elementEvents ?? {})
+    .filter(([k]) => / dom-ready$/.test(k))
+    .reduce((n, [, v]) => n + v, 0);
+}
+
+/**
+ * E.5: the requests the ad page itself sends (`owads_*` and `oam_*`
+ * Counters, InsertStats Kind 400051, the `ad_uid` session ids). The host
+ * only shapes them through visibility, reloads and `sessionStorage`
+ * (DESIGN §4.4.6), so the same inputs must give the same stream: each name
+ * sent by both hosts, the per-document names once per document, the same
+ * InsertStats posts, and as many session ids per document. Counts of
+ * ad-driven names (the waterfall, video states) are marked `adDriven`; a
+ * document count that differs as the element events' `dom-ready` count does,
+ * and a teardown name that differs by as many documents, are marked
+ * `followsLoads` (the element events judge the loads).
+ */
+export function compareGuestRequests(e, t, out) {
+  if (!e.guestRequests?.source || !t.guestRequests?.source) {
+    out.push({
+      section: 'guest-request',
+      key: 'source',
+      field: 'recorded',
+      electron: e.guestRequests?.source ?? null,
+      tauri: t.guestRequests?.source ?? null,
+      informational: true,
+    });
+    return;
+  }
+  const a = guestRequestFacts(e.guestRequests.requests);
+  const b = guestRequestFacts(t.guestRequests.requests);
+  // The guest probes list the resources a document still holds when probed:
+  // a request a document sent after its last probe, or a document that
+  // left between probes, is not in them.
+  const partial = t.guestRequests.source === 'probes' ? { partial: true } : {};
+  const push = (row) => out.push({ ...row, ...(row.field === 'recorded' ? {} : partial) });
+  const perLoad = (n, loads) => (loads ? Math.round((n / loads) * 1000) / 1000 : n);
+  const documents = b.loads - a.loads;
+  const docsFollow =
+    documents !== 0 &&
+    documents === domReadyTotal(t.elementEvents) - domReadyTotal(e.elementEvents);
+  const ended = (name, x, y) =>
+    docsFollow && GUEST_TEARDOWN.has(name) && y - x === documents ? { followsLoads: true } : {};
+  for (const name of [...new Set([...Object.keys(a.names), ...Object.keys(b.names)])].sort()) {
+    const x = a.names[name] ?? 0;
+    const y = b.names[name] ?? 0;
+    if (x === y) continue;
+    const adDriven = GUEST_AD_DRIVEN.test(name);
+    if (x === 0 || y === 0) {
+      push({
+        section: 'guest-request',
+        key: name,
+        field: x === 0 ? 'extra' : 'missing',
+        electron: x,
+        tauri: y,
+        ...(adDriven ? { adDriven } : ended(name, x, y)),
+      });
+    } else if (name === 'owads_first_load') {
+      push({
+        section: 'guest-request',
+        key: name,
+        field: 'documents',
+        electron: x,
+        tauri: y,
+        ...(docsFollow ? { followsLoads: true } : {}),
+      });
+    } else if (GUEST_PER_LOAD.has(name)) {
+      if (perLoad(x, a.loads) !== perLoad(y, b.loads))
+        push({
+          section: 'guest-request',
+          key: name,
+          field: 'per-document',
+          electron: perLoad(x, a.loads),
+          tauri: perLoad(y, b.loads),
+        });
+    } else {
+      push({
+        section: 'guest-request',
+        key: name,
+        field: 'count',
+        electron: x,
+        tauri: y,
+        ...(adDriven ? { adDriven } : ended(name, x, y)),
+      });
+    }
+  }
+  // InsertStats from the ad page (Kind 400051; the body is known on
+  // ow-electron's net log only).
+  if (
+    a.stats !== b.stats &&
+    (a.stats === 0 || b.stats === 0 || perLoad(a.stats, a.loads) !== perLoad(b.stats, b.loads))
+  )
+    push({
+      section: 'guest-request',
+      key: `InsertStats${a.kinds.length ? ` Kind ${a.kinds.join(',')}` : ''}`,
+      field: 'count',
+      electron: a.stats,
+      tauri: b.stats,
+    });
+  // Session ids: every owads_ / oam_ request carries one, in one format,
+  // and as many per document.
+  if ((a.unsessioned === 0) !== (b.unsessioned === 0))
+    push({
+      section: 'guest-request',
+      key: 'session ids',
+      field: 'requests without ad_uid',
+      electron: a.unsessioned,
+      tauri: b.unsessioned,
+    });
+  if (b.malformed > 0 && a.malformed === 0)
+    push({
+      section: 'guest-request',
+      key: 'session ids',
+      field: 'format',
+      electron: a.malformed,
+      tauri: b.malformed,
+    });
+  if (a.sessions && b.sessions && perLoad(a.sessions, a.loads) !== perLoad(b.sessions, b.loads))
+    push({
+      section: 'guest-request',
+      key: 'session ids',
+      field: 'per-document',
+      electron: perLoad(a.sessions, a.loads),
+      tauri: perLoad(b.sessions, b.loads),
+    });
+  out.push({
+    section: 'guest-request',
+    key: 'source',
+    field: 'recorded',
+    electron: e.guestRequests.source,
+    tauri: t.guestRequests.source,
+    informational: true,
+  });
+}
+
+// --- Gestures (DESIGN §5.2 #12) ---------------------------------------------
+
+/**
+ * The gesture cases of a run (gesture-timing: `click-outs.jsonl`) and the
+ * external opens each led to: ow-electron's recorder of `shell.openExternal`
+ * (`open-external.jsonl`), ow-tauri's lab trace (`wc-events.jsonl`
+ * `open-external`). `pageResult` is what the fixture page saw `window.open`
+ * return (or the navigation it assigned).
+ * @param {string} runDir
+ * @param {string} host
+ */
+export function gestureCases(runDir, host) {
+  const clickOuts = readJsonl(join(runDir, 'click-outs.jsonl'));
+  const opened =
+    host === 'tauri'
+      ? readJsonl(join(runDir, 'wc-events.jsonl'))
+          .filter((r) => r.kind === 'open-external')
+          .map((r) => r.url)
+      : readJsonl(join(runDir, 'open-external.jsonl')).map((r) => r.args?.[0]);
+  const logs = new Map(clickOuts.filter((r) => r.kind === 'fixture-log').map((r) => [r.id, r.log]));
+  return clickOuts
+    .filter((r) => r.kind === 'gesture-case')
+    .map((r) => {
+      const url = r.url ?? `owparity-canary://case-${r.id}`;
+      const action = (logs.get(r.id) ?? []).filter((l) => l.ev === 'action');
+      return {
+        id: r.id,
+        caseKind: r.caseKind,
+        delay: r.delay ?? 0,
+        input: r.input ?? 'mouse',
+        refused: r.refused ?? null,
+        opens: opened.filter((u) => typeof u === 'string' && (u === url || u.startsWith(`${url}-`)))
+          .length,
+        pageResult: action.length ? action.map((l) => l.result ?? l.error ?? null) : null,
+      };
+    });
+}
+
+/**
+ * §5.2 #12: for each gesture case ow-electron ran, ow-tauri opened as many
+ * URLs externally (ow-electron's results fix the policy: a native click opens
+ * within the activation, nothing opens without one) and its page saw the
+ * same `window.open` result. A case ow-tauri could not run is reported by
+ * `compareActions` (`action-unsupported`).
+ */
+export function compareGestures(e, t, out) {
+  if (!e.gestures?.length) return;
+  const unsupported = t.actions.some(
+    (a) => a.phase === 'action-unsupported' && a.do === 'gesture-case',
+  );
+  const tauri = new Map((t.gestures ?? []).map((g) => [g.id, g]));
+  for (const g of e.gestures) {
+    if (g.refused) continue;
+    const key = `case ${g.id} ${g.caseKind}${g.delay ? ` +${g.delay} ms` : ''}${g.input !== 'mouse' ? ` (${g.input})` : ''}`;
+    const other = tauri.get(g.id);
+    if (!other) {
+      if (!unsupported)
+        out.push({ section: 'gesture', key, field: 'missing', electron: 'run', tauri: 'not run' });
+      continue;
+    }
+    if (other.refused) {
+      out.push({
+        section: 'gesture',
+        key,
+        field: 'refused',
+        electron: 'run',
+        tauri: other.refused,
+      });
+      continue;
+    }
+    if (g.opens !== other.opens)
+      out.push({ section: 'gesture', key, field: 'opens', electron: g.opens, tauri: other.opens });
+    if (g.pageResult && other.pageResult && stable(g.pageResult) !== stable(other.pageResult))
+      out.push({
+        section: 'gesture',
+        key,
+        field: 'page-result',
+        electron: g.pageResult,
+        tauri: other.pageResult,
+      });
+  }
+}
+
 function compareLive(e, t, out) {
   const mode = t.meta.options?.mode;
   if (mode !== 'live') return;
@@ -2499,6 +2896,8 @@ export function diffCaptures(electronDir, tauriDir, { tolerance = 1500, burst = 
   compareVisibility(e, t, raw);
   compareLive(e, t, raw);
   compareAdformats(e, t, raw);
+  compareGuestRequests(e, t, raw);
+  compareGestures(e, t, raw);
   const diffs = raw.filter((d) => !d.informational).map(classify);
   const info = raw.filter((d) => d.informational);
   const counts = {};
