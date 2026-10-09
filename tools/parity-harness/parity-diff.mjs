@@ -479,6 +479,89 @@ function pageReloads(runDir) {
   return counts;
 }
 
+/** Requests closer together than this are one reload (a page may ask twice). */
+export const RELOAD_REQUEST_MERGE_MS = 1000;
+
+/**
+ * Per element cid, the reloads the ad page asked its host for, at any
+ * time: ow-electron's `GUEST_ADVIEW_RELOAD` messages from the guest,
+ * ow-tauri's lab `reload` records. Requests within
+ * {@link RELOAD_REQUEST_MERGE_MS} of the previous one count once, as the
+ * host runs one reload for them.
+ * @param {string} runDir
+ * @returns {Record<string, number>}
+ */
+export function pageReloadRequests(runDir) {
+  const namer = guestNamer(runDir);
+  const records = [];
+  for (const e of readJsonl(join(runDir, 'ipc.jsonl'))) {
+    if (e.type === 'owadview' && typeof e.webContentsId === 'number') namer.see(e.webContentsId);
+    if (e.channel === 'GUEST_ADVIEW_RELOAD' && e.dir === 'page->host')
+      records.push({ t: e.t, id: e.webContentsId });
+  }
+  for (const e of readJsonl(join(runDir, 'wc-events.jsonl'))) {
+    if (e.kind === 'reload' && e.type === 'owadview') records.push({ t: e.t, id: e.label });
+  }
+  const last = {};
+  const counts = {};
+  for (const r of records.sort((x, y) => x.t - y.t)) {
+    const cid = namer.name(r.id);
+    if (last[cid] === undefined || r.t - last[cid] > RELOAD_REQUEST_MERGE_MS)
+      counts[cid] = (counts[cid] ?? 0) + 1;
+    last[cid] = r.t;
+  }
+  return counts;
+}
+
+/**
+ * Whether ow-tauri's element loaded fewer times than ow-electron's only
+ * because its ad page asked for fewer reloads: both hosts told the guest
+ * the same visibility sequence (with a `hidden` in it, the only state
+ * after which the page asks, CONTRACT D.5), and ow-tauri loaded the page
+ * once plus once per request, so it honoured every request it received.
+ * When ow-electron's requests are recorded they must account for its loads
+ * the same way.
+ * @param {string} cid element container id
+ * @param {{elementEvents: Record<string, number>, visibility: Record<string, string[]>, reloadRequests?: Record<string, number>}} e ow-electron capture
+ * @param {{elementEvents: Record<string, number>, visibility: Record<string, string[]>, reloadRequests?: Record<string, number>}} t ow-tauri capture
+ */
+export function fewerPageReloads(cid, e, t) {
+  const a = e.elementEvents[`${cid} dom-ready`] ?? 0;
+  const b = t.elementEvents[`${cid} dom-ready`] ?? 0;
+  if (b === 0 || a <= b) return false;
+  const ev = e.visibility[cid] ?? [];
+  if (!ev.includes('hidden') || stable(ev) !== stable(t.visibility[cid] ?? [])) return false;
+  if (b !== 1 + (t.reloadRequests?.[cid] ?? 0)) return false;
+  const asked = e.reloadRequests?.[cid];
+  return asked === undefined || a === 1 + asked;
+}
+
+/** A host-message type list without its `customTracking` (re-)sends. */
+export function withoutResends(list) {
+  return list.filter((x) => x !== 'customTracking');
+}
+
+/**
+ * Whether two host-message type sequences hold different numbers of
+ * `customTracking` re-sends, by exactly as many as the guest's page loads
+ * differ, and that load difference is the ad page's own reloads: each host
+ * re-sends the element's customTracking after every guest load (CONTRACT
+ * D.5). The rest of the sequences is compared without those re-sends
+ * ({@link withoutResends}).
+ * @param {string} cid element container id
+ * @param {string[]} at ow-electron message types
+ * @param {string[]} bt ow-tauri message types
+ * @param {Parameters<typeof fewerPageReloads>[1] & {pageReloads?: Record<string, number>}} e ow-electron capture
+ * @param {Parameters<typeof fewerPageReloads>[2] & {pageReloads?: Record<string, number>}} t ow-tauri capture
+ */
+export function reloadResends(cid, at, bt, e, t) {
+  const resends = at.length - withoutResends(at).length - (bt.length - withoutResends(bt).length);
+  const a = e.elementEvents[`${cid} dom-ready`] ?? 0;
+  const b = t.elementEvents[`${cid} dom-ready`] ?? 0;
+  if (resends === 0 || resends !== a - b) return false;
+  return a > b ? fewerPageReloads(cid, e, t) : b - a <= (t.pageReloads?.[cid] ?? 0);
+}
+
 /** Host -> guest private messages, per guest. */
 function privateMessages(runDir) {
   const namer = guestNamer(runDir);
@@ -716,6 +799,7 @@ export function loadCapture(runDir) {
     hiZone: pageRecords(runDir, 'hi-zone'),
     adLoaded: pageRecords(runDir, 'owadview-event').filter((e) => e.event === 'display_ad_loaded'),
     pageReloads: pageReloads(runDir),
+    reloadRequests: pageReloadRequests(runDir),
     guestCount: guestProbeCount(runDir),
     consentCookies: consentCookies(runDir),
     stateAfter: stateFile(runDir, 'after'),
@@ -783,6 +867,16 @@ const RULES = [
       d.section === 'element-event' && d.field === 'count' && (d.occludedReload || d.hiddenReload),
     cls: 'variance',
     why: 'the ad page reloaded itself after the host told it hidden (CONTRACT D.5: window occluded, or the slot hidden while the ad was idle); ow-electron does the same, and whether the page asks depends on its ad state and playback speed',
+  },
+  {
+    when: (d) => d.section === 'element-event' && d.field === 'count' && d.fewerPageReloads,
+    cls: 'variance',
+    why: "ow-tauri's ad page asked for fewer reloads than ow-electron's; the page decides (CONTRACT D.5: about 4.5 s after `hidden`, depending on its ad state, and not once it is shown again first), and both hosts told it the same visibility while ow-tauri honoured every reload it asked for",
+  },
+  {
+    when: (d) => d.section === 'host-message' && d.field === 'sequence' && d.reloadResends,
+    cls: 'variance',
+    why: 'each host re-sends customTracking after every guest load (CONTRACT D.5); the sequences agree without those re-sends, and the extra ones match the extra reloads the ad page asked for',
   },
   {
     when: (d) => d.section === 'host-message' && d.field === 'sequence' && d.consentGated,
@@ -2027,6 +2121,12 @@ function compareElementEvents(e, t, out) {
         b > a &&
         /\s(dom-ready|did-finish-load)$/.test(key) &&
         b - a <= (t.pageReloads?.[key.split(' ')[0]] ?? 0),
+      // Fewer loads because ow-tauri's ad page asked for fewer reloads
+      // than ow-electron's: same visibility, every request honoured.
+      fewerPageReloads:
+        a > b &&
+        /\s(dom-ready|did-finish-load)$/.test(key) &&
+        fewerPageReloads(key.split(' ')[0], e, t),
       removedUnfilled:
         b === 0 && AD_DRIVEN.has(key.split(' ')[1]) && removedUnfilled(key.split(' ')[0], e, t),
       minimizeDismiss: minimizeDismiss([key.split(' ').at(-1)], e, t),
@@ -2223,6 +2323,11 @@ function compareMessages(e, t, out) {
     const at = a.map((x) => x.type);
     const bt = b.map((x) => x.type);
     if (stable(at) !== stable(bt)) {
+      // Re-sends that follow the ad page's own extra reloads are set
+      // aside; the other rules then judge the rest of the sequences.
+      const resends = reloadResends(g, at, bt, e, t);
+      const ac = resends ? withoutResends(at) : at;
+      const bc = resends ? withoutResends(bt) : bt;
       // The startup consent may be saved before a guest attaches (timing);
       // that guest then reads consent from the cookies only.
       const leading = (list) => {
@@ -2236,10 +2341,11 @@ function compareMessages(e, t, out) {
         electron: at,
         tauri: bt,
         consentBeforeGuest:
-          (consentSavedBeforeGuests(t.runDir) && stable(leading(at)) === stable(bt)) ||
-          (consentSavedBeforeGuests(e.runDir) && stable(leading(bt)) === stable(at)),
-        consentDuringAttach: consentDuringAttach(at, bt),
-        consentGated: consentGated(at, bt),
+          (consentSavedBeforeGuests(t.runDir) && stable(leading(ac)) === stable(bc)) ||
+          (consentSavedBeforeGuests(e.runDir) && stable(leading(bc)) === stable(ac)),
+        consentDuringAttach: consentDuringAttach(ac, bc),
+        consentGated: consentGated(ac, bc),
+        reloadResends: resends && stable(ac) === stable(bc),
       });
       continue;
     }

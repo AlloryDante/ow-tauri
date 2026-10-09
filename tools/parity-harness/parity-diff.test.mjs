@@ -17,6 +17,7 @@ import {
   compareAdformats,
   consentDuringAttach,
   consentGated,
+  fewerPageReloads,
   fillImpressions,
   GUEST_CREATE_MS,
   guestCreationSpans,
@@ -29,6 +30,8 @@ import {
   PACKAGE_RUNTIME_FILE,
   PACKAGE_RUNTIME_REQUEST,
   packageRuntimeLog,
+  pageReloadRequests,
+  reloadResends,
   removedUnfilled,
   briefHideDiffers,
   minimizeDismiss,
@@ -39,6 +42,7 @@ import {
   shapingOf,
   withoutPackageRuntime,
   withoutPointerEvents,
+  withoutResends,
   within,
   wireRequests,
 } from './parity-diff.mjs';
@@ -994,4 +998,131 @@ test('the CLI refuses a scenario mismatch unless it is allowed, and then flags i
   assert.notEqual(allowed.status, 2, allowed.stderr);
   assert.match(allowed.stdout, /Warning: the runs differ in scenarioDef/);
   assert.equal(existsSync(join(t, 'parity-diff.json')), true);
+});
+
+test('page reload requests count per element, a repeat within a second once', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'parity-reload-'));
+  writeFileSync(
+    join(dir, 'events.jsonl'),
+    JSON.stringify({ kind: 'guest-probe', webContentsId: 3, label: 'dom-ready-0' }),
+  );
+  writeFileSync(
+    join(dir, 'guest-1-dom-ready-0.json'),
+    JSON.stringify({ overwolf: { containerId: 'slot' } }),
+  );
+  const ask = (t) =>
+    JSON.stringify({
+      t,
+      dir: 'page->host',
+      via: 'session-ipc-message',
+      channel: 'GUEST_ADVIEW_RELOAD',
+      webContentsId: 3,
+      type: 'owadview',
+    });
+  writeFileSync(
+    join(dir, 'ipc.jsonl'),
+    [ask(37122), ask(44934), ask(59056), ask(59059)].join('\n'),
+  );
+  assert.deepEqual(pageReloadRequests(dir), { slot: 3 });
+
+  const tauri = mkdtempSync(join(tmpdir(), 'parity-reload-'));
+  const reload = (t, label) => JSON.stringify({ t, kind: 'reload', label, type: 'owadview' });
+  writeFileSync(
+    join(tauri, 'wc-events.jsonl'),
+    [reload(57259, 'owad-1'), reload(123538, 'owad-1')].join('\n'),
+  );
+  assert.deepEqual(pageReloadRequests(tauri), { 'owad-1': 2 });
+});
+
+test('fewer guest loads are variance only when ow-tauri honoured every reload its page asked for', () => {
+  const vis = { slot: ['visible', 'hidden', 'visible', 'hidden', 'visible'] };
+  const e = {
+    elementEvents: { 'slot dom-ready': 3 },
+    visibility: vis,
+    reloadRequests: { slot: 2 },
+  };
+  const t = {
+    elementEvents: { 'slot dom-ready': 2 },
+    visibility: vis,
+    reloadRequests: { slot: 1 },
+  };
+  assert.equal(fewerPageReloads('slot', e, t), true);
+  // ow-electron requests not recorded (older capture): its loads alone.
+  assert.equal(fewerPageReloads('slot', { ...e, reloadRequests: {} }, t), true);
+  // A request ow-tauri received and never loaded is a dropped reload.
+  assert.equal(fewerPageReloads('slot', e, { ...t, reloadRequests: { slot: 2 } }), false);
+  // The page was told something else: the host's visibility is suspect.
+  assert.equal(
+    fewerPageReloads('slot', e, { ...t, visibility: { slot: ['visible', 'hidden', 'visible'] } }),
+    false,
+  );
+  // Never hidden: the page has no reason to ask.
+  const shown = { slot: ['visible'] };
+  assert.equal(
+    fewerPageReloads('slot', { ...e, visibility: shown }, { ...t, visibility: shown }),
+    false,
+  );
+  // ow-electron loads its requests do not account for.
+  assert.equal(fewerPageReloads('slot', { ...e, reloadRequests: { slot: 1 } }, t), false);
+  // Never loaded on ow-tauri, or not fewer.
+  assert.equal(fewerPageReloads('slot', e, { ...t, elementEvents: {} }), false);
+  assert.equal(fewerPageReloads('slot', t, t), false);
+
+  const d = {
+    section: 'element-event',
+    key: 'slot dom-ready',
+    field: 'count',
+    electron: 3,
+    tauri: 2,
+  };
+  assert.equal(classify({ ...d, fewerPageReloads: true }).class, 'variance');
+  assert.equal(classify({ ...d, fewerPageReloads: false }).class, 'BUG');
+});
+
+test('customTracking re-sends that follow extra page reloads are variance', () => {
+  const vis = { slot: ['visible', 'hidden', 'visible', 'hidden', 'visible', 'hidden'] };
+  const e = { elementEvents: { 'slot dom-ready': 4 }, visibility: vis, reloadRequests: {} };
+  const t = {
+    elementEvents: { 'slot dom-ready': 3 },
+    visibility: vis,
+    reloadRequests: { slot: 2 },
+  };
+  const at = [
+    'consent',
+    'customTracking',
+    'eHashes',
+    'customTracking',
+    'customTracking',
+    'window-hidden',
+    'customTracking',
+  ];
+  const bt = [
+    'consent',
+    'customTracking',
+    'eHashes',
+    'customTracking',
+    'window-hidden',
+    'customTracking',
+  ];
+  assert.deepEqual(withoutResends(bt), ['consent', 'eHashes', 'window-hidden']);
+  assert.equal(reloadResends('slot', at, bt, e, t), true);
+  // One re-send more than the load difference.
+  assert.equal(reloadResends('slot', [...at, 'customTracking'], bt, e, t), false);
+  // A load ow-tauri dropped explains nothing.
+  assert.equal(reloadResends('slot', at, bt, e, { ...t, reloadRequests: { slot: 3 } }), false);
+  // Extra ow-tauri loads count only up to the reloads its page asked for after hidden.
+  assert.equal(reloadResends('slot', bt, at, t, { ...e, pageReloads: { slot: 1 } }), true);
+  assert.equal(reloadResends('slot', bt, at, t, { ...e, pageReloads: {} }), false);
+  // Same count: nothing to set aside.
+  assert.equal(reloadResends('slot', at, at, e, t), false);
+
+  const d = {
+    section: 'host-message',
+    key: 'guest slot',
+    field: 'sequence',
+    electron: at,
+    tauri: bt,
+  };
+  assert.equal(classify({ ...d, reloadResends: true }).class, 'variance');
+  assert.equal(classify({ ...d, reloadResends: false }).class, 'BUG');
 });
