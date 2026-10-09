@@ -142,5 +142,5 @@ ads report `unsupported`.
 - **Tauri's `unstable` feature.** On Windows and macOS the `ads` feature turns
   on Tauri's `unstable` feature for the whole app (child webviews).
 
-[Unreleased]: https://github.com/AlloryDante/ow-tauri/compare/v1.0.0-rc.1...HEAD
-[1.0.0-rc.1]: https://github.com/AlloryDante/ow-tauri/releases/tag/v1.0.0-rc.1
+[Unreleased]: https://github.com/AlloryDante/ow-tauri/commits/main
+[1.0.0-rc.1]: https://github.com/AlloryDante/ow-tauri/commits/main

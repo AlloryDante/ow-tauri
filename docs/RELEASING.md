@@ -4,6 +4,10 @@ This is the maintainer runbook for publishing ow-tauri. Releases run only in
 GitHub Actions, through [`release.yml`](../.github/workflows/release.yml).
 Nobody publishes from a laptop.
 
+Nothing is published yet. The project is on GitHub only, and the first
+registry release (1.0.0-rc.1) waits for the owner's go. Until then, run the
+workflow with `dry_run=true` only, and push no tags.
+
 ## What is published
 
 | Package | Registry | Notes |
@@ -69,6 +73,13 @@ Do this once, before the first release.
 - The version's section in [CHANGELOG.md](../CHANGELOG.md) is complete and
   honest, with its known limits. Its heading reads
   `## [<version>] - Unreleased` until the bump below.
+- First release only: the install docs use the GitHub forms (a `git`
+  dependency and `npm pack` tarballs) and say "not on crates.io or npm yet".
+  Switch them to the registry forms in the release commit. `git grep -n -i
+  -e "tgz" -e "not on crates.io" -e "not on npm" -e "git = \"https"` finds
+  them. Point the
+  CHANGELOG links at the tag (`compare/v<version>...HEAD` for
+  `[Unreleased]`, `releases/tag/v<version>` for the version).
 
 ## Make a release
 
