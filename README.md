@@ -6,13 +6,16 @@ Overwolf ads, consent and app analytics for Tauri 2 apps.
 app: the `<owadview>` ad element, Overwolf's consent flow, email hashes, the
 anonymous app analytics, the app uid and machine ids, and Overwolf's update
 feed on Windows. Overwolf receives the same data it receives from an
-ow-electron app, with two differences:
+ow-electron app, with two differences in normal use:
 
 - The analytics host label says `tauri` where ow-electron says `electron`.
   This one is intended.
 - On macOS, ad subresource requests do not carry ow-electron's `Origin` and
   `x-ow-*` headers ([CONTRACT D.8.3](docs/CONTRACT.md#d83-per-platform),
   [OQ-05](docs/OPEN-QUESTIONS.md#oq-05-request-shaping-for-the-ad-page)).
+
+Edge cases and platform gaps are listed in
+[PARITY](docs/PARITY.md#deviations).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/showcase/layouts-dark.webp">

@@ -6,10 +6,12 @@ The plugin gives a Tauri app what ow-electron gives an Electron app: the
 `<owadview>` ad element, Overwolf's consent flow, email hashes, the anonymous
 app analytics, the app uid and machine ids, and Overwolf's update feed on
 Windows. Overwolf receives the same data it receives from an ow-electron app,
-with two differences: the analytics host label says `tauri` where
-ow-electron says `electron`, and on macOS ad subresource requests do not
-carry ow-electron's `Origin` and `x-ow-*` headers
+with two differences in normal use: the analytics host label says `tauri`
+where ow-electron says `electron`, and on macOS ad subresource requests do
+not carry ow-electron's `Origin` and `x-ow-*` headers
 ([CONTRACT D.8.3](https://github.com/AlloryDante/ow-tauri/blob/main/docs/CONTRACT.md#d83-per-platform)).
+Edge cases and platform gaps are listed in
+[PARITY](https://github.com/AlloryDante/ow-tauri/blob/main/docs/PARITY.md#deviations).
 
 The JavaScript half is the npm package `tauri-plugin-overwolf-api`, in
 [`packages/api`](https://github.com/AlloryDante/ow-tauri/tree/main/packages/api).

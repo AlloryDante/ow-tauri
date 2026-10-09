@@ -22,11 +22,15 @@ commands, events and permissions. There is no Electron API.
 
 Overwolf receives the same data from an ow-tauri app as from an ow-electron
 app: the same analytics events and fields, consent outcome, uid and muid, and
-ad events. Two differences are by design or open with Overwolf:
+ad events. Two differences show in normal use; they are by design or open
+with Overwolf:
 
 - The analytics host label is `tauri` (ow-electron sends `electron`).
 - On macOS, ad subresource requests do not carry ow-electron's `Origin` and
   `x-ow-*` headers (see Known limits).
+
+Edge cases and platform gaps are listed in
+[PARITY](docs/PARITY.md#deviations).
 
 ### Added
 
