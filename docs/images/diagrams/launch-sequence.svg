@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="860" viewBox="0 0 960 860" role="img" aria-labelledby="title desc">
+  <title id="title">Launch, consent and analytics sequence</title>
+  <desc id="desc">Plugin setup reads configuration and identity and writes nothing. The app's setup closure runs, so Rust opt-outs land before the burst. At RunEvent::Ready the plugin does its first writes, applies the persisted preference and reads the user agent, waiting at most 2.5 seconds. It then sends the launch burst: the first-launch counter (first launch only), the start counter, a heartbeat without a visible window, InsertStats 400022 (first launch only; like the start counter, not sent when anonymous analytics are off) and 400023, then the cmp-eu-only request with a 60-second timeout. Whatever the outcome, it opens the hidden startup consent window, which loads Overwolf's consent page, writes the consent cookies, saves consent through cmp_event and closes. When a poll first sees a counted window visible, the plugin sends a heartbeat with a visible window and 400023. When an owadview element mounts, the plugin creates the ad guest and sends 400025. The guest loads the ad page once the startup window has closed, or 3 seconds after the mount. At RunEvent::Exit the plugin sends window_closed and drains the queue for at most 1.5 seconds.</desc>
+  <style>
+    .bg { fill: #ffffff; }
+    .head { fill: #f6f8fa; }
+    .note { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1; }
+    .t { fill: #1f2328; font: 600 14px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .s { fill: #1f2328; font: 12.5px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; paint-order: stroke; stroke: #ffffff; stroke-width: 5px; stroke-linejoin: round; }
+    .n { fill: #1f2328; font: 12.5px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .m { fill: #57606a; font: 12px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .sec { fill: #57606a; font: 600 12px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; letter-spacing: 0.04em; paint-order: stroke; stroke: #ffffff; stroke-width: 5px; }
+    .life { stroke: #8c959f; stroke-width: 1.2; stroke-dasharray: 4 5; }
+    .rule { stroke: #d0d7de; stroke-width: 1; }
+    .ln { stroke: #57606a; stroke-width: 1.6; fill: none; }
+    .ret { stroke-dasharray: 6 4; }
+    .ah { fill: #57606a; }
+    .ow { stroke: #bc4c00; stroke-width: 1.6; }
+    .app { stroke: #0969da; stroke-width: 1.6; }
+    .gst { stroke: #1a7f37; stroke-width: 1.6; }
+    .plg { stroke: #6e7781; stroke-width: 1.6; }
+    .owT { fill: #bc4c00; }
+    .appT { fill: #0969da; }
+    .gstT { fill: #1a7f37; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      .head { fill: #161b22; }
+      .note { fill: #161b22; stroke: #3d444d; }
+      .t, .n { fill: #e6edf3; }
+      .s { fill: #e6edf3; stroke: #0d1117; }
+      .m { fill: #9198a1; }
+      .sec { fill: #9198a1; stroke: #0d1117; }
+      .life { stroke: #656c76; }
+      .rule { stroke: #3d444d; }
+      .ln { stroke: #9198a1; }
+      .ah { fill: #9198a1; }
+      .ow { stroke: #db6d28; }
+      .app { stroke: #4493f8; }
+      .gst { stroke: #3fb950; }
+      .plg { stroke: #9198a1; }
+      .owT { fill: #db6d28; }
+      .appT { fill: #4493f8; }
+      .gstT { fill: #3fb950; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="ah" d="M0 0 L10 5 L0 10 z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="960" height="860" rx="12"/>
+
+  <!-- lifelines -->
+  <line class="life" x1="100" y1="64" x2="100" y2="792"/>
+  <line class="life" x1="320" y1="64" x2="320" y2="792"/>
+  <line class="life" x1="560" y1="64" x2="560" y2="792"/>
+  <line class="life" x1="720" y1="64" x2="720" y2="792"/>
+  <line class="life" x1="870" y1="64" x2="870" y2="792"/>
+
+  <!-- lane heads -->
+  <rect class="head app" x="24" y="18" width="152" height="46" rx="8"/>
+  <text class="t appT" x="100" y="38" text-anchor="middle">Your app</text>
+  <text class="m" x="100" y="55" text-anchor="middle">Tauri runtime, webviews</text>
+  <rect class="head plg" x="232" y="18" width="176" height="46" rx="8"/>
+  <text class="t" x="320" y="38" text-anchor="middle">tauri-plugin-overwolf</text>
+  <text class="m" x="320" y="55" text-anchor="middle">host, analytics lane</text>
+  <rect class="head gst" x="478" y="18" width="164" height="46" rx="8"/>
+  <text class="t gstT" x="560" y="38" text-anchor="middle">ow-cmp-startup</text>
+  <text class="m" x="560" y="55" text-anchor="middle">hidden consent window</text>
+  <rect class="head gst" x="654" y="18" width="132" height="46" rx="8"/>
+  <text class="t gstT" x="720" y="38" text-anchor="middle">owad-&lt;n&gt;</text>
+  <text class="m" x="720" y="55" text-anchor="middle">ad guest</text>
+  <rect class="head ow" x="804" y="18" width="132" height="46" rx="8"/>
+  <text class="t owT" x="870" y="38" text-anchor="middle">Overwolf</text>
+  <text class="m" x="870" y="55" text-anchor="middle">pages, endpoints</text>
+
+  <!-- setup -->
+  <text class="sec" x="24" y="92">SETUP</text>
+  <line class="ln" x1="100" y1="112" x2="318" y2="112" marker-end="url(#arrow)"/>
+  <text class="s" x="110" y="105">plugin setup</text>
+  <rect class="note" x="330" y="96" width="300" height="30" rx="6"/>
+  <text class="n" x="340" y="116">reads config, identity, state; writes nothing</text>
+  <rect class="note" x="24" y="134" width="270" height="30" rx="6"/>
+  <text class="n" x="34" y="154">app setup(): Rust opt-outs land here</text>
+
+  <!-- launch -->
+  <line class="rule" x1="24" y1="182" x2="936" y2="182"/>
+  <text class="sec" x="24" y="198">LAUNCH</text>
+  <line class="ln" x1="100" y1="226" x2="318" y2="226" marker-end="url(#arrow)"/>
+  <text class="s" x="110" y="219">RunEvent::Ready</text>
+  <rect class="note" x="330" y="211" width="370" height="30" rx="6"/>
+  <text class="n" x="340" y="231">first writes · persisted preference · UA read (≤ 2.5 s)</text>
+
+  <line class="ln" x1="320" y1="270" x2="868" y2="270" marker-end="url(#arrow)"/>
+  <text class="s" x="330" y="263">Counter app_first_launch¹ · app_start² · app_heartbeat (no visible window)</text>
+  <line class="ln" x1="320" y1="304" x2="868" y2="304" marker-end="url(#arrow)"/>
+  <text class="s" x="330" y="297">InsertStats 400022¹ ² · 400023</text>
+  <line class="ln" x1="320" y1="338" x2="868" y2="338" marker-end="url(#arrow)"/>
+  <text class="s" x="330" y="331">GET cmp-eu-only (timeout 60 s)</text>
+  <line class="ln ret" x1="870" y1="370" x2="322" y2="370" marker-end="url(#arrow)"/>
+  <text class="s" x="580" y="363">response, error or timeout</text>
+
+  <!-- consent -->
+  <line class="ln" x1="320" y1="406" x2="558" y2="406" marker-end="url(#arrow)"/>
+  <text class="s" x="330" y="399">opens it, hidden, 1 × 32</text>
+  <line class="ln" x1="560" y1="440" x2="868" y2="440" marker-end="url(#arrow)"/>
+  <text class="s" x="570" y="433">loads the consent page</text>
+  <rect class="note" x="572" y="448" width="270" height="30" rx="6"/>
+  <text class="n" x="582" y="468">page writes the consent cookies</text>
+  <line class="ln" x1="560" y1="502" x2="322" y2="502" marker-end="url(#arrow)"/>
+  <text class="s" x="330" y="495">cmp_event: save → ow-electron.json, close</text>
+
+  <!-- window -->
+  <line class="rule" x1="24" y1="522" x2="936" y2="522"/>
+  <text class="sec" x="24" y="538">FIRST VISIBLE WINDOW</text>
+  <line class="ln" x1="100" y1="566" x2="318" y2="566" marker-end="url(#arrow)"/>
+  <text class="s" x="110" y="559">250 ms poll: shown</text>
+  <line class="ln" x1="320" y1="592" x2="868" y2="592" marker-end="url(#arrow)"/>
+  <text class="s" x="330" y="585">Counter app_heartbeat (visible window) · InsertStats 400023</text>
+
+  <!-- ad -->
+  <line class="rule" x1="24" y1="612" x2="936" y2="612"/>
+  <text class="sec" x="24" y="628">AD MOUNTED</text>
+  <line class="ln" x1="100" y1="656" x2="318" y2="656" marker-end="url(#arrow)"/>
+  <text class="s" x="110" y="649">adview_mount</text>
+  <line class="ln" x1="320" y1="682" x2="718" y2="682" marker-end="url(#arrow)"/>
+  <text class="s" x="330" y="675">creates the guest · InsertStats 400025</text>
+  <line class="ln" x1="720" y1="716" x2="868" y2="716" marker-end="url(#arrow)"/>
+  <text class="s" x="728" y="709">loads ad page³</text>
+
+  <!-- exit -->
+  <line class="rule" x1="24" y1="736" x2="936" y2="736"/>
+  <text class="sec" x="24" y="752">EXIT</text>
+  <line class="ln" x1="100" y1="780" x2="318" y2="780" marker-end="url(#arrow)"/>
+  <text class="s" x="110" y="773">RunEvent::Exit</text>
+  <line class="ln" x1="320" y1="780" x2="868" y2="780" marker-end="url(#arrow)"/>
+  <text class="s" x="330" y="773">window_closed · drain ≤ 1.5 s, never holds the exit</text>
+
+  <text class="m" x="24" y="812">¹ first launch only</text>
+  <text class="m" x="24" y="828">² not sent when anonymous analytics are off before Ready</text>
+  <text class="m" x="24" y="844">³ after the startup window closes, or 3 s after the mount</text>
+</svg>

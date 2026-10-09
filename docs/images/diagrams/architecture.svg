@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="650" viewBox="0 0 960 650" role="img" aria-labelledby="title desc">
+  <title id="title">ow-tauri architecture</title>
+  <desc id="desc">Overwolf's services are along the top. Below them, on the left, is the app process: ad guest webviews, consent windows, the app's own webviews and its Rust setup. On the right are the tauri-plugin-overwolf modules. Ad guests load Overwolf's ad page directly, and consent windows load Overwolf's consent page directly. The plugin sends analytics and the consent experiment request with hyper, and checks the update feed with reqwest. App webviews call plugin commands and receive element events over a Channel. The plugin creates and drives the guests and consent windows, which have exactly one command each.</desc>
+  <style>
+    .bg { fill: #ffffff; }
+    .panel { fill: #f6f8fa; }
+    .box { fill: #ffffff; }
+    .t { fill: #1f2328; font: 600 14px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .s { fill: #1f2328; font: 12.5px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .m { fill: #57606a; font: 12px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .h { font: 700 16px system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+    .ln { stroke: #57606a; stroke-width: 1.6; fill: none; }
+    .ah { fill: #57606a; }
+    .ow { stroke: #bc4c00; stroke-width: 1.6; }
+    .app { stroke: #0969da; stroke-width: 1.6; }
+    .gst { stroke: #1a7f37; stroke-width: 1.6; }
+    .plg { stroke: #6e7781; stroke-width: 1.6; }
+    .dash { stroke-dasharray: 5 4; }
+    .owT { fill: #bc4c00; }
+    .appT { fill: #0969da; }
+    .gstT { fill: #1a7f37; }
+    .plgT { fill: #1f2328; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      .panel { fill: #161b22; }
+      .box { fill: #0d1117; }
+      .t, .s, .plgT { fill: #e6edf3; }
+      .m { fill: #9198a1; }
+      .ln { stroke: #9198a1; }
+      .ah { fill: #9198a1; }
+      .ow { stroke: #db6d28; }
+      .app { stroke: #4493f8; }
+      .gst { stroke: #3fb950; }
+      .plg { stroke: #9198a1; }
+      .owT { fill: #db6d28; }
+      .appT { fill: #4493f8; }
+      .gstT { fill: #3fb950; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="ah" d="M0 0 L10 5 L0 10 z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="960" height="650" rx="12"/>
+
+  <!-- Overwolf -->
+  <rect class="panel ow" x="20" y="14" width="920" height="168" rx="10"/>
+  <text class="h owT" x="36" y="40">Overwolf: receives the same bytes as from ow-electron</text>
+  <rect class="box ow" x="36" y="56" width="170" height="110" rx="8"/>
+  <text class="t" x="48" y="80">Ad page</text>
+  <text class="m code" x="48" y="102">www.overwolf.com</text>
+  <text class="m code" x="48" y="120">/monsdk/electron/</text>
+  <text class="m code" x="48" y="138">latest/adview.html</text>
+  <rect class="box ow" x="218" y="56" width="170" height="110" rx="8"/>
+  <text class="t" x="230" y="80">Consent page</text>
+  <text class="m code" x="230" y="102">content.overwolf.com</text>
+  <text class="m code" x="230" y="120">/monsdk/electron/</text>
+  <text class="m code" x="230" y="138">latest/cmp/…</text>
+  <rect class="box ow" x="400" y="56" width="170" height="110" rx="8"/>
+  <text class="t" x="412" y="80">Analytics</text>
+  <text class="m code" x="412" y="102">Counter</text>
+  <text class="m code" x="412" y="120">InsertStats</text>
+  <rect class="box ow" x="582" y="56" width="170" height="110" rx="8"/>
+  <text class="t" x="594" y="80">Consent experiment</text>
+  <text class="m code" x="594" y="102">features.overwolf.com</text>
+  <text class="m code" x="594" y="120">/experiments/</text>
+  <text class="m code" x="594" y="138">cmp-eu-only</text>
+  <rect class="box ow" x="764" y="56" width="160" height="110" rx="8"/>
+  <text class="t" x="776" y="80">Update feed</text>
+  <text class="m code" x="776" y="102">electron-updates</text>
+  <text class="m code" x="776" y="120">.overwolf.com</text>
+  <text class="m" x="776" y="140">Windows only</text>
+
+  <!-- App process -->
+  <rect class="panel app" x="20" y="238" width="420" height="398" rx="10"/>
+  <text class="h appT" x="36" y="264">Your Tauri app</text>
+
+  <rect class="box gst" x="36" y="278" width="170" height="122" rx="8"/>
+  <text class="t gstT" x="48" y="300">Ad guest</text>
+  <text class="s code" x="48" y="320">owad-&lt;n&gt;</text>
+  <text class="m" x="48" y="340">child webview over</text>
+  <text class="m" x="48" y="357">the &lt;owadview&gt;</text>
+  <text class="m" x="48" y="374">ad page + creatives;</text>
+  <text class="m" x="48" y="391">no app commands</text>
+
+  <rect class="box gst" x="218" y="278" width="206" height="122" rx="8"/>
+  <text class="t gstT" x="230" y="300">Consent windows</text>
+  <text class="s code" x="230" y="320">ow-cmp-startup, ow-cmp</text>
+  <text class="m" x="230" y="340">hidden startup window</text>
+  <text class="m" x="230" y="357">on every launch; the</text>
+  <text class="m" x="230" y="374">settings window when</text>
+  <text class="m" x="230" y="391">the app asks</text>
+
+  <rect class="box app" x="36" y="420" width="388" height="128" rx="8"/>
+  <text class="t appT" x="48" y="442">App webviews (your pages)</text>
+  <text class="s code" x="48" y="464">tauri-plugin-overwolf-api</text>
+  <text class="s code" x="48" y="484">&lt;owadview cid="…" slotsize="…"&gt;</text>
+  <text class="m" x="48" y="506">granted with "webviews", not "windows":</text>
+  <text class="m code" x="48" y="524">"overwolf:default"</text>
+
+  <rect class="box app" x="36" y="562" width="388" height="58" rx="8"/>
+  <text class="t appT" x="48" y="584">Rust setup</text>
+  <text class="s code" x="48" y="606">.plugin(tauri_plugin_overwolf::init())</text>
+
+  <!-- Plugin -->
+  <rect class="panel plg" x="520" y="238" width="420" height="398" rx="10"/>
+  <text class="h plgT" x="536" y="264">tauri-plugin-overwolf</text>
+
+  <rect class="box plg" x="536" y="278" width="388" height="50" rx="8"/>
+  <text class="t" x="548" y="298">commands</text>
+  <text class="m" x="548" y="317">Tauri ACL, then the app-webview gate</text>
+
+  <rect class="box plg" x="536" y="338" width="388" height="88" rx="8"/>
+  <text class="t" x="548" y="358">host</text>
+  <text class="m" x="548" y="377">lifecycle (Ready, Exit) · windows (names, visibility)</text>
+  <text class="m" x="548" y="395">ads (guests, recreate, crash) · consent rounds</text>
+  <text class="m" x="548" y="413">analytics (burst, heartbeats, window_closed)</text>
+
+  <rect class="box plg" x="536" y="436" width="388" height="68" rx="8"/>
+  <text class="t" x="548" y="456">platform</text>
+  <text class="m" x="548" y="475">macOS key splice · native gestures · UA read</text>
+  <text class="m" x="548" y="493">crash hook · frame guard · request shaping</text>
+
+  <rect class="box plg" x="536" y="514" width="188" height="50" rx="8"/>
+  <text class="t" x="548" y="534">state</text>
+  <text class="m code" x="548" y="553">ow-electron.json</text>
+
+  <rect class="box plg" x="736" y="514" width="188" height="50" rx="8"/>
+  <text class="t" x="748" y="534">HTTP</text>
+  <text class="m" x="748" y="553">hyper · reqwest</text>
+
+  <rect class="box plg dash" x="536" y="574" width="388" height="50" rx="8"/>
+  <text class="t" x="548" y="594">build step (app build script)</text>
+  <text class="m" x="548" y="613">config checks · capability lint · NSIS hooks</text>
+
+  <!-- guest and consent pages load straight from Overwolf -->
+  <line class="ln" x1="185" y1="278" x2="185" y2="170" marker-end="url(#arrow)"/>
+  <text class="m" x="192" y="214">loads</text>
+  <line class="ln" x1="303" y1="278" x2="303" y2="170" marker-end="url(#arrow)"/>
+  <text class="m" x="310" y="214">loads</text>
+
+  <!-- plugin requests -->
+  <line class="ln" x1="552" y1="238" x2="552" y2="170" marker-end="url(#arrow)"/>
+  <text class="m" x="559" y="214">hyper</text>
+  <line class="ln" x1="667" y1="238" x2="667" y2="170" marker-end="url(#arrow)"/>
+  <text class="m" x="674" y="214">hyper</text>
+  <line class="ln" x1="844" y1="238" x2="844" y2="170" marker-end="url(#arrow)"/>
+  <text class="m" x="851" y="214">reqwest</text>
+
+  <!-- plugin drives guests and consent windows -->
+  <line class="ln" x1="520" y1="318" x2="426" y2="318" marker-end="url(#arrow)"/>
+  <text class="m" x="450" y="310">creates</text>
+  <line class="ln" x1="426" y1="372" x2="520" y2="372" marker-end="url(#arrow)"/>
+  <text class="m" x="448" y="364">1 cmd</text>
+
+  <!-- app webviews and commands -->
+  <line class="ln" x1="426" y1="460" x2="520" y2="460" marker-end="url(#arrow)"/>
+  <text class="m" x="452" y="452">invoke</text>
+  <line class="ln" x1="520" y1="516" x2="426" y2="516" marker-end="url(#arrow)"/>
+  <text class="m" x="448" y="508">Channel</text>
+</svg>
