@@ -20,7 +20,7 @@ and `phasePercent` is the character-code sum of the muid's MD5 hex, modulo
 `HKCU\Software\OverwolfElectron` and `MUIDV2` from
 `HKCU\Software\OverwolfPersist` on Windows [BUILDER].
 
-The owner's decision (Q02): the same derivation as ow-electron.
+The project owner's decision: the same derivation as ow-electron.
 
 ## Decision
 
@@ -34,8 +34,8 @@ The owner's decision (Q02): the same derivation as ow-electron.
   uninstall event works for Tauri installs.
 - Linux: the macOS formula over `/etc/machine-id`, else
   `/var/lib/dbus/machine-id`.
-- The Windows and Linux derivations are inferences until harness round 2
-  (R2-10) observes them; the test vectors cover macOS.
+- The Windows and Linux derivations are inferences until harness item R2-10
+  observes them; the test vectors cover macOS.
 - `per-install` stays as a documented non-parity option.
 
 ## Consequences

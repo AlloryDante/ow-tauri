@@ -60,7 +60,7 @@ guest webview is allowed to call, with any arguments, as often as they like.
 - 2026-10-06, parity revision: the hidden startup consent window
   `ow-cmp-startup` gets the same `cmp_event` capability as `ow-cmp`
   ([ADR 0015](0015-startup-consent-window.md)).
-- 2026-10-06, harness round 2: the hidden default-consent window
+- 2026-10-06, second harness round: the hidden default-consent window
   `ow-cmp-default` (opened by the first settings-window call, CONTRACT D.6.4)
   gets the same capability.
 - 2026-10-08, [ADR 0020](0020-native-gesture-authority.md): a reported `__host:gesture` no longer allows an open. Only native user activation does, with a per-guest and a per-app cap. A JavaScript `cmpURL` must match `consent.allowedCmpOrigins`. The runtime capabilities name webviews (`owad-*` and `ow-cmp*`), never windows.

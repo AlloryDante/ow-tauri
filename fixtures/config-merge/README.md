@@ -1,7 +1,7 @@
 # Config-merge fixtures
 
-Golden cases for reading `plugins.overwolf` from a Tauri app's merged configuration (DESIGN §3.1, "one
-parser"). Both readers must produce `expected.json` for every case:
+Golden cases for reading `plugins.overwolf` from a Tauri app's merged configuration. The CLI and the
+crate must read it the same way. Both readers must produce `expected.json` for every case:
 
 - the CLI (`packages/cli/src/tauri-config.ts`, tested by `config-merge.test.ts`);
 - the crate's build step (`tauri_plugin_overwolf::build::run`).

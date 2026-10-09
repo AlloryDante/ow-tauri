@@ -4,27 +4,27 @@ Thanks for helping. Please read this page before opening a pull request.
 
 ## Ground rules
 
-1. **The wire comes first.** Overwolf must receive exactly what ow-electron
+1. The wire comes first. Overwolf must receive exactly what ow-electron
    sends: the same requests, headers, ids, cookies, state-file bytes and
    guest messages ([CONTRACT](docs/CONTRACT.md)), except the host label and
    the documented platform gaps (CONTRACT D.8.3). A change that could alter
-   any of them needs a parity re-proof (gate G12 below) before it merges.
-2. **Tauri idioms.** The plugin is a Tauri plugin. Use Tauri's own APIs,
+   any of them needs a new parity run before it merges
+   ([When a parity run is needed](#when-a-parity-run-is-needed)).
+2. Use Tauri idioms. The plugin is a Tauri plugin. Use Tauri's own APIs,
    capabilities and events. ow-tauri adds no Electron API.
-3. **Decisions are recorded.** A change that reverses or extends an
-   architecture decision adds or supersedes an ADR in
-   [docs/adr/](docs/adr/README.md).
-4. **Observed behaviour only.** Behaviour copied from ow-electron must come
+3. Record decisions. A change that reverses or extends an architecture
+   decision adds or supersedes an ADR in [docs/adr/](docs/adr/README.md).
+4. Copy observed behaviour only. Behaviour copied from ow-electron must come
    from public sources: Overwolf's documentation, the published typings,
    the official sample, or behaviour you can observe on a machine running
    an ow-electron app (requests, files written, cookies). If a behaviour
    cannot be traced to one of these, make it an explicit, documented option
    and add it to [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md).
-5. **Vendor neutral.** No app names, personal names, real uids, machine ids
+5. Stay vendor neutral. No app names, personal names, real uids, machine ids
    or local user paths in code, docs, fixtures, images or commit messages.
    Examples use the placeholder identity in the repository. CI enforces
-   this (G9).
-6. **Test ads only, invisible labs.** See [Lab rules](#lab-rules).
+   this (the identity check below).
+6. Use test ads only, and keep labs invisible. See [Lab rules](#lab-rules).
 
 ## Setup
 
@@ -56,27 +56,28 @@ CI fails when the committed output differs from a fresh build
 Keep heavy jobs serial on small machines: `-j 4` for cargo, two Vitest
 workers.
 
-## Gates
+## Checks
 
-A release needs every gate green. Your pull request needs the ones CI runs
-(G1, G2, G3, G8, G9, G11), plus G12 if you touch parity-sensitive code.
+A release needs every check below to pass. Your pull request needs the ones
+CI runs (Rust, TypeScript, ACL suite, docs, identity and green `main`), plus
+a parity run if you touch parity-sensitive code.
 
-| Gate | What it checks | Where it runs | Run it yourself |
+| Check | What it checks | Where it runs | Run it yourself |
 |---|---|---|---|
-| G1 Rust | rustfmt, clippy (pedantic, warnings are errors), tests and doctests, rustdoc, MSRV 1.90 build, no `unstable` on Linux or in the build step | CI `rust`, `msrv` | see below |
-| G2 TypeScript | Prettier, ESLint (including "no Node imports" in the API package), typecheck, Vitest with coverage thresholds, TypeDoc, generated scripts match their sources, package checks (publint, are-the-types-wrong) | CI `node` | see below |
-| G3 ACL suite | every command against every webview class in Tauri's mock runtime (`crates/tauri-plugin-overwolf/tests/acl-app`) | CI `rust` (part of `cargo test`) | `cargo test --workspace` |
-| G4 macOS lab | the parity scenarios against an ow-electron twin, invisible (`everVisible: false`, never frontmost), plus the 53 macOS key-input cases | maintainers' Macs | [tools/parity-harness](tools/parity-harness/README.md) |
-| G5 Windows lab | the parity scenarios and the 59 Windows key-input cases | `windows-lab.yml` (manual) | ask a maintainer to dispatch it |
-| G6 performance | idle cost of the 250 ms poll, CPU of one visible ad against the ow-electron twin, cold start to burst, macOS guest memory over a reload run | labs | PARITY lists the numbers |
-| G7 release dry run | packaging and publishing without uploading | `release.yml` | [docs/RELEASING.md](docs/RELEASING.md) |
-| G8 docs | every relative link and anchor in every Markdown file; rustdoc and TypeDoc without warnings | CI `docs-links`, `rust`, `node` | `npm run check:links` |
-| G9 identity | no denied names or identities in any tracked file | CI `release-checks` | `node scripts/release/identity-check.mjs` |
-| G10 examples | all four examples build on Windows, macOS and Linux | CI `example` | `npm run build` |
-| G11 green main | `main` is green after every merge; a red `main` is fixed before new work lands | CI | watch your push |
-| G12 parity re-proof | G4 and G5 on the full scenario set against a fresh ow-electron `latest` baseline | labs | see below |
+| Rust | rustfmt, clippy (pedantic, warnings are errors), tests and doctests, rustdoc, MSRV 1.90 build, no `unstable` on Linux or in the build step | CI `rust`, `msrv` | see below |
+| TypeScript | Prettier, ESLint (including "no Node imports" in the API package), typecheck, Vitest with coverage thresholds, TypeDoc, generated scripts match their sources, package checks (publint, are-the-types-wrong) | CI `node` | see below |
+| ACL suite | every command against every webview class in Tauri's mock runtime (`crates/tauri-plugin-overwolf/tests/acl-app`) | CI `rust` (part of `cargo test`) | `cargo test --workspace` |
+| macOS lab | the parity scenarios against an ow-electron twin, invisible (`everVisible: false`, never frontmost), plus the 53 macOS key-input cases | maintainers' Macs | [tools/parity-harness](tools/parity-harness/README.md) |
+| Windows lab | the parity scenarios and the 59 Windows key-input cases | `windows-lab.yml`, on pushes to `main` that touch the plugin, the API, the guest shims or the harness, weekly, and on demand | ask a maintainer to dispatch it |
+| Performance | idle cost of the 250 ms poll, CPU of one visible ad against the ow-electron twin, cold start to burst, macOS guest memory over a reload run | labs | PARITY lists the numbers |
+| Release dry run | packaging and publishing without uploading | `release.yml` | [docs/RELEASING.md](docs/RELEASING.md) |
+| Docs | every relative link and anchor in every Markdown file; rustdoc and TypeDoc without warnings | CI `docs-links`, `rust`, `node` | `npm run check:links` |
+| Identity | no denied names or identities in any tracked file | CI `release-checks` | `node scripts/release/identity-check.mjs` |
+| Examples | all four examples build on Windows, macOS and Linux | CI `example` | `npm run build` |
+| Green `main` | `main` is green after every merge; a red `main` is fixed before new work lands | CI | watch your push |
+| Full parity run | the macOS and Windows labs on the full scenario set against a fresh ow-electron `latest` baseline | labs | see below |
 
-Local commands for G1, G2 and G8:
+Local commands for the Rust, TypeScript and docs checks:
 
 ```sh
 cargo fmt --all -- --check
@@ -94,7 +95,7 @@ npm run check:packages
 npm run check:links
 ```
 
-### When G12 applies
+### When a parity run is needed
 
 A change to any of these re-runs the affected parity scenarios before it
 merges, and the pull request links the result:
@@ -112,46 +113,46 @@ test. Changing it needs a full Windows lab run.
 
 ### Scheduled jobs and drift
 
-- **Weekly, in CI:** the newest stable Rust with the newest Tauri 2.x
-  (`latest` job). A failure there means the `^2.12.1` range is no longer
-  honest. Fix it or narrow the range in a patch release.
-- **Drift lab (weekly):** the Windows lab (`windows-lab.yml`) runs against
-  Overwolf's live ad page and the newest `@overwolf/ow-electron@latest`,
-  with test ads only. If `__overwolf__` keys, message names or request
-  shapes drift, the run fails with the diff.
-- **Owner and response time:** the drift lab belongs to the maintainers.
-  After a drift failure, a fix or a documented deviation in PARITY ships
-  within 7 days.
+- Every week, CI builds with the newest stable Rust and the newest Tauri
+  2.x (`latest` job). A failure there means the `^2.12.1` range is no
+  longer honest. Fix it or narrow the range in a patch release.
+- Every week, the Windows lab (`windows-lab.yml`) also runs as the drift
+  lab: against Overwolf's live ad page and the newest
+  `@overwolf/ow-electron@latest`, with test ads only. If `__overwolf__`
+  keys, message names or request shapes drift, the run fails with the diff.
+- The maintainers own the drift lab. After a drift failure, a fix or a
+  documented deviation in PARITY ships within 7 days.
 
 ## Lab rules
 
 These rules protect users, advertisers and Overwolf's data. They apply to
 every test, lab run, script and example.
 
-1. **Test ads by default.** Every test and lab run uses test ads
+1. Use test ads by default. Every test and lab run uses test ads
    (`ads.testAd`, `--test-ad` or `OW_TAURI_TEST_AD`). No committed config,
    script or fixture turns on live ads. A lab run that must prove live fill
    may load at most 10 live ads, each one logged.
-2. **Never click an ad.** Never send input to an ad guest. Click tests use a
+2. Never click an ad. Never send input to an ad guest. Click tests use a
    loopback fixture page that replaces the ad page in test mode and opens
    nothing.
-3. **Never show a window.** Lab apps run invisible:
+3. Never show a window. Lab apps run invisible:
    - with the `lab` feature, `OW_TAURI_LAB_INVISIBLE=1`;
    - as an accessory app on macOS, at alpha 0, ignoring the mouse and never
      focused.
 
    A macOS run must end with `everVisible: false` and must never have
    been frontmost. No screen captures. Automated tests are headless.
-4. **Example labs talk to loopback.** Example lab runs send analytics,
-   `cmp-eu-only` and consent traffic to the loopback fixtures by default.
-   They run under a lab-only bundle identifier, so they never reach a
-   developer's running app. Only the parity harness talks to Overwolf on
-   purpose, and it does so with test ads.
-5. **Placeholder identity.** Committed files, shared captures and images
-   use the placeholder identity. A registered app's identity for a lab run
-   lives only in the git-ignored `local.identity.json` and never reaches a
-   commit, an image or an issue.
-6. **One app at a time** on small machines. Keep `-j 4`, and wait for a
+4. Keep example labs on loopback. The example lab runs send the plugin's
+   analytics and its `cmp-eu-only` request to a loopback sink that the
+   runner starts, never to Overwolf; the test ads and the consent page
+   still load from Overwolf. The lab apps are built under a lab-only bundle
+   identifier (ending in `.lab`), so their app data and single-instance
+   lock stay apart from a developer's own copy of the app.
+5. Use the placeholder identity. Committed files, shared captures and
+   images use the placeholder identity. A registered app's identity for a
+   lab run lives only in the git-ignored `local.identity.json` and never
+   reaches a commit, an image or an issue.
+6. Run one app at a time on small machines. Keep `-j 4`, and wait for a
    quiet machine before a lab run.
 
 ## Development features and the release guard

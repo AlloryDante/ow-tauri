@@ -71,4 +71,4 @@ but the Rust CI job and `cargo publish` never run npm.
   version of the `FacadeKernel` interface the facades are typed against;
   facades attach only when both `contract` and `api` match, and install a
   runtime themselves where none exists (CONTRACT B).
-- 2026-10-08, Tauri-native pivot: superseded by [ADR 0017](0017-tauri-native-pivot.md). Nothing is injected into app webviews. The `<owadview>` element comes from `tauri-plugin-overwolf-api/adview`. It keeps one global registration, so two bundled copies never mount twice ([ADR 0021](0021-package-split.md)). Only the guest scripts are injected, and only into guest webviews.
+- 2026-10-08, Tauri-native rewrite: superseded by [ADR 0017](0017-tauri-native-pivot.md). Nothing is injected into app webviews. The `<owadview>` element comes from `tauri-plugin-overwolf-api/adview`. It keeps one global registration, so two bundled copies never mount twice ([ADR 0021](0021-package-split.md)). Only the guest scripts are injected, and only into guest webviews.

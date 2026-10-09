@@ -1,4 +1,4 @@
-# Spike: macOS mechanisms (W0c-A)
+# Spike: macOS mechanisms
 
 A minimal Tauri 2.12.1 app (`unstable`, guests as child webviews, as the
 plugin builds them) that measures the macOS mechanisms the plugin design

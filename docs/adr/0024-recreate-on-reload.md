@@ -10,7 +10,7 @@ a crash. On macOS a `WKWebView` that reloads in place keeps memory from
 earlier pages. Over a 30-minute idle run the largest guest kept growing. A
 Chromium guest in ow-electron stays flat.
 
-A spike replaced the reload with a fresh `WKWebView` that has the same
+A prototype replaced the reload with a fresh `WKWebView` that has the same
 label, configuration, geometry, z-order, mute, transparency and
 pass-through state. Memory stopped growing (the largest guest went from
 150 MB to 133 MB in the forced-reload run). The ad page's requests and

@@ -42,8 +42,8 @@ Tauri gives a plugin three relevant moments:
   leaves no trace.
 - **Exit.** The plugin never calls `prevent_exit` and never calls `exit`. At
   `RunEvent::Exit`, `on_exit` ends every open visible period and waits for
-  the analytics lane for at most 1.5 s (`DRAIN_LIMIT`). The drain runs on the
-  lane's own thread, so `on_exit` never needs the main thread.
+  the analytics request thread for at most 1.5 s (`DRAIN_LIMIT`). The drain
+  runs on that thread, so `on_exit` never needs the main thread.
 - **Restart sentinel.** Setup adds a resource to the app's resource table.
   `cleanup_before_exit` drops it on every exit and restart path, and its
   `Drop` runs the same idempotent `on_exit`. A `relaunch()` therefore drains
@@ -60,8 +60,9 @@ Tauri gives a plugin three relevant moments:
 - A Windows logoff or shutdown delivers no `Exit` event. The drain is lost,
   as it is after a crash (TROUBLESHOOTING).
 - A late `disableAnonymousAnalytics()` from JavaScript cannot stop this
-  launch's burst. It logs a warning, and `persist: true` stores the
-  preference for the next launch.
+  launch's burst. It logs a warning;
+  `setAnonymousAnalyticsPreference(false)` stores the preference in
+  `ow-tauri.json` for the next launch.
 
 ## Alternatives considered
 

@@ -89,7 +89,7 @@ renders test creatives and reports events.
   properties instead of `CustomEvent`s; the element gets ow-electron's open
   shadow root; guests run in the ads environment with ow-electron's request
   shaping ([ADR 0013](0013-request-shaping-per-os.md)).
-- 2026-10-06, harness round 2: ow-electron upgrades the element after attach
+- 2026-10-06, second harness round: ow-electron upgrades the element after attach
   (an `OwAdViewElement` prototype with Electron's `<webview>` methods,
   `setPageUrl`, `sendCommand`, and own properties such as `pageUrl`). ow-tauri
   keeps instance members and adds `pageUrl`, `setPageUrl` and `sendCommand`;
@@ -99,7 +99,7 @@ renders test creatives and reports events.
   `render-process-gone`, navigation and console events. The host passes the
   guest ow-electron's four message types and its visibility and focus
   signals; guests are recovered without a cap (CONTRACT B.3, D.5, D.7).
-- 2026-10-07, ad formats (wave 3e): the element follows ow-electron's
+- 2026-10-07, ad formats: the element follows ow-electron's
   lifecycle (an element removed or moved after attach is dead; a plain
   `destroyed` reaches it only when it is back in the document; a
   performance element leaves the document after `shutdown`, and a second one
@@ -110,4 +110,4 @@ renders test creatives and reports events.
   the newest performance guest is raised above the others after each mount,
   and it passes input through until its first `performance_ad_loaded`
   (CONTRACT B.3.4). The host now passes six message types (D.5).
-- 2026-10-08, Tauri-native pivot ([ADR 0017](0017-tauri-native-pivot.md)): the app imports `tauri-plugin-overwolf-api/adview`, which registers the element; nothing is injected. Any app webview the capability allows can embed an ad. Guests are labelled `owad-<n>`, skipping labels already taken. Events reach the element over one Tauri `Channel` per mount. `unstable` is enabled only for Windows and macOS ([ADR 0023](0023-unstable-and-macos-input.md)); Linux reports `unsupported`. The element no longer receives `did-start-navigation`, `load-commit` or `console-message` (CONTRACT B.3.5).
+- 2026-10-08, Tauri-native rewrite ([ADR 0017](0017-tauri-native-pivot.md)): the app imports `tauri-plugin-overwolf-api/adview`, which registers the element; nothing is injected. Any app webview the capability allows can embed an ad. Guests are labelled `owad-<n>`, skipping labels already taken. Events reach the element over one Tauri `Channel` per mount. `unstable` is enabled only for Windows and macOS ([ADR 0023](0023-unstable-and-macos-input.md)); Linux reports `unsupported`. The element no longer receives `did-start-navigation`, `load-commit` or `console-message` (CONTRACT B.3.5).

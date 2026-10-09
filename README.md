@@ -21,10 +21,9 @@ Edge cases and platform gaps are listed in
 
 > Pre-release, on GitHub only. The packages are not on crates.io or npm yet,
 > so you install them from this repository ([Quick start](#quick-start)).
-> The first release is planned as 1.0.0-rc.1. Overwolf has not yet confirmed
-> live ads in production or console uploads for apps built on Tauri; see
-> [docs/OVERWOLF-ONBOARDING.md](docs/OVERWOLF-ONBOARDING.md). This project is
-> not affiliated with or endorsed by Overwolf.
+> Live ads in production and console uploads are set up with Overwolf for
+> each app; see [docs/OVERWOLF-ONBOARDING.md](docs/OVERWOLF-ONBOARDING.md).
+> This project is not affiliated with or endorsed by Overwolf.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/showcase/layouts-dark.webp">
@@ -178,16 +177,16 @@ listed below it.
 
 Release status: nothing is published to crates.io or npm, and there are no
 tags or GitHub releases. [docs/RELEASING.md](docs/RELEASING.md) describes
-how a release will be made.
+the release process.
 
 ## Packages
 
-| Package | Registry (planned) | What it is |
+| Package | Kind | What it is |
 |---|---|---|
-| `tauri-plugin-overwolf` | crates.io | the Tauri plugin (Rust) |
-| `tauri-plugin-overwolf-api` | npm | the JavaScript API and the `<owadview>` runtime |
-| `tauri-plugin-overwolf-cli` | npm | the `ow-tauri` command: `init`, `migrate`, `doctor`, `sign`, `sign-exe` |
-| `tauri-plugin-overwolf-unstable` | crates.io | a helper the plugin uses to turn on Tauri's `unstable` feature; you never add it yourself |
+| `tauri-plugin-overwolf` | Rust crate | the Tauri plugin |
+| `tauri-plugin-overwolf-api` | npm package | the JavaScript API and the `<owadview>` runtime |
+| `tauri-plugin-overwolf-cli` | npm package | the `ow-tauri` command: `init`, `migrate`, `doctor`, `sign`, `sign-exe` |
+| `tauri-plugin-overwolf-unstable` | Rust crate | a helper the plugin uses to turn on Tauri's `unstable` feature; you never add it yourself |
 
 [Quick start](#quick-start) shows how to install them from this repository.
 

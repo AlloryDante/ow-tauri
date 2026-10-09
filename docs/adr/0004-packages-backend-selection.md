@@ -17,7 +17,7 @@ Apps still need the API surface: the sample registers listeners on startup,
 renders the package-channels page, and disables UI per package based on what
 loaded.
 
-The project owner's round-2 decision (2026-10-06) narrows the scope to the
+The project owner's decision of 2026-10-06 narrows the scope to the
 ads system first (ads, consent, analytics, identity, updates and
 distribution), and asks for exact ow-electron parity everywhere.
 
@@ -64,8 +64,8 @@ distribution), and asks for exact ow-electron parity everywhere.
 
 ## Amendments
 
-- 2026-10-06, owner round-2 scope cut: simulated backends removed;
+- 2026-10-06, the project owner's scope cut: simulated backends removed;
   `packagesBackend` reduced to `none` and `native`; unavailable packages
   report the observed ow-electron results instead of `failed-to-initialize`;
   the runtime interface becomes a deferred design (CONTRACT Appendix P).
-- 2026-10-08, Tauri-native pivot ([ADR 0017](0017-tauri-native-pivot.md)): reviewed. 1.0 has no `packages` API at all. There is nothing to report as unavailable, and `packagesBackend` is removed. CONTRACT H states this. The runtime design that was Appendix P is no longer part of the contract.
+- 2026-10-08, Tauri-native rewrite ([ADR 0017](0017-tauri-native-pivot.md)): reviewed. 1.0 has no `packages` API at all. There is nothing to report as unavailable, and `packagesBackend` is removed. CONTRACT H states this. The runtime design that was Appendix P is no longer part of the contract.

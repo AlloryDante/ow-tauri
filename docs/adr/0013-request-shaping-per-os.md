@@ -19,7 +19,7 @@ The parity harness shows that ow-electron shapes every request of an
   app's user agent, in the default session (so they carry its cookies);
 - the app's own request hooks cannot undo any of it.
 
-The owner's decision (Q05) is to replicate exactly what ow-electron sends, on
+The project owner's decision is to replicate exactly what ow-electron sends, on
 macOS too. The three Tauri engines expose very different request APIs.
 
 ## Decision
@@ -65,7 +65,7 @@ macOS too. The three Tauri engines expose very different request APIs.
 ## Alternatives considered
 
 - **No shaping (the original interim).** Simple and portable, but not what
-  ow-electron sends; rejected by the owner's Q05 decision.
+  ow-electron sends; rejected by the project owner's decision.
 - **Proxy all guest traffic through Rust.** Would give identical shaping on
   every OS, but means terminating TLS for third-party ad partners inside the
   host. Rejected: a security and policy risk far larger than the gap.

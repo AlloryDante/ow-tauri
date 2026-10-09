@@ -72,12 +72,12 @@ The owner's decision: behave exactly like ow-electron's consent flow.
 
 ## Amendments
 
-- 2026-10-06, harness round 2: the window opens after the `cmp-eu-only` response,
+- 2026-10-06, second harness round: the window opens after the `cmp-eu-only` response,
   not in parallel with it; `isCMPRequired()` resolves at the page's load and
   has no timeout; the `{}` body case; the 3 s bound is measured from the guest
   mount; consent saves send `consent` messages. The settings window's first
   call also opens a hidden default-consent window (`ow-cmp-default`) that
   writes a fresh default consent, copied from ow-electron and asked of
   Overwolf (OQ-38).
-- 2026-10-08, Tauri-native pivot ([ADR 0018](0018-lifecycle-ready-exit.md)): the round starts at `RunEvent::Ready`, with the launch burst. `cmp-eu-only` now has a client timeout, `consent.euOnlyTimeoutMs` (60 s). A timeout counts as a failed request: `isCMPRequired()` resolves `true` and the startup window still opens. This is a listed deviation (PARITY). A JavaScript `cmpURL` must match `consent.allowedCmpOrigins`. The last-window rule of this amendment is replaced by the next one.
+- 2026-10-08, Tauri-native rewrite ([ADR 0018](0018-lifecycle-ready-exit.md)): the round starts at `RunEvent::Ready`, with the launch burst. `cmp-eu-only` now has a client timeout, `consent.euOnlyTimeoutMs` (60 s). A timeout counts as a failed request: `isCMPRequired()` resolves `true` and the startup window still opens. This is a listed deviation (PARITY). A JavaScript `cmpURL` must match `consent.allowedCmpOrigins`. The last-window rule of this amendment is replaced by the next one.
 - 2026-10-09, harness observation: consent windows never keep the app alive, as in ow-electron, which quits at `window-all-closed`. When the last app window closes, a startup window whose page has saved closes, an unsaved one is discarded at once (its consent is lost and nothing is written), and a round whose window does not exist yet is skipped. Tauri's own exit flow then runs; the plugin never prevents or forces the exit (CONTRACT D.6.1).

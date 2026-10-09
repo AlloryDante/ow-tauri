@@ -1018,8 +1018,9 @@ page open in the system browser (`https:` only).
   cancelled. Either one opens in the system browser only when the OS reports
   a user action on that guest, within `guestLimits.activationWindowMs`
   (5000 ms); one action allows one open:
-  - Windows: WebView2's `IsUserInitiated`, or native input over the guest just
-    before a script-started navigation;
+  - Windows: WebView2's `IsUserInitiated`, or, for a script-started
+    navigation, native input within that window while the pointer is over
+    the guest and its window is in front;
   - macOS: a mouse-down that hits the shown guest in the key window, or
     Return, Space or keypad Enter while the guest has focus.
 
@@ -1237,7 +1238,7 @@ All [OBS] unless marked.
 400023 in that order within about 100 ms of Electron's `ready`; #5 follows
 when the first window is shown [OBS]. The plugin sends #1, #3, #4, 400022
 and 400023 at `RunEvent::Ready`, once the UA is known (A.6), then #2 on the
-same lane. Calls made in the app's setup closure therefore apply to the
+same request thread. Calls made in the app's setup closure therefore apply to the
 burst, as calls at module load do in ow-electron. #6 leaves when the guest
 webview exists, never before the burst. Host requests leave in the order
 they are made.

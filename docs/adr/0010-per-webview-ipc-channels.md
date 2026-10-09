@@ -65,4 +65,4 @@ reload.
 
 ## Amendments
 
-- 2026-10-08, Tauri-native pivot: superseded by [ADR 0017](0017-tauri-native-pivot.md). There is no IPC router and there are no host messages. App webviews call Tauri commands. Each `<owadview>` mount gets its own Tauri `Channel` for its element events (CONTRACT B.3.5).
+- 2026-10-08, Tauri-native rewrite: superseded by [ADR 0017](0017-tauri-native-pivot.md). There is no IPC router and there are no host messages. App webviews call Tauri commands. Each `<owadview>` mount gets its own Tauri `Channel` for its element events (CONTRACT B.3.5).

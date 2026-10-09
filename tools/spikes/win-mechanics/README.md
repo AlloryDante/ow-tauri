@@ -1,8 +1,9 @@
-# Spike: Windows and Cargo mechanics (W0c-B)
+# Spike: Windows and Cargo mechanics
 
 A standalone Cargo workspace, not part of the root workspace. It is never
-published or bundled. It answers DESIGN-v2 §10 W0c items B1 to B8 for the
-Tauri-native Overwolf ads port. Guests load only loopback fixture pages: never
+published or bundled. It checks eight Windows and Cargo mechanisms the
+Tauri-native plugin relies on, items B1 to B8 (each a key in the JSON
+verdict). Guests load only loopback fixture pages: never
 an ad, and never a click on an ad.
 
 ## Layout

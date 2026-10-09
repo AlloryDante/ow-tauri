@@ -145,7 +145,7 @@ node run.mjs --disable-analytics --present transparent
 node run.mjs --packages gep,overlay
 node run.mjs --webrequest --present transparent
 
-# Round-2 scenarios: an option preset plus a timed action script (lib/scenarios.mjs).
+# Behaviour scenarios: an option preset plus a timed action script (lib/scenarios.mjs).
 node run.mjs --scenario messages --window-monitor             # host <-> page messages, email hashes, payment id
 node run.mjs --scenario crash --window-monitor                # guest crash recovery and analytics
 node run.mjs --scenario block --window-monitor                # first ad page load refused: retry timing
@@ -168,7 +168,7 @@ node run.mjs --scenario corrupt-state --home profile:cs --corrupt-state garbage 
 node run.mjs --scenario gesture-timing --window-monitor       # click-out gesture timing on a loopback fixture (see Safety)
 nohup taskpolicy -b node run.mjs --scenario long --allow-long --caffeinate --no-cdp &   # 13 h hidden session
 
-# Round-3 ad formats (docs: monetization/advertising/*). Test ads unless --mode live --live-ok.
+# Ad formats (docs: monetization/advertising/*). Test ads unless --mode live --live-ok.
 node run.mjs --scenario sizes --window-monitor             # every documented standard container size
 node run.mjs --scenario perf --window-monitor              # performance (interstitial) ad, docs example
 node run.mjs --scenario perf-sample --window-monitor       # performance ad as the official sample creates it
@@ -185,7 +185,7 @@ node run.mjs --scenario house --window-monitor             # only Overwolf hosts
 node run.mjs --scenario adstyle-probe --window-monitor     # which attribute values switch the ad library options
 node run.mjs --scenario send-command-probe --window-monitor  # how sendCommand()/setPageUrl() reach the guest
 
-# Lab checks (both hosts; AD-FORMATS-SPEC section 7). Test ads unless named -live.
+# Ad-format lab checks (both hosts; PARITY.md, "Ad-format lab checks"). Test ads unless named -live.
 node run.mjs --scenario lab-layers        # L1-L4: transparency, z-order, pass-through, blur (hit probes)
 node run.mjs --scenario audio             # L5: setAudioMuted timeline per guest
 node run.mjs --scenario standard-remove   # L6/L9: remove, re-add and move a standard slot
@@ -227,9 +227,9 @@ taskpolicy -b node run.mjs --host tauri --no-build --identity local.identity.exa
 - Front app. `lib/front-monitor.mjs` samples the front app (`lsappinfo front`) every 200 ms on both hosts and writes `front-monitor.jsonl`. A run whose app ever became frontmost is a failure: an invisible app must never take the keyboard.
 - The app identity comes from `local.identity.json` (or `--identity <file>`) at run time (`PARITY_HARNESS_PACKAGE_JSON`): the app sets its name, version and `plugins.overwolf.{name, author, uid}` from it before the plugin starts, so it never enters the build or a tracked file.
 
-## The DESIGN §5.2 checks
+## Behaviour checks
 
-`SECTION_5_2` in `lib/scenarios.mjs` lists each check, the scenarios that run it and where (`both`: the macOS invisible lab and the Windows CI lab; `macos`; `windows-ci`), plus what the harness still lacks for the ow-tauri run (`missing`); `scenarios.test.mjs` keeps the list whole. Scenario options added for them, on both hosts unless noted:
+`SECTION_5_2` in `lib/scenarios.mjs` lists the behaviour checks: each check, the scenarios that run it and where (`both`: the macOS invisible lab and the Windows CI lab; `macos`; `windows-ci`), plus what the harness still lacks for the ow-tauri run (`missing`); `scenarios.test.mjs` keeps the list whole. Scenario options added for them, on both hosts unless noted:
 
 - `setupTitle`: the app retitles its window right after creating it (`title-set-in-setup`).
 - `windowUserAgent`: the ad window's own user agent (`custom-ua`).
@@ -241,10 +241,10 @@ taskpolicy -b node run.mjs --host tauri --no-build --identity local.identity.exa
 
 ## Windows lab on CI (`ci/windows-lab.mjs`)
 
-`.github/workflows/windows-lab.yml` runs the lab on a GitHub Windows runner (on pushes to `main` that touch the plugin, the API or guest-shim packages or the harness, weekly as the drift lab, and on demand with a list of lab entries). One job builds `tauri-app` with the `lab` feature; eight shards then run, per lab entry, ow-electron and ow-tauri one after the other on the same runner, run `parity-diff.mjs` on the pair and evaluate the Windows checks of `lib/windows-checks.mjs`. The entries (`LAB_SCENARIOS` in `ci/windows-lab.mjs`) are the round-2 base runs, every round-3 ad-format scenario, the record-first scenarios (email-hash clears, the last window during consent, every `corrupt-state` kind, gesture timing) and every DESIGN §5.2 check that applies to Windows. Captures, window copies and diffs are uploaded as the `windows-lab-captures-<shard>` artifacts; each shard's table, with every BUG row under it, is in the job summary and in the `report` job.
+`.github/workflows/windows-lab.yml` runs the lab on a GitHub Windows runner (on pushes to `main` that touch the plugin, the API or guest-shim packages or the harness, weekly as the drift lab, and on demand with a list of lab entries). One job builds `tauri-app` with the `lab` feature; eight shards then run, per lab entry, ow-electron and ow-tauri one after the other on the same runner, run `parity-diff.mjs` on the pair and evaluate the Windows checks of `lib/windows-checks.mjs`. The entries (`LAB_SCENARIOS` in `ci/windows-lab.mjs`) are the base behaviour runs, every ad-format scenario, the record-first scenarios (email-hash clears, the last window during consent, every `corrupt-state` kind, gesture timing) and every behaviour check that applies to Windows. Captures, window copies and diffs are uploaded as the `windows-lab-captures-<shard>` artifacts; each shard's table, with every BUG row under it, is in the job summary and in the `report` job.
 
 - Lab entries. A scenario name, or `corrupt-state:<kind>` for one corruption (`corrupt-state` in `--scenarios` means all seven). `corrupt-state` and `no-analytics-persisted` need an earlier launch: the driver runs a seed launch per host on the same state first and compares only the second. A scenario that runs on ow-tauri only (`hosts`, `dialog-probe`) is recorded and listed as `n/a` without a comparison. `build-identity` (an installer) is its own job.
-- Other jobs of the workflow. `unstable-input` (the key-input spike: stable 58/58, unstable without and with a child webview 58/58 and 59/59), `webview2-minimum` (ow-tauri on fixed-version WebView2 Runtimes: `sizes` and `local-frame` on the floor's Edge 98 build with ads working, checked by `ci/webview2-min.mjs`, and Edge 97 below it with no ad guest), `build-identity` (DESIGN §5.2 #20: the quickstart's NSIS installer with an overridden version installs, runs, updates and uninstalls with the merged-config uid; Overwolf's hosts resolve to 127.0.0.1 there) and, weekly or with `drift: true`, the newest ow-electron `latest`, the newest Tauri 2.x for the spike and a macOS subset (`MACOS_DRIFT_SCENARIOS`, invisible lab on a hosted runner); a failed weekly run opens or updates an issue.
+- Other jobs of the workflow. `unstable-input` (the key-input test app in `tools/spikes/unstable-input`: stable 58/58, unstable without and with a child webview 58/58 and 59/59), `webview2-minimum` (ow-tauri on fixed-version WebView2 Runtimes: `sizes` and `local-frame` on the floor's Edge 98 build with ads working, checked by `ci/webview2-min.mjs`, and Edge 97 below it with no ad guest), `build-identity` (the behaviour check for the installer: the quickstart's NSIS installer with an overridden version installs, runs, updates and uninstalls with the merged-config uid; Overwolf's hosts resolve to 127.0.0.1 there) and, weekly or with `drift: true`, the newest ow-electron `latest`, the newest Tauri 2.x for that test app and a macOS subset (`MACOS_DRIFT_SCENARIOS`, invisible lab on a hosted runner); a failed weekly run opens or updates an issue.
 - Test ads only. The driver passes `--mode test` to every run and never `--live-ok`.
 - Neutral identity. The harness default (`Example Studio` / `Parity Harness`, formula uid). The driver refuses to run when a `local.identity.json` is present.
 - Visible on the runner. `run.mjs --ci-visible` (refused unless `GITHUB_ACTIONS=true`) runs the Tauri app without the invisible lab mode (which on Windows only keeps windows hidden, and a hidden slot does not fill); the runner's desktop is nobody's screen. ow-electron keeps its opacity-0 windows. No window monitor runs there.
@@ -285,7 +285,7 @@ It compares two captures of the same scenario after normalising volatile values 
 
 Ad-format runs are also compared through `lib/adformat-report.mjs` facts: per element the event names, order, counts, payload keys and removal timings, the DOM state (display, pointer-events, inline style) before and after the first `display_ad_loaded`, the ad library options on the wire (as sets, keys sorted at every depth), each guest's mute sequence, the lab hit probes (page routing, ow-tauri native routing, composited colour class, performance pointer-events, clicks) and the front app. A colour at a point that lands on a served creative (`std-slot`) is variance; the red container, the app control and the bare corner carry the transparency and z-order checks.
 
-The requests the ad page itself sends (CONTRACT E.5: the `owads_*` and `oam_*` Counters, InsertStats Kind 400051, the `ad_uid` session ids) are compared from ow-electron's net log and ow-tauri's `guest-requests.jsonl` (Windows: the plugin's `guest-network.jsonl`): each name sent by both hosts, the per-document names once per `owads_first_load`, the same InsertStats posts and as many session ids per document. Counts of names driven by the ads served (waterfall, video states, rewarded flow) are variance, and so are more documents (and the names they send when they close, `owads_shutdown` and `owads_ad_container_duration`) when the element events' `dom-ready` counts differ the same way. The `gesture-timing` cases (§5.2 #12) are compared by the external opens each case led to and what its page saw `window.open` return; a case ow-tauri could not run is reported once, as `action-unsupported`.
+The requests the ad page itself sends (CONTRACT E.5: the `owads_*` and `oam_*` Counters, InsertStats Kind 400051, the `ad_uid` session ids) are compared from ow-electron's net log and ow-tauri's `guest-requests.jsonl` (Windows: the plugin's `guest-network.jsonl`): each name sent by both hosts, the per-document names once per `owads_first_load`, the same InsertStats posts and as many session ids per document. Counts of names driven by the ads served (waterfall, video states, rewarded flow) are variance, and so are more documents (and the names they send when they close, `owads_shutdown` and `owads_ad_container_duration`) when the element events' `dom-ready` counts differ the same way. The `gesture-timing` cases are compared by the external opens each case led to and what its page saw `window.open` return; a case ow-tauri could not run is reported once, as `action-unsupported`.
 
 The ad page asks its host for a reload on its own after it is told `hidden` (about 4.5 s later, depending on its ad state, and not once it is shown again first). Fewer ow-tauri guest loads are variance only when both hosts told the guest the same visibility sequence and ow-tauri loaded the page once plus once per reload request it received (ow-electron's `GUEST_ADVIEW_RELOAD` requests, when recorded, must account for its loads the same way). Each host re-sends `customTracking` after every guest load, so a message sequence that differs only by as many re-sends as the loads differ is variance too.
 
@@ -293,7 +293,7 @@ The results go to `parity-diff.json` and `parity-diff.md` in the Tauri run. The 
 
 ## Notes and pitfalls
 
-- Scenario `elementSpec` (round 3) lets a scenario build elements the way a format's docs do: `{parent: 'body'}` appends an unsized `<owadview>` to `<body>` (performance ads), `{zone: 'high-impact'}` builds the documented 440 px ad zone with its listeners, and `at` delays creation. `page.js` also samples each element's layout (`layout-sample` in `page-events.jsonl`) and reports removal (`owadview-removed`).
+- Scenario `elementSpec` lets a scenario build elements the way a format's docs do: `{parent: 'body'}` appends an unsized `<owadview>` to `<body>` (performance ads), `{zone: 'high-impact'}` builds the documented 440 px ad zone with its listeners, and `at` delays creation. `page.js` also samples each element's layout (`layout-sample` in `page-events.jsonl`) and reports removal (`owadview-removed`).
 - `hook-guest-frames` adds a `message` listener to the ad guest's same-origin child frames (the ad library frame) and logs what arrives there as `__PARITYF__` console lines. `guest-eval` runs code in every ad guest. Both are the harness's own calls and stay out of `ipc.jsonl`.
 
 - `<owadview>` guests are webContents of type `owadview`, and `app.on('web-contents-created')` does not report them. The harness finds them by polling `webContents.getAllWebContents()`.

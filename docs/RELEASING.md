@@ -4,9 +4,9 @@ This is the maintainer runbook for publishing ow-tauri. Releases run only in
 GitHub Actions, through [`release.yml`](../.github/workflows/release.yml).
 Nobody publishes from a laptop.
 
-Nothing is published yet. The project is on GitHub only, and the first
-registry release (1.0.0-rc.1) waits for the owner's go. Until then, run the
-workflow with `dry_run=true` only, and push no tags.
+Nothing is published yet; the project is on GitHub only. Until the first
+registry release, run the workflow with `dry_run=true` only, and push no
+tags.
 
 ## What is published
 

@@ -65,14 +65,14 @@ changes [OBS].
 
 ## Amendments
 
-- 2026-10-06, owner round 2: labs may load live ads under the rules above
+- 2026-10-06, the project owner's decision: labs may load live ads under the rules above
   (previously: test ads only in every lab); test and live are documented as
   identical on the wire, as observed.
-- 2026-10-06, harness round 2: the `unit` guard is confirmed as a deviation
+- 2026-10-06, second harness round: the `unit` guard is confirmed as a deviation
   (ow-electron does not rewrite `unit`); live lab windows stay on-screen at
   alpha 0; live runs are measured by fill impressions, because ow-electron's
   live runs on macOS emitted no `display_ad_loaded`.
-- 2026-10-07, ad formats (wave 3e): the test-mode `unit` guard is dropped.
+- 2026-10-07, ad formats: the test-mode `unit` guard is dropped.
   ow-electron passes `unit` through in test mode, where it becomes the
   performance ad's `forceAdUnit`; `testAd: true` already selects test demand,
   and the rewrite changed what the ad page saw, which a reviewer comparing

@@ -19,7 +19,7 @@ event names (`electron_app_start`, ...), in `owver` (`42.11.4`, `42_11_4`),
 in the version the ad and consent pages receive, and in the user agent
 (`Electron/42.11.4`).
 
-The owner's round-2 decision (2026-10-06): send exactly the ow-electron
+The project owner's decision of 2026-10-06: send exactly the ow-electron
 stats, and wherever ow-electron says "electron", say "tauri", through a
 single setting Overwolf can change.
 
@@ -74,11 +74,11 @@ single setting Overwolf can change.
 
 ## Amendments
 
-- 2026-10-06, owner round 2: event names now use the label (`tauri_*`); one
+- 2026-10-06, the project owner's decision: event names now use the label (`tauri_*`); one
   `hostLabel` setting drives every self-naming value including the user
   agent; the `hostFields` option is removed; the muid default follows
   ow-electron (ADR 0014).
-- 2026-10-06, harness round 2: two more labelled names were observed,
+- 2026-10-06, second harness round: two more labelled names were observed,
   `electron_owadview_crashed` (now confirmed, with Kind 400024) and
   `electron_sub_info` (`setExternalPaymentUserId`); both follow the label
   (`<label>_owadview_crashed`, `<label>_sub_info`).

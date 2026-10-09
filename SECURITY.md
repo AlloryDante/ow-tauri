@@ -8,8 +8,8 @@
 | Older minors and release candidates | No: upgrade to the latest |
 | `main` | Fixes land here first |
 
-Nothing is released yet: until the first release (1.0.0-rc.1, planned), the
-supported version is the latest commit on `main`. After it, fixes ship as a
+Nothing is released yet, so the supported version is the latest commit on
+`main`. After the first release, fixes ship as a
 patch release of the latest minor, for all four packages
 together: `tauri-plugin-overwolf`, `tauri-plugin-overwolf-unstable`,
 `tauri-plugin-overwolf-api` and `tauri-plugin-overwolf-cli`.

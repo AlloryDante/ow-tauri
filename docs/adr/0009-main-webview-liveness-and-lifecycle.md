@@ -103,4 +103,4 @@ registry, `ipcMain` handlers, hotkeys, package listeners) exists only there.
   signals per platform and the crash history in `ow-tauri.json`
   (decision 6); relaunches start at `RunEvent::Exit` (decision 7, new); an
   exit request without a main webview skips the sequence (decision 8).
-- 2026-10-08, Tauri-native pivot: superseded by [ADR 0017](0017-tauri-native-pivot.md), because there is no main webview to keep alive, and by [ADR 0018](0018-lifecycle-ready-exit.md): the plugin starts at `RunEvent::Ready`, drains at `RunEvent::Exit` and never holds the exit.
+- 2026-10-08, Tauri-native rewrite: superseded by [ADR 0017](0017-tauri-native-pivot.md), because there is no main webview to keep alive, and by [ADR 0018](0018-lifecycle-ready-exit.md): the plugin starts at `RunEvent::Ready`, drains at `RunEvent::Exit` and never holds the exit.

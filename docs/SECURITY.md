@@ -166,7 +166,7 @@ If your app enables `app.security.assetProtocol`, an ad page in that app can
 read files inside the asset scope. Keep the asset protocol off, or keep its
 scope to files that are safe to expose, such as your own bundled media.
 Never scope it to the user's home, documents or app data. The build step
-does not check this yet.
+does not check this.
 
 ### Consent windows
 

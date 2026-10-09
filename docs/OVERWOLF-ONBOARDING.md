@@ -5,10 +5,12 @@ ow-electron apps is the reference; this page says how each step works with
 the Tauri plugin. Overwolf's documentation:
 [dev.overwolf.com/ow-electron](https://dev.overwolf.com/ow-electron/getting-started/onboarding-resources/first-app).
 
-Two points are not yet confirmed by Overwolf for apps built on Tauri:
-enabling live ads in production, and uploading Tauri's installer in the
-developer console. Talk to your Overwolf contact before you plan a launch
-date. [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) tracks both.
+Two steps are set up with Overwolf for each app built on Tauri: enabling
+live ads in production (step 6), and uploading Tauri's installer in the
+developer console (step 8). Agree both with your Overwolf contact before
+you plan a launch date. [OQ-20](OPEN-QUESTIONS.md#oq-20-live-ads-from-a-tauri-host)
+and [OQ-18](OPEN-QUESTIONS.md#oq-18-updates-and-the-console) have the
+details.
 
 ## 1. Register the app
 
@@ -103,7 +105,8 @@ Overwolf serves an update feed per uid, for Windows installers. Build with
 the plugin's `updater` feature and set `updater.publisherNames` (your
 installer's certificate subject) or `updater.pubkey`
 ([api/js.md](api/js.md#updater), [CONFIG.md](CONFIG.md#updater)). Publish
-the NSIS installer through the console; whether the console accepts Tauri's
-installer is one of the open points above. On macOS and Linux, host
+the NSIS installer through the console, once your Overwolf contact has
+agreed the upload of Tauri's installer (see the top of this page). On
+macOS and Linux, host
 your own feed and use `tauri-plugin-updater`
 ([INTEROP.md](INTEROP.md#tauri-plugin-updater)).

@@ -58,4 +58,4 @@ Rust (CONTRACT B.1.6).
 
 - 2026-10-06, contract review: liveness and lifecycle moved to ADR 0009
   (consequence added above).
-- 2026-10-08, Tauri-native pivot: superseded by [ADR 0017](0017-tauri-native-pivot.md). The plugin is the host. There is no `ow-main` webview and no main-process code in a webview. The app's main-process logic moves to Rust and Tauri APIs (MIGRATION).
+- 2026-10-08, Tauri-native rewrite: superseded by [ADR 0017](0017-tauri-native-pivot.md). The plugin is the host. There is no `ow-main` webview and no main-process code in a webview. The app's main-process logic moves to Rust and Tauri APIs (MIGRATION).

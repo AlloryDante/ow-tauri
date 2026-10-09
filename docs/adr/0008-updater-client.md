@@ -61,4 +61,4 @@ The plugin includes a small update client that:
   hooks that do the install and uninstall work of Overwolf's installer
   (CONTRACT I.1, I.6). Whether the console accepts a Tauri setup upload stays
   open (OQ-18).
-- 2026-10-08, Tauri-native pivot ([ADR 0017](0017-tauri-native-pivot.md)): the client is Windows-only in 1.0; other OSes return `unsupported`. It has the shape of `tauri-plugin-updater`: `check()` → `Update`, then `download`, `install` and `downloadAndInstall`. There is no `autoUpdater`. Release builds must configure `updater.publisherNames` (Authenticode) or `updater.pubkey` (minisign), and there is no default publisher. NSIS `.exe` only; MSI is `unsupported` (CONTRACT I).
+- 2026-10-08, Tauri-native rewrite ([ADR 0017](0017-tauri-native-pivot.md)): the client is Windows-only in 1.0; other OSes return `unsupported`. It has the shape of `tauri-plugin-updater`: `check()` → `Update`, then `download`, `install` and `downloadAndInstall`. There is no `autoUpdater`. Release builds must configure `updater.publisherNames` (Authenticode) or `updater.pubkey` (minisign), and there is no default publisher. NSIS `.exe` only; MSI is `unsupported` (CONTRACT I).

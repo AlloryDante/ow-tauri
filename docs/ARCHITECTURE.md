@@ -164,7 +164,7 @@ At `Builder::build` → `setup` (`plugin.rs`) the plugin:
   options;
 - resolves the identity (uid, cuid, machine ids read, phase);
 - registers the two runtime capabilities (§5.2);
-- starts the analytics transport lane;
+- starts the analytics request thread (`lane()` in `analytics/transport.rs`);
 - adds the restart sentinel;
 - on macOS, warns once if the terminate hook is not wired (§6.5).
 
@@ -201,7 +201,7 @@ ow-electron's pre-ready main-process calls do.
    burst.
 7. **Ticker** (§3.3) starts.
 
-The transport lane starts requests in call order. CONTRACT E.2 lists every
+The request thread starts requests in call order. CONTRACT E.2 lists every
 event and its trigger.
 
 ### 4.3 Exit and restart
@@ -209,9 +209,8 @@ event and its trigger.
 - **`RunEvent::ExitRequested`**: nothing. The plugin never calls
   `prevent_exit` and never calls `exit`.
 - **`RunEvent::Exit`**: `lifecycle::on_exit` ends every visible period
-  (queuing `window_closed`). It then waits for the transport lane to drain
-  for at most 1.5 s (`DRAIN_LIMIT`). The drain runs on the lane's own
-  thread, so `on_exit` never needs the main thread.
+  (queuing `window_closed`). It then waits for the request thread to drain
+  for at most 1.5 s (`DRAIN_LIMIT`). The drain runs on that thread, so `on_exit` never needs the main thread.
 - **Restart.** `AppHandle::restart()`, including `tauri-plugin-process`'s
   `relaunch()`, skips both exit events. Tauri's `cleanup_before_exit` still
   clears the app's resource table, which drops the plugin's `ExitSentinel`.
@@ -382,7 +381,8 @@ guest:
   - Return, Space or keypad Enter arms G when G is the first responder.
 - **Windows** (`platform/webview.rs`): `IsUserInitiated` on new-window
   requests and top-level navigations. A script navigation is also allowed
-  when it comes right after native input over the guest.
+  when the last native input came within the activation window, with the
+  pointer over the guest and its window in front.
 
 Arming opens an activation window of `guestLimits.activationWindowMs`
 (5000 ms), and the first open consumes it. Opens are capped per guest and
@@ -634,5 +634,5 @@ capture them.
 - The parity harness (`tools/parity-harness`) runs the same scenarios
   against an ow-electron twin and compares what Overwolf would receive.
 
-[CONTRIBUTING.md](../CONTRIBUTING.md) lists the gates and the lab rules.
+[CONTRIBUTING.md](../CONTRIBUTING.md) lists the checks and the lab rules.
 [PARITY.md](PARITY.md) has the results.

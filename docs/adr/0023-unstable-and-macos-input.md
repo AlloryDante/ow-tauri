@@ -10,7 +10,7 @@ places a child view. Tauri offers child webviews (`Window::add_child`) only
 behind its `unstable` feature, and that feature switches every webview in
 the app to wry's child mode.
 
-A spike on Tauri 2.12.1 with a text-input page beside an ad guest found:
+A test app on Tauri 2.12.1 (`tools/spikes/unstable-input`) with a text-input page beside an ad guest found:
 
 - **macOS, tauri-apps/tauri#10194**: arrow keys insert U+001C and U+001D in
   text fields, with or without a guest.
@@ -47,7 +47,7 @@ Windows is otherwise unaffected.
 
 ## Consequences
 
-- The spike's 53 macOS key cases match a stable-mode build, and its 59
+- The test app's 53 macOS key cases match a stable-mode build, and its 59
   Windows cases stay green. CI and a weekly job re-run them against the
   newest Tauri 2.x.
 - Tauri has no hook for `Webview::reparent`, so a reparented app webview

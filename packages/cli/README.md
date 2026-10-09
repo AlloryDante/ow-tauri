@@ -10,9 +10,8 @@ This project is not affiliated with or endorsed by Overwolf.
 
 ## Install
 
-Not on npm yet. The planned npm name is `tauri-plugin-overwolf-cli`. Until
-then, build the package from a clone of the repository and install the
-tarball as a dev dependency (`npm pack` prints its file name):
+Not on npm yet. Build the package from a clone of the repository and
+install the tarball as a dev dependency (`npm pack` prints its file name):
 
 ```sh
 git clone https://github.com/AlloryDante/ow-tauri ../ow-tauri

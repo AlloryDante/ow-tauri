@@ -16,7 +16,7 @@ The first design shipped one npm package, `ow-tauri`, with many jobs:
 Browser bundles and Node tooling shared one dependency graph. Every app paid
 for code it never used.
 
-After the pivot ([ADR 0017](0017-tauri-native-pivot.md)) an app needs a
+After the Tauri-native rewrite ([ADR 0017](0017-tauri-native-pivot.md)) an app needs a
 small browser API, a build-time CLI and the Rust plugin. Tauri's `unstable`
 feature must reach the app's `tauri` crate on Windows and macOS only
 ([ADR 0023](0023-unstable-and-macos-input.md)).

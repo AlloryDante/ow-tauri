@@ -30,7 +30,7 @@ The runtime verifier is closed and undocumented.
 
 - An `ow-tauri sign` step (Node CLI in the `ow-tauri` package) runs steps 1,
   3 and 4 and the gating of step 5 exactly as the builder does, with the same
-  credentials and headers (CONTRACT G.4). It ships `_metadata.json` and
+  credentials and headers (CONTRACT G.3). It ships `_metadata.json` and
   `integrity.dll`, and the signed `overwolf.uid` becomes the app uid.
 - The `OWE` resource is compiled in `build.rs`, before Authenticode signing.
 - Step 2 is **not done and not faked**: Tauri has no asar, and a token that

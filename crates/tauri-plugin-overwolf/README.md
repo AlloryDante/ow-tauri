@@ -42,8 +42,7 @@ The crate needs `tauri` 2.12.1 or newer (below 3) and Rust 1.90 or newer.
 
 ## Install
 
-Not on crates.io or npm yet. The planned crates.io name is
-`tauri-plugin-overwolf`. Until then, add the crate from GitHub in
+Not on crates.io or npm yet. Add the crate from GitHub in
 `src-tauri/Cargo.toml`. You can pin it with `rev = "<commit>"`; use the
 commit you build the npm packages from, so the Rust and JavaScript halves
 match:

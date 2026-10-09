@@ -25,7 +25,7 @@ client needs:
 
 - Analytics and consent use a plain hyper client
   (`analytics/transport.rs`). It writes exactly the headers ow-electron
-  sends, in the same order, on one transport lane thread.
+  sends, in the same order, on one transport thread.
 - The update client uses reqwest (`updater/client.rs`, feature `updater`)
   with:
   - HTTPS-only redirects, at most 10 (`MAX_REDIRECTS`);

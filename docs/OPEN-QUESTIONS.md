@@ -13,12 +13,13 @@ Tauri-native rewrite ([ADR 0017](adr/0017-tauri-native-pivot.md)) closed the
 ones about the Electron API and took packages out of 1.0. It also raised four
 new questions for Overwolf (OQ-40 to OQ-43).
 
-Most questions are now settled: Overwolf's documentation answered some, black-box
-observation of ow-electron 42.11.4 with the parity harness (rounds 1, 2 and
-3, the 13-hour run and the Windows lab) answered more
-([PARITY.md](PARITY.md)), and the project owner decided the rest. What is
-still open is either a question only Overwolf can answer, or a detail that a
-harness item still has to observe: Linux (R2-10, R2-11) or round 3 (R3-n).
+Most questions are settled: Overwolf's documentation answered some, black-box
+observation of ow-electron 42.11.4 with the parity harness (three rounds of
+observations, the 13-hour run and the Windows lab) answered more
+([PARITY.md](PARITY.md)), and the project maintainers decided the rest. What
+is still open is either a question only Overwolf can answer, or a detail
+that a harness item still has to observe: Linux (R2-10) or the third round
+(R3-n).
 The ad-format questions for Overwolf are under [Ad formats](#ad-formats)
 (OQ-A1 to OQ-A10).
 
@@ -27,7 +28,7 @@ Status:
 | Status | Meaning |
 |---|---|
 | **Answered** | settled by Overwolf's documentation or by observing ow-electron; CONTRACT follows the answer |
-| **Decided** | no source pins it down; the owner or the lead decided, following "copy ow-electron" wherever it is observable |
+| **Decided** | no source pins it down; the project maintainers decided, following "copy ow-electron" wherever it is observable |
 | **Open: Overwolf** | only Overwolf can answer; CONTRACT has a documented interim behaviour |
 | **Open: pending harness** | observable; harness item `R2-n` or `R3-n` ([PARITY.md](PARITY.md#harness-rounds)) will settle it; CONTRACT has an interim behaviour |
 | **Out of scope (1.0)** | belongs to the package runtime; 1.0 has no `packages` API ([ADR 0004](adr/0004-packages-backend-selection.md)) |
@@ -37,7 +38,8 @@ Sources are written as: *observed* (the parity harness against ow-electron
 42.11.4, [PARITY.md](PARITY.md)), a `dev.overwolf.com` URL, *typings* (the
 published ow-electron 42.11.4 typings), *builder* (the published
 `@overwolf/app-builder-lib` 26.9.3 and `@overwolf/ow-cli` 0.1.10 JavaScript),
-or *owner decision* (the project owner's round-2 decisions of 2026-10-06).
+*owner decision* (the project owner's decisions of 2026-10-06), or
+*maintainer decision* (a decision of the project maintainers).
 
 Impact: **High** blocks parity or Overwolf adoption; **Medium** changes data
 Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
@@ -57,12 +59,12 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 | [OQ-11](#oq-11-email-hashes-in-the-ad-guest) | Ads | email hashes in the guest | Medium | Answered; open: pending harness (R3-3, after `disableAdsFPD`) | A.2.2, D.5 |
 | [OQ-13](#oq-13-host-to-guest-messages) | Ads | host-to-guest messages | Low to Medium | Answered (R3-1 minimize included); open: a restore with a live guest | D.5 |
 | [OQ-17](#oq-17-click-and-navigation-rules) | Ads | click and navigation rules | Low | Decided | D.7 |
-| [OQ-19](#oq-19-systeminfo-contents) | Ads | `systemInfo` contents | Low to Medium | Answered (macOS, Windows); open: pending harness (R2-11: Linux) | D.2 |
+| [OQ-19](#oq-19-systeminfo-contents) | Ads | `systemInfo` contents | Low to Medium | Answered (macOS, Windows; Linux has no ad guests) | D.2 |
 | [OQ-20](#oq-20-live-ads-from-a-tauri-host) | Ads | live ads approval | High | Decided (labs); open: Overwolf (production) | ADR 0005 |
 | [OQ-27](#oq-27-viewability) | Ads | viewability model | Medium | Answered | B.3.4 |
 | [OQ-28](#oq-28-crash-and-load-error-recovery) | Ads | guest recovery | Low | Answered; open: pending harness (R3-4, report threshold) | D.7, E.2 |
 | [OQ-29](#oq-29-performance-ads) | Ads | performance ad geometry, input and removal | Medium | Answered | B.3.2, B.3.4 |
-| [OQ-30](#oq-30-linux) | Ads | Linux | Low | Decided | D.8.3 |
+| [OQ-30](#oq-30-linux) | Ads | Linux | Low | Decided (no ads on Linux) | 0 |
 | [OQ-32](#oq-32-element-extensions-pageurl-setpageurl-sendcommand) | Ads | `pageUrl`, `setPageUrl`, `sendCommand` | Medium | Answered | B.3.2, B.3.3, D.2, D.5 |
 | [OQ-35](#oq-35-dom-event-shape) | Ads | DOM event shape | Low | Answered | B.3.5 |
 | [OQ-06](#oq-06-iscmprequired-source) | Consent | `isCMPRequired` source | High | Answered (`no-cmp` gives `false`); open: Overwolf (other values) | D.6.2 |
@@ -72,8 +74,8 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 | [OQ-38](#oq-38-default-consent-written-by-the-first-settings-window-call) | Consent | default consent written by the first settings-window call | Medium | Answered (copied); open: Overwolf (intended?) | D.6.4 |
 | [OQ-21](#oq-21-a-host-agnostic-package-runtime) | Packages | host-agnostic package runtime | High | Out of scope (1.0); open: Overwolf | H |
 | [OQ-33](#oq-33-overlay-rendering-in-a-webview-host) | Packages | overlay rendering in a WebView host | High | Out of scope (1.0); open: Overwolf | H |
-| [OQ-09](#oq-09-signing-and-integrity-for-tauri-builds) | Distribution | signing for Tauri builds | High | Decided; open: Overwolf (manifest, `fileHashes`, integrity target) | G.4 |
-| [OQ-22](#oq-22-dev-mode) | Packages | dev mode | Medium | Closed (no package runtime; the CLI reads its own credentials) | G.4 |
+| [OQ-09](#oq-09-signing-and-integrity-for-tauri-builds) | Distribution | signing for Tauri builds | High | Decided; open: Overwolf (manifest, `fileHashes`, integrity target) | G.3 |
+| [OQ-22](#oq-22-dev-mode) | Packages | dev mode | Medium | Closed (no package runtime; the CLI reads its own credentials) | G.3 |
 | [OQ-23](#oq-23-failure-reasons) | Packages | failure reasons | Low | Out of scope (1.0) | H |
 | [OQ-34](#oq-34-implicit-utility-package) | Packages | implicit `utility` package | Medium | Out of scope (1.0) | H |
 | [OQ-36](#oq-36-package-object-lifetime) | Packages | package object lifetime | Medium | Out of scope (1.0) | H |
@@ -88,7 +90,7 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 | [OQ-40](#oq-40-a-corrupt-ow-electronjson) | State | a corrupt `ow-electron.json` | Medium | Decided (reset; `[]` and wrong types are a listed deviation) | F.2 |
 | [OQ-41](#oq-41-the-install-record-of-a-per-machine-install) | Distribution | install record of a per-machine install (HKLM) | Medium | Open: Overwolf | I.6 |
 | [OQ-42](#oq-42-a-uid-override-and-attribution) | Identity | a `uid` override and attribution | Medium | Open: Overwolf | G.2 |
-| [OQ-43](#oq-43-installer-signing-expectations) | Distribution | installer signing expectations | Medium | Open: Overwolf | G.4, I.3 |
+| [OQ-43](#oq-43-installer-signing-expectations) | Distribution | installer signing expectations | Medium | Open: Overwolf | G.3, I.3 |
 | [OQ-A1](#oq-a1-reward-ads) | Ad formats | reward ads: element, opt-in, grant signal, verification | High | Open: Overwolf | B.3.2, [AD-FORMATS.md](AD-FORMATS.md#reward) |
 | [OQ-A2](#oq-a2-unit) | Ad formats | valid `unit` values; ignored on standard slots | Medium | Open: Overwolf | B.3.2, D.2 |
 | [OQ-A3](#oq-a3-does-every-performance-ad-end-with-shutdown) | Ad formats | does every performance ad end with `shutdown` | Medium | Answered (no fill, error); open: Overwolf (dismiss, click) | B.3.4 |
@@ -194,7 +196,7 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
   last path segment of the URL loaded at first show (the `name` option is
   ignored, `.html` dropped, not truncated) and the constructor title. Names
   use the host label (OQ-03).
-- **Source.** Observed (rounds 1 and 2);
+- **Source.** Observed (the first and second harness rounds);
   https://dev.overwolf.com/ow-electron/getting-started/onboarding-resources/ow-electron-technical-overview#app-usage-analytics
   (mandatory minimum);
   https://dev.overwolf.com/ow-electron/guides/product-guidelines/app-screen-behavior/window-names
@@ -338,11 +340,18 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 
 - **Question.** What gesture window should a host allow between a user gesture
   in the ad and a top-level navigation that it opens externally?
-- **Status.** Decided (Low: copy the current behaviour).
-- **Answer.** 1500 ms (`ads.gestureWindowMs`), popups always to the system
-  browser, one open per gesture. It cannot be measured without clicking an
-  ad, which Overwolf's ad policy forbids.
-- **Source.** Lead decision;
+- **Status.** Decided.
+- **Answer.** Popups and top-level navigations away from Overwolf's ad page
+  always open in the system browser, and only after the operating system
+  reports a user action on that ad: WebView2's user activation, or recent
+  native input over the ad, on Windows; a native mouse-down or key press on
+  the ad on macOS. One action allows one open within
+  `guestLimits.activationWindowMs` (5000 ms), with at most 20 opens per
+  minute per ad and 20 per app (CONTRACT D.7,
+  [ADR 0020](adr/0020-native-gesture-authority.md)). ow-electron's own
+  window cannot be measured without clicking an ad, which Overwolf's ad
+  policy forbids.
+- **Source.** Maintainer decision;
   https://dev.overwolf.com/ow-electron/monetization/advertising/overview
   (ad policy).
 
@@ -352,7 +361,8 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
   format?
 - **Status.** Answered on macOS and Windows (Windows lab: one GPU entry per
   DXGI adapter with only `driverVersion`, display `name` = the monitor
-  friendly name; CONTRACT D.2). Linux **pending harness** (R2-11).
+  friendly name; CONTRACT D.2). Linux builds have no ad guests, so no
+  Linux shape applies.
 - **Answer.** `{ gpus: [{ name, model, driverVersion, vendor }], cpu: <brand string>, displays: [{ name, isMain, position, resolution, dpi }] }`,
   no `os`, `arch` or `scaleFactor` (CONTRACT D.2). This replaces the earlier
   privacy-reduced shape; Overwolf's privacy policy covers this data.
@@ -414,7 +424,7 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 
 - **Question.** What geometry and input behaviour should a full-page
   performance ad have?
-- **Status.** Answered (round 3 and the ad-format lab).
+- **Status.** Answered (the third harness round and the ad-format lab).
 - **Answer.** The guest covers the embedder window's content area and stays
   above every other ad guest; `adstyle` and `unit` are passed through. The
   element gets no shadow root, the inline style `pointer-events: none;` and
@@ -426,7 +436,7 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
   answers a window under 500 x 500 with `performance_ad_error` and
   `shutdown`, and a no-fill with `shutdown` alone (CONTRACT B.3.2, B.3.4,
   [AD-FORMATS.md](AD-FORMATS.md#interstitial-performance-ads)).
-- **Source.** Observed (round 3; lab perf, perf-sample, perf-small,
+- **Source.** Observed (third harness round; lab perf, perf-sample, perf-small,
   perf-twice, perf-remove, perf-with-standard, lab-layers);
   https://dev.overwolf.com/ow-electron/monetization/advertising/unique-ad-sizes/interstitial-ads.
 
@@ -434,19 +444,21 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
 
 - **Question.** Are ads supported on Linux hosts?
 - **Status.** Decided.
-- **Answer.** Yes, on WebKitGTK; only ad services are supported on macOS and
-  Linux. Request shaping on Linux covers the document request until a
-  web-process extension exists (CONTRACT D.8.3).
+- **Answer.** No. Linux builds compile and run, with consent and
+  analytics, but they create no ad guests: `<owadview>` reports
+  `unsupported` and `getInfo().adsSupported` is `false` (CONTRACT section 0,
+  "Platforms"). Overwolf documents ad services only for macOS and Linux
+  outside Windows.
 - **Source.** https://dev.overwolf.com/ow-electron/guides/dev-tools/non-windows-dev;
-  lead decision.
+  maintainer decision.
 
 ### OQ-32: element extensions `pageUrl`, `setPageUrl`, `sendCommand`
 
 - **Question.** Does `<owadview>` support `pageUrl`, `setPageUrl()` or
   `sendCommand()`?
 - **Status.** Answered.
-- **Answer.** Yes. Round 1 inspected the element only at creation, when it is
-  a plain `HTMLElement`; round 2 showed that after attach ow-electron upgrades
+- **Answer.** Yes. The first harness round inspected the element only at
+  creation, when it is a plain `HTMLElement`; the second showed that after attach ow-electron upgrades
   it (an `OwAdViewElement` prototype with Electron's `<webview>` methods plus
   `setPageUrl` and `sendCommand`, and own properties including `pageUrl`), and
   that the `pageurl` attribute becomes the guest's `__overwolf__.pageUrl`.
@@ -458,7 +470,8 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
   `{ type: 'setPageUrl', data: [url] }`; the test ad page showed no visible
   effect. ow-tauri forwards them the same way, and `setPageUrl` also sets
   `pageurl` for the next guest load (CONTRACT B.3.3, D.5).
-- **Source.** Observed (round 2, and round 3 `send-command-probe`); absent
+- **Source.** Observed (second harness round, and the third round's
+  `send-command-probe`); absent
   from the typings and the documentation.
 
 ### OQ-35: DOM event shape
@@ -486,7 +499,10 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
   (CONTRACT D.6.1, D.6.2). Every response served resolved `true`: empty and
   non-empty `params`, `enabled: false`, HTTP errors, invalid JSON, a dropped
   connection. A `{}` body disables the cache: each call then requests again
-  and opens a new startup consent window. ow-tauri does all of this.
+  and opens a new startup consent window. ow-tauri does all of this, except
+  that it stops waiting after `consent.euOnlyTimeoutMs` (60 s) and treats
+  that as a failed request (a listed deviation in
+  [PARITY](PARITY.md#deviations)).
 - **Source.** Observed; typings ("will never throw an exception - the default
   value is true");
   https://dev.overwolf.com/ow-electron/reference/ads/consent-management-platform.
@@ -514,7 +530,7 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
   closing it writes nothing; its first call of a launch also writes a fresh
   default consent (OQ-38) (CONTRACT D.6.4). `cmpURL` accepts any `https:` URL,
   and the consent globals are granted only under
-  `https://content.overwolf.com/monsdk/electron/` (lead decision).
+  `https://content.overwolf.com/monsdk/electron/` (maintainer decision).
 - **Source.** Observed;
   https://dev.overwolf.com/ow-electron/reference/ads/consent-management-platform
   (an app with its own installer shows the first layer; `openCMPWindow` is
@@ -556,7 +572,7 @@ Overwolf receives or a user-visible behaviour; **Low** affects edge cases.
   `ow-cmp-v2.html?unifiedcmp=&firstRun=true`; that page generates a new
   default consent string and saves it, overwriting the stored consent and
   both consent cookies. ow-tauri copies it (CONTRACT D.6.4), following the
-  owner's rule of replicating ow-electron.
+  project's rule of replicating ow-electron.
 - **Source.** Observed.
 - **Open with Overwolf.** Intended, or a defect? If a defect, ow-tauri drops
   the window when Overwolf fixes it in ow-electron.
@@ -591,7 +607,7 @@ describe ow-electron as observed; ow-tauri implements none of it.
 - **Status.** Closed for 1.0.
 - **Answer.** Dev mode unlocks packages, which 1.0 does not have. The plugin
   reads no credentials at run time. Only the `ow-tauri` CLI reads
-  `OW_CLI_EMAIL` and `OW_CLI_API_KEY`, for signing (CONTRACT G.4).
+  `OW_CLI_EMAIL` and `OW_CLI_API_KEY`, for signing (CONTRACT G.3).
 - **Source.** https://dev.overwolf.com/ow-electron/guides/dev-tools/dev-mode.
 
 ### OQ-23: failure reasons
@@ -675,7 +691,7 @@ describe ow-electron as observed; ow-tauri implements none of it.
 
   The CLI checks that the signed uid equals the uid the app computes at run
   time; `--write-uid` pins it in `tauri.conf.json`. `/sign/asar` is not done
-  and nothing is faked (CONTRACT G.4,
+  and nothing is faked (CONTRACT G.3,
   [ADR 0016](adr/0016-signing-approach.md)). Ads and analytics never depend
   on signing.
 - **Source.** Builder;
@@ -732,7 +748,7 @@ describe ow-electron as observed; ow-tauri implements none of it.
   client fails closed on a mismatch (CONTRACT I.3). When the signing
   service enables Overwolf certificate signing for the app,
   `ow-tauri sign-exe` sends the app executable to it, as Overwolf's builder
-  does (CONTRACT G.4).
+  does (CONTRACT G.3).
 - **Open with Overwolf.** Will installers served from the console be
   re-signed by Overwolf? If so, which certificate subject should apps put in
   `publisherNames`?
@@ -770,7 +786,7 @@ describe ow-electron as observed; ow-tauri implements none of it.
   guests and consent windows, the guest shim silences them: `alert()`
   returns at once, `confirm()` returns `false` and `prompt()` returns
   `null`, so an ad can never block the app (CONTRACT D.3).
-- **Source.** Lead decision.
+- **Source.** Maintainer decision.
 
 ## State
 
@@ -788,18 +804,19 @@ describe ow-electron as observed; ow-tauri implements none of it.
   - Wrong types (for example `cmp: 42`): never repaired. Every consent save
     fails, and no `app_first_launch` is sent.
 
-  ow-tauri resets on a parse failure exactly as ow-electron does: silently,
-  with no backup copy, and with the same requests. It resets `[]` and
+  ow-tauri resets on a parse failure as ow-electron does: with no backup
+  copy, and with the same requests. It resets `[]` and
   wrong-typed keys the same way. That sends one extra `app_first_launch`,
   then the next launches are normal. This is an intended deviation, listed
   in [PARITY](PARITY.md#deviations). One warning is logged. CONTRACT F.2.
-- **Source.** Observed (`corrupt-state` scenarios); lead decision for `[]`
-  and wrong types.
+- **Source.** Observed (`corrupt-state` scenarios); maintainer decision for
+  `[]` and wrong types.
 
 ## Ad formats
 ## Ad formats
 
-Questions from the ad-format work (round 3 and the ad-format lab). The
+Questions from the ad-format work (the third harness round and the
+ad-format lab). The
 developer guide is [AD-FORMATS.md](AD-FORMATS.md). Sources:
 https://dev.overwolf.com/ow-electron/monetization/advertising/overview and
 the pages under it, the archived Performance and Reward ads page

@@ -41,8 +41,8 @@ You need:
   runs, but ads report `unsupported` (see
   [COMPATIBILITY.md](COMPATIBILITY.md)).
 
-Not on crates.io or npm yet. Until the first release (1.0.0-rc.1, planned),
-the crate comes from GitHub and the npm packages are built from a clone.
+The packages are not on crates.io or npm yet. The crate comes from GitHub,
+and the npm packages are built from a clone.
 Clone the repository into the folder that will hold your app, build the two
 npm packages, and note the commit:
 

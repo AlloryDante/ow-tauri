@@ -404,11 +404,9 @@ name, in order; the list below is what was observed or documented.
   ow-electron's subresource headers ([CONTRACT.md](CONTRACT.md) D.8.3);
   Windows matches.
 
-## Open questions with Overwolf
+## Format details from Overwolf
 
-[OPEN-QUESTIONS.md](OPEN-QUESTIONS.md#ad-formats) lists them: the reward
-path and its verification (OQ-A1), valid `unit` values (OQ-A2), whether a
-dismissed or clicked interstitial always ends with `shutdown` (OQ-A3), house
-ads in test mode (OQ-A4), `owAdTestAd` (OQ-A5), interstitial close-button
-colours (OQ-A6), in-stream (OQ-A7), the high-impact re-append (OQ-A9) and
-live demand for the gated formats (OQ-A10).
+Some format details are Overwolf's to set, such as the reward grant signal,
+the valid `unit` values and live demand for the gated formats.
+[OPEN-QUESTIONS.md](OPEN-QUESTIONS.md#ad-formats) records each one with
+what the plugin does today.
