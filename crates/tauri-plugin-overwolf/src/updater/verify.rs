@@ -1,10 +1,14 @@
-//! Download verification (CONTRACT I.3, [ADR 0008](https://github.com/ow-tauri/ow-tauri/blob/main/docs/adr/0008-updater-client.md)):
+//! Download verification (CONTRACT I.3, DESIGN §4.14 [R5],
+//! [ADR 0008](https://github.com/AlloryDante/ow-tauri/blob/main/docs/adr/0008-updater-client.md)):
 //! the SHA-512 of the feed entry, the detached minisign signature, and the
-//! pieces of the OS publisher checks that need no OS: the Authenticode
-//! report of PowerShell's `Get-AuthenticodeSignature`, electron-updater's
-//! publisher-name rule and the macOS team identifier.
+//! parts of the Windows publisher check that need no OS: the Authenticode
+//! report of PowerShell's `Get-AuthenticodeSignature` and electron-updater's
+//! publisher-name rule.
 //!
-//! Every check fails closed: anything unreadable is a failure.
+//! Every check fails closed with a `verification` error: anything
+//! unreadable is a failure. Nothing is trusted by default (R5): the
+//! installer must match `updater.publisherNames` or verify against
+//! `updater.pubkey`.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -17,8 +21,8 @@ use sha2::{Digest, Sha512};
 
 use crate::error::Error;
 
-fn backend(message: &str) -> Error {
-    Error::backend(message.to_owned())
+fn failed(message: &str) -> Error {
+    Error::verification(message.to_owned())
 }
 
 /// Whether `actual` (the raw SHA-512 of the download) is the feed's
@@ -57,8 +61,17 @@ pub fn sha512_matches(expected: &str, actual: &[u8]) -> bool {
 ///
 /// `io` when the file cannot be read.
 pub fn sha512_file(path: &Path) -> Result<Vec<u8>, Error> {
-    let mut file =
+    let file =
         std::fs::File::open(path).map_err(|e| Error::from_io("Reading the update file", &e))?;
+    sha512_reader(file)
+}
+
+/// SHA-512 of everything `reader` yields (the locked installer handle).
+///
+/// # Errors
+///
+/// `io` when a read fails.
+pub fn sha512_reader(mut file: impl Read) -> Result<Vec<u8>, Error> {
     let mut hasher = Sha512::new();
     let mut buf = vec![0_u8; 64 * 1024];
     loop {
@@ -118,20 +131,34 @@ pub fn parse_public_key(text: &str) -> Result<minisign_verify::PublicKey, Error>
 ///
 /// # Errors
 ///
-/// `backend` when the signature does not parse or does not verify, `io`
-/// when the file cannot be read.
+/// `verification` when the signature does not parse or does not verify,
+/// `io` when the file cannot be read.
 pub fn verify_minisign(
     pubkey: &minisign_verify::PublicKey,
     signature: &str,
     path: &Path,
 ) -> Result<(), Error> {
+    let file =
+        std::fs::File::open(path).map_err(|e| Error::from_io("Reading the update file", &e))?;
+    verify_minisign_reader(pubkey, signature, file)
+}
+
+/// [`verify_minisign`] over everything `file` yields (the locked installer
+/// handle).
+///
+/// # Errors
+///
+/// As [`verify_minisign`].
+pub fn verify_minisign_reader(
+    pubkey: &minisign_verify::PublicKey,
+    signature: &str,
+    mut file: impl Read,
+) -> Result<(), Error> {
     let sig = minisign_verify::Signature::decode(&unwrap_base64_text(signature))
-        .map_err(|_| backend("The update signature file does not parse."))?;
+        .map_err(|_| failed("The update signature file does not parse."))?;
     let mut verifier = pubkey
         .verify_stream(&sig)
-        .map_err(|_| backend("The update signature was made with another key."))?;
-    let mut file =
-        std::fs::File::open(path).map_err(|e| Error::from_io("Reading the update file", &e))?;
+        .map_err(|_| failed("The update signature was made with another key."))?;
     let mut buf = vec![0_u8; 64 * 1024];
     loop {
         let n = file
@@ -144,7 +171,7 @@ pub fn verify_minisign(
     }
     verifier
         .finalize()
-        .map_err(|_| backend("The update signature does not match the file."))
+        .map_err(|_| failed("The update signature does not match the file."))
 }
 
 /// An RFC 2253 distinguished name as electron-updater's `parseDn` reads it:
@@ -272,11 +299,11 @@ impl Authenticode {
 pub fn parse_authenticode(text: &str) -> Result<Authenticode, Error> {
     let t = text.trim_start_matches('\u{feff}').trim();
     let v: serde_json::Value =
-        serde_json::from_str(t).map_err(|_| backend("The signature check gave no report."))?;
+        serde_json::from_str(t).map_err(|_| failed("The signature check gave no report."))?;
     let status = v
         .get("Status")
         .and_then(serde_json::Value::as_i64)
-        .ok_or_else(|| backend("The signature check report has no status."))?;
+        .ok_or_else(|| failed("The signature check report has no status."))?;
     Ok(Authenticode {
         status,
         status_message: v
@@ -297,136 +324,66 @@ pub fn parse_authenticode(text: &str) -> Result<Authenticode, Error> {
     })
 }
 
-/// The decision of the Windows publisher check (I.3).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PublisherDecision {
-    /// The installer is signed by an accepted publisher.
-    Accept,
-    /// No `publisherNames` and the running executable is unsigned: the
-    /// check is skipped (warn once).
-    SkipUnsigned,
-    /// No `publisherNames` and the app exe is signed with Overwolf's
-    /// certificate (`enableOWCertSigning`), so its subject is not the
-    /// installer's publisher: the check is skipped (warn once), as
-    /// electron-updater skips it without a `publisherName`.
-    SkipNoPublisher,
-    /// The installer fails the check; the message says why.
-    Reject(&'static str),
-}
-
-/// Applies the I.3 Windows rule to the reports of the running executable
-/// (`own`) and the downloaded installer.
+/// The Windows publisher check (R5): the installer carries a valid
+/// Authenticode signature whose subject matches one of `publisher_names`
+/// ([`publisher_matches`]), and the report is about `file` (PowerShell
+/// checked the file the client downloaded).
 ///
-/// - Configured `updater.publisherNames` (`Some`) are always enforced, as
-///   electron-updater enforces `publisherName`.
-/// - Without them, an app exe signed with Overwolf's certificate
-///   (`ow_certificate`: `build.overwolf.enableOWCertSigning`) skips the
-///   check, since Overwolf's subject never signs the installer.
-/// - Otherwise the running executable's own subject is the publisher; an
-///   unsigned running executable skips the check.
+/// # Errors
+///
+/// `verification` naming the failed condition.
 ///
 /// ```
-/// use tauri_plugin_overwolf::updater::verify::{decide_publisher, Authenticode, PublisherDecision};
-/// let signed = |s: &str| Authenticode { status: 0, status_message: String::new(), subject: Some(s.into()), path: String::new() };
-/// let unsigned = Authenticode { status: 2, status_message: String::new(), subject: None, path: String::new() };
-/// assert_eq!(decide_publisher(&signed("CN=A"), &signed("CN=A"), None, false), PublisherDecision::Accept);
-/// assert_eq!(decide_publisher(&unsigned, &unsigned, None, false), PublisherDecision::SkipUnsigned);
-/// assert!(matches!(decide_publisher(&signed("CN=A"), &signed("CN=B"), None, false), PublisherDecision::Reject(_)));
-/// assert!(matches!(decide_publisher(&signed("CN=A"), &unsigned, None, false), PublisherDecision::Reject(_)));
-/// // Overwolf's certificate on the app exe, the developer's on the installer.
-/// let ow = signed("CN=Overwolf Ltd");
-/// assert_eq!(decide_publisher(&ow, &signed("CN=Studio"), None, true), PublisherDecision::SkipNoPublisher);
+/// use std::path::Path;
+/// use tauri_plugin_overwolf::updater::verify::{check_publisher, Authenticode};
+/// let report = |status: i64, s: &str| Authenticode {
+///     status,
+///     status_message: String::new(),
+///     subject: Some(s.into()),
+///     path: r"C:\Temp\setup.exe".into(),
+/// };
+/// let file = Path::new(r"C:\Temp\setup.exe");
 /// let names = ["Studio".to_owned()];
-/// assert_eq!(decide_publisher(&ow, &signed("CN=Studio"), Some(&names), true), PublisherDecision::Accept);
+/// assert!(check_publisher(&report(0, "CN=Studio"), file, &names).is_ok());
+/// assert!(check_publisher(&report(0, "CN=Other"), file, &names).is_err());
+/// assert!(check_publisher(&report(2, "CN=Studio"), file, &names).is_err());
+/// assert!(check_publisher(&report(0, "CN=Studio"), Path::new(r"C:\x.exe"), &names).is_err());
 /// ```
-#[must_use]
-pub fn decide_publisher(
-    own: &Authenticode,
-    installer: &Authenticode,
-    publisher_names: Option<&[String]>,
-    ow_certificate: bool,
-) -> PublisherDecision {
-    if publisher_names.is_none() {
-        if ow_certificate {
-            return PublisherDecision::SkipNoPublisher;
-        }
-        if !own.is_valid() {
-            return PublisherDecision::SkipUnsigned;
-        }
+pub fn check_publisher(
+    report: &Authenticode,
+    file: &Path,
+    publisher_names: &[String],
+) -> Result<(), Error> {
+    if !same_windows_path(&report.path, &file.to_string_lossy()) {
+        return Err(failed("The signature check read another file."));
     }
-    if !installer.is_valid() {
-        return PublisherDecision::Reject("The update installer has no valid signature.");
+    if !report.is_valid() {
+        return Err(failed("The update installer has no valid signature."));
     }
-    let Some(subject) = installer.subject.as_deref() else {
-        return PublisherDecision::Reject("The update installer's signer is unknown.");
+    let Some(subject) = report.subject.as_deref() else {
+        return Err(failed("The update installer's signer is unknown."));
     };
-    let own_subject;
-    let names: &[String] = if let Some(names) = publisher_names {
-        names
+    if publisher_matches(subject, publisher_names) {
+        Ok(())
     } else {
-        let Some(s) = own.subject.clone() else {
-            return PublisherDecision::Reject("The running app's signer is unknown.");
-        };
-        own_subject = [s];
-        &own_subject
-    };
-    // A name that is a DN (the default, the running exe's subject) must
-    // match every attribute; a plain name must equal the CN.
-    let accepted = publisher_matches(subject, names);
-    if accepted {
-        PublisherDecision::Accept
-    } else {
-        PublisherDecision::Reject("The update installer is signed by another publisher.")
+        Err(failed(
+            "The update installer is signed by another publisher.",
+        ))
     }
 }
 
-/// The designated requirement in the output of `codesign -d -r-` (macOS):
-/// the text after `designated =>`, also when `codesign` marks it implicit
-/// with a leading `#`. Squirrel.Mac requires an update to satisfy the
-/// running app's designated requirement, which names its bundle
-/// identifier and signer.
+/// Whether two Windows paths name the same file: `/` and `\\` alike, no
+/// trailing separator, case-insensitive (NTFS default).
 ///
 /// ```
-/// use tauri_plugin_overwolf::updater::verify::designated_requirement;
-/// let out = "designated => identifier \"com.example.app\" and anchor apple generic\n";
-/// assert_eq!(
-///     designated_requirement(out).as_deref(),
-///     Some("identifier \"com.example.app\" and anchor apple generic")
-/// );
-/// assert_eq!(designated_requirement("# designated => cdhash H\"00\"").as_deref(), Some("cdhash H\"00\""));
-/// assert_eq!(designated_requirement("Executable=/x\n"), None);
+/// use tauri_plugin_overwolf::updater::verify::same_windows_path;
+/// assert!(same_windows_path(r"C:\A\setup.exe", "c:/a/SETUP.exe"));
+/// assert!(!same_windows_path(r"C:\A\setup.exe", r"C:\A\setup.exe.bak"));
 /// ```
 #[must_use]
-pub fn designated_requirement(codesign_output: &str) -> Option<String> {
-    codesign_output
-        .lines()
-        .find_map(|l| {
-            l.trim()
-                .trim_start_matches('#')
-                .trim_start()
-                .strip_prefix("designated =>")
-        })
-        .map(str::trim)
-        .filter(|r| !r.is_empty())
-        .map(str::to_owned)
-}
-
-/// The `TeamIdentifier` in the output of `codesign -dv` (macOS); `None`
-/// when absent or `not set`.
-///
-/// ```
-/// use tauri_plugin_overwolf::updater::verify::team_identifier;
-/// assert_eq!(team_identifier("Identifier=x\nTeamIdentifier=AB12CD34EF\n").as_deref(), Some("AB12CD34EF"));
-/// assert_eq!(team_identifier("TeamIdentifier=not set\n"), None);
-/// ```
-#[must_use]
-pub fn team_identifier(codesign_output: &str) -> Option<String> {
-    codesign_output
-        .lines()
-        .find_map(|l| l.trim().strip_prefix("TeamIdentifier="))
-        .map(str::trim)
-        .filter(|t| !t.is_empty() && *t != "not set")
-        .map(str::to_owned)
+pub fn same_windows_path(a: &str, b: &str) -> bool {
+    let norm = |s: &str| s.replace('/', "\\").trim_end_matches('\\').to_lowercase();
+    !a.is_empty() && norm(a) == norm(b)
 }
 
 #[cfg(test)]
@@ -463,7 +420,7 @@ y/rUw2y8/hOUYjZU71eHp/Wo1KZ40fGy2VJEDl34XMJM+TX48Ss/17u3IvIfbVR1FkZZSNCisQbuQY+b
         let other = temp_file("bad", b"Test");
         assert_eq!(
             verify_minisign(&pk, SIG, &other).unwrap_err().code(),
-            crate::ErrorCode::Backend
+            crate::ErrorCode::Verification
         );
         assert!(verify_minisign(&pk, "garbage", &file).is_err());
         let missing = file.with_file_name("missing.bin");
@@ -498,84 +455,52 @@ y/rUw2y8/hOUYjZU71eHp/Wo1KZ40fGy2VJEDl34XMJM+TX48Ss/17u3IvIfbVR1FkZZSNCisQbuQY+b
     }
 
     #[test]
-    fn publisher_decisions() {
-        let signed = |s: &str| Authenticode {
-            status: 0,
+    fn publisher_check_fails_closed() {
+        let file = Path::new(r"C:\Users\Public\pending\setup.exe");
+        let report = |status: i64, subject: Option<&str>, path: &str| Authenticode {
+            status,
             status_message: String::new(),
-            subject: Some(s.into()),
-            path: String::new(),
+            subject: subject.map(str::to_owned),
+            path: path.to_owned(),
         };
-        let own = signed("CN=Studio Inc, O=Studio Inc, C=PT");
-        // Default: the running executable's full subject.
-        assert_eq!(
-            decide_publisher(
-                &own,
-                &signed("CN=Studio Inc, O=Studio Inc, C=PT"),
-                None,
-                false
-            ),
-            PublisherDecision::Accept
-        );
-        assert!(matches!(
-            decide_publisher(&own, &signed("CN=Studio Inc, O=Other, C=PT"), None, false),
-            PublisherDecision::Reject(_)
-        ));
-        // Configured names: CN or DN, as electron-updater.
+        let here = file.to_string_lossy().into_owned();
         let names = ["Studio Inc".to_owned()];
-        assert_eq!(
-            decide_publisher(
-                &own,
-                &signed("CN=Studio Inc, O=New Owner"),
-                Some(&names),
-                false
-            ),
-            PublisherDecision::Accept
-        );
         let dn_names = ["CN=Studio Inc, C=PT".to_owned()];
-        assert_eq!(
-            decide_publisher(
-                &own,
-                &signed("CN=Studio Inc, O=X, C=PT"),
-                Some(&dn_names),
-                false
-            ),
-            PublisherDecision::Accept
-        );
-        let no_subject = Authenticode {
-            subject: None,
-            ..own.clone()
+        let ok = report(0, Some("CN=Studio Inc, O=Studio Inc, C=PT"), &here);
+        check_publisher(&ok, file, &names).unwrap();
+        check_publisher(&ok, file, &dn_names).unwrap();
+        let code = |r: &Authenticode, names: &[String]| {
+            check_publisher(r, file, names).unwrap_err().code()
         };
-        assert!(matches!(
-            decide_publisher(&no_subject, &own, None, false),
-            PublisherDecision::Reject(_)
-        ));
-        assert!(matches!(
-            decide_publisher(&own, &no_subject, None, false),
-            PublisherDecision::Reject(_)
-        ));
-        // Configured names are enforced also when the running app is
-        // unsigned (electron-updater reads publisherName, not the app).
-        let unsigned = Authenticode {
-            status: 2,
-            subject: None,
-            ..own.clone()
-        };
-        assert!(matches!(
-            decide_publisher(&unsigned, &unsigned, Some(&names), false),
-            PublisherDecision::Reject(_)
-        ));
+        let verification = crate::ErrorCode::Verification;
+        // No names: nothing is trusted (R5).
+        assert_eq!(code(&ok, &[]), verification);
+        assert_eq!(code(&report(0, Some("CN=Other"), &here), &names), verification);
+        assert_eq!(code(&report(0, None, &here), &names), verification);
         assert_eq!(
-            decide_publisher(&unsigned, &own, Some(&names), true),
-            PublisherDecision::Accept
+            code(&report(2, Some("CN=Studio Inc"), &here), &names),
+            verification
         );
-        // Overwolf's certificate on the app exe: no default publisher.
         assert_eq!(
-            decide_publisher(&signed("CN=Overwolf"), &unsigned, None, true),
-            PublisherDecision::SkipNoPublisher
+            code(&report(0, Some("CN=Studio Inc"), r"C:\other.exe"), &names),
+            verification
         );
+        assert_eq!(code(&report(0, Some("CN=Studio Inc"), ""), &names), verification);
         assert!(parse_authenticode("{}").is_err());
         assert!(parse_authenticode("").is_err());
         let r = parse_authenticode("\u{feff}{\"Status\":2,\"SignerCertificate\":null}").unwrap();
         assert!(!r.is_valid() && r.subject.is_none());
+    }
+
+    #[test]
+    fn reader_forms_match_the_file_forms() {
+        let file = temp_file("reader", b"test");
+        let pk = parse_public_key(KEY).unwrap();
+        verify_minisign_reader(&pk, SIG, std::fs::File::open(&file).unwrap()).unwrap();
+        assert!(verify_minisign_reader(&pk, SIG, &b"Test"[..]).is_err());
+        assert_eq!(
+            sha512_reader(&b"test"[..]).unwrap(),
+            sha512_file(&file).unwrap()
+        );
     }
 }

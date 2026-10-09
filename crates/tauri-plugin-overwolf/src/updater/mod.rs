@@ -1,125 +1,133 @@
-//! The electron-updater compatible update client (CONTRACT A.2.8, I;
-//! [ADR 0008](https://github.com/ow-tauri/ow-tauri/blob/main/docs/adr/0008-updater-client.md)).
+//! The Overwolf update client (CONTRACT I; DESIGN §4.14;
+//! [ADR 0008](https://github.com/AlloryDante/ow-tauri/blob/main/docs/adr/0008-updater-client.md)).
 //!
 //! Overwolf distributes app updates through an electron-updater **generic
-//! provider** feed per app. This module reads that feed and does what
-//! electron-updater does with it:
+//! provider** feed per app,
+//! `https://electron-updates.overwolf.com/electron-updates/electron/<uid>/<channel>.yml`.
+//! This module reads that feed and does what electron-updater does with it:
 //!
-//! - [`feed`]: `<channel>.yml` (`-mac.yml`, `-linux.yml`) parsing, with the
-//!   field spellings of Overwolf's feed (`IsAdminRightsRequired`);
+//! - [`feed`]: `<channel>.yml` parsing, with the field spellings of
+//!   Overwolf's feed (`IsAdminRightsRequired`);
 //! - [`is_update_available`], [`staging_bucket`], [`os_supports`]: the
-//!   version, `minimumSystemVersion` and staged rollout rules;
-//! - [`verify`]: size, SHA-512, the detached minisign signature and the
-//!   publisher-name rule for Windows Authenticode subjects;
-//! - [`install`]: the per-OS install command (NSIS, MSI, `.app`, `AppImage`).
+//!   version, prerelease, `minimumSystemVersion` and staged rollout rules;
+//! - [`choose_installer`]: the NSIS `setup.exe` of the release (an `.msi` is
+//!   refused);
+//! - [`verify`]: SHA-512, the detached minisign signature and the publisher
+//!   rule for Authenticode subjects (R5: `publisherNames` or `pubkey` is
+//!   required; nothing is trusted by default);
+//! - [`install`]: the installer command line, which always carries
+//!   `/UPDATE`.
 //!
-//! The Rust API (`UpdaterBuilder`, `Updater`, `Update`,
-//! `DownloadedUpdate`, DESIGN §3.3) is Windows only (R6).
+//! The client runs on **Windows only** (R6). The Rust API
+//! (`UpdaterBuilder`, `Updater`, `Update`, `DownloadedUpdate`, DESIGN §3.3)
+//! is exported on Windows; elsewhere the commands answer `unsupported` and
+//! apps use `tauri-plugin-updater`. The functions here are pure and build
+//! on every OS.
 //!
 //! ```
 //! use tauri_plugin_overwolf::updater::{feed, is_update_available, Availability};
 //! let info = feed::parse_feed("version: 1.2.0\nfiles:\n  - url: setup.exe\n    sha512: abc\n    size: 3\n").unwrap();
 //! let current = semver::Version::parse("1.1.0").unwrap();
-//! assert_eq!(is_update_available(&current, &info, false, "10.0.22631", || Some(10)).unwrap(), Availability::Available);
+//! assert_eq!(
+//!     is_update_available(&current, &info, false, false, "10.0.22631", || Some(10)).unwrap(),
+//!     Availability::Available
+//! );
 //! ```
 
 pub mod feed;
 pub mod install;
 pub mod verify;
 
-#[cfg(windows)]
+// The engine builds on every OS so the commands, and the tests, share one
+// code path; only its OS layer (`os`) is Windows code. The public Rust API
+// is exported on Windows only (R6).
+#[cfg_attr(
+    not(windows),
+    allow(
+        unreachable_pub,
+        dead_code,
+        reason = "the Rust API is exported on Windows only (R6); the commands use part of it everywhere"
+    )
+)]
 mod api;
+pub(crate) mod client;
+pub(crate) mod engine;
+mod os;
 
-use std::collections::BTreeMap;
-
-use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::error::Error;
-use crate::paths::TargetOs;
 
 pub use feed::{UpdateFileInfo, UpdateInfo};
 
 #[cfg(windows)]
 pub use api::{DownloadedUpdate, Update, Updater, UpdaterBuilder};
+#[cfg(not(windows))]
+pub(crate) use api::{DownloadedUpdate, Update, UpdaterBuilder};
 
-/// `UpdaterConfig` (A.2.8, I.1): what `autoUpdater.setFeedURL()` and the
-/// electron-updater properties send to `updater_configure`.
+/// Overwolf's update feed of the app `uid` (CONTRACT I.1), with the
+/// trailing slash the channel file name is joined to.
 ///
 /// ```
-/// use tauri_plugin_overwolf::updater::UpdaterConfig;
-/// let c: UpdaterConfig = serde_json::from_value(serde_json::json!({
-///     "provider": "generic",
-///     "url": "https://electron-updates.overwolf.com/electron-updates/electron/abc",
-///     "channel": "beta"
-/// })).unwrap();
-/// assert_eq!(c.channel.as_deref(), Some("beta"));
-/// assert!(c.auto_download.is_none());
+/// use tauri_plugin_overwolf::updater::overwolf_feed;
+/// assert_eq!(
+///     overwolf_feed("abc").as_str(),
+///     "https://electron-updates.overwolf.com/electron-updates/electron/abc/"
+/// );
 /// ```
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UpdaterConfig {
-    /// `'generic'`, the only supported provider.
-    #[serde(default)]
-    pub provider: Option<String>,
-    /// The feed URL: `https`, or `http` for localhost in debug builds.
-    #[serde(default)]
-    pub url: Option<String>,
-    /// The feed channel; `latest` when absent.
-    #[serde(default)]
-    pub channel: Option<String>,
-    /// Offer an older version than the running one.
-    #[serde(default)]
-    pub allow_downgrade: Option<bool>,
-    /// electron-updater's `allowPrerelease`. Stored only: the generic
-    /// provider never reads it, so prereleases are offered like any other
-    /// version (I.2 #4).
-    #[serde(default)]
-    pub allow_prerelease: Option<bool>,
-    /// Download a found update at once (electron-updater default `true`).
-    #[serde(default)]
-    pub auto_download: Option<bool>,
-    /// Install a downloaded update when the app quits (default `true`).
-    #[serde(default)]
-    pub auto_install_on_app_quit: Option<bool>,
-    /// electron-updater's `autoRunAppAfterInstall` (default `true`): a
-    /// non-silent `quitAndInstall` starts the app after the install.
-    #[serde(default)]
-    pub auto_run_app_after_install: Option<bool>,
-    /// Read `provider` and `url` from the embedded `dev-app-update.yml`
-    /// (debug builds only); without an embedded copy, `url` applies.
-    #[serde(default)]
-    pub force_dev_update_config: Option<bool>,
-    /// Extra request headers for the feed and the download.
-    #[serde(default)]
-    pub request_headers: Option<BTreeMap<String, String>>,
+#[must_use]
+pub fn overwolf_feed(uid: &str) -> Url {
+    let mut url = Url::parse("https://electron-updates.overwolf.com/electron-updates/electron/")
+        .unwrap_or_else(|_| unreachable!("a valid literal URL"));
+    if let Ok(mut path) = url.path_segments_mut() {
+        path.pop_if_empty().push(uid).push("");
+    }
+    url
 }
 
-/// The effective updater settings after [`UpdaterConfig::resolve`].
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "the independent electron-updater switches, each read on its own"
-)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedConfig {
-    /// The feed base URL, with a trailing slash.
-    pub url: Url,
-    /// The channel (`latest` by default).
-    pub channel: String,
-    /// See [`UpdaterConfig::allow_downgrade`].
-    pub allow_downgrade: bool,
-    /// See [`UpdaterConfig::allow_prerelease`].
-    pub allow_prerelease: bool,
-    /// See [`UpdaterConfig::auto_download`].
-    pub auto_download: bool,
-    /// See [`UpdaterConfig::auto_install_on_app_quit`].
-    pub auto_install_on_app_quit: bool,
-    /// See [`UpdaterConfig::auto_run_app_after_install`].
-    pub auto_run_app_after_install: bool,
-    /// Whether the dev configuration replaced `provider` and `url`.
-    pub force_dev_update_config: bool,
-    /// See [`UpdaterConfig::request_headers`].
-    pub request_headers: BTreeMap<String, String>,
+/// The feed base URL as the client joins file names to it: no query or
+/// fragment, and a trailing slash.
+///
+/// ```
+/// use tauri_plugin_overwolf::updater::feed_base;
+/// let u = url::Url::parse("https://feed.example.com/app?x=1#y").unwrap();
+/// assert_eq!(feed_base(u).as_str(), "https://feed.example.com/app/");
+/// ```
+#[must_use]
+pub fn feed_base(mut url: Url) -> Url {
+    url.set_query(None);
+    url.set_fragment(None);
+    if !url.path().ends_with('/') {
+        let path = format!("{}/", url.path());
+        url.set_path(&path);
+    }
+    url
+}
+
+/// The feed file URL of `channel` (CONTRACT I.2 #1): `<base><channel>.yml`
+/// with electron-updater's cache-busting `noCache` query of 12 hex
+/// characters (`token`).
+///
+/// # Errors
+///
+/// `invalid-argument` for a channel [`valid_channel`] refuses.
+///
+/// ```
+/// use tauri_plugin_overwolf::updater::feed_url;
+/// let base = url::Url::parse("https://feed.example.com/apps/abc/").unwrap();
+/// let u = feed_url(&base, "beta", "0123456789ab").unwrap();
+/// assert_eq!(u.as_str(), "https://feed.example.com/apps/abc/beta.yml?noCache=0123456789ab");
+/// assert!(feed_url(&base, "../x", "0").is_err());
+/// ```
+pub fn feed_url(base: &Url, channel: &str, token: &str) -> Result<Url, Error> {
+    if !valid_channel(channel) {
+        return Err(Error::invalid_argument(
+            "The update channel must be 1 to 64 letters, digits, '.', '_' or '-'.",
+        ));
+    }
+    let mut url = resolve_file_url(base, &format!("{channel}.yml"))?;
+    url.query_pairs_mut().append_pair("noCache", token);
+    Ok(url)
 }
 
 /// A `dev-app-update.yml` (I.1 `forceDevUpdateConfig`): its `provider`
@@ -216,123 +224,6 @@ pub fn valid_channel(channel: &str) -> bool {
         && !channel.starts_with('.')
 }
 
-impl UpdaterConfig {
-    /// Validates the configuration and fills the electron-updater defaults.
-    /// `dev` is the embedded `dev-app-update.yml`, used when
-    /// `forceDevUpdateConfig` is set in a debug build.
-    ///
-    /// # Errors
-    ///
-    /// `invalid-argument` for a provider other than `generic`, a missing or
-    /// unacceptable URL, a bad channel or a header that cannot be sent.
-    ///
-    /// ```
-    /// use tauri_plugin_overwolf::updater::UpdaterConfig;
-    /// let c = UpdaterConfig {
-    ///     provider: Some("generic".into()),
-    ///     url: Some("https://updates.example.com/app".into()),
-    ///     ..Default::default()
-    /// };
-    /// let r = c.resolve(None, false).unwrap();
-    /// assert_eq!(r.url.as_str(), "https://updates.example.com/app/");
-    /// assert_eq!(r.channel, "latest");
-    /// assert!(r.auto_download && r.auto_install_on_app_quit && !r.allow_downgrade);
-    /// ```
-    pub fn resolve(
-        &self,
-        dev: Option<&DevUpdateConfig>,
-        debug: bool,
-    ) -> Result<ResolvedConfig, Error> {
-        let force_dev = self.force_dev_update_config.unwrap_or(false) && debug;
-        let (provider, url, dev_channel) = match (force_dev, dev) {
-            (true, Some(d)) => (d.provider.clone(), d.url.clone(), d.channel.clone()),
-            // No embedded copy: the feed from `setFeedURL` still applies, as
-            // in electron-updater, where `forceDevUpdateConfig` only lets an
-            // unpackaged app check and `setFeedURL` replaces the file.
-            (true, None) if self.url.is_some() => (self.provider.clone(), self.url.clone(), None),
-            (true, None) => {
-                return Err(Error::invalid_argument(
-                    "forceDevUpdateConfig is set but no dev-app-update.yml is embedded.",
-                ));
-            }
-            (false, _) => (self.provider.clone(), self.url.clone(), None),
-        };
-        match provider.as_deref() {
-            None | Some("generic") => {}
-            Some(other) => {
-                return Err(Error::invalid_argument(format!(
-                    "Only the generic update provider is supported (got {other:?})."
-                )));
-            }
-        }
-        let url = url.ok_or_else(|| Error::invalid_argument("The update feed URL is missing."))?;
-        let mut url = Url::parse(url.trim())
-            .map_err(|_| Error::invalid_argument("The update feed URL does not parse."))?;
-        check_transport(&url, debug)?;
-        url.set_query(None);
-        url.set_fragment(None);
-        if !url.path().ends_with('/') {
-            let path = format!("{}/", url.path());
-            url.set_path(&path);
-        }
-        let channel = self
-            .channel
-            .clone()
-            .or(dev_channel)
-            .unwrap_or_else(|| "latest".to_owned());
-        if !valid_channel(&channel) {
-            return Err(Error::invalid_argument(
-                "The update channel must be 1 to 64 letters, digits, '.', '_' or '-'.",
-            ));
-        }
-        let request_headers = self.request_headers.clone().unwrap_or_default();
-        for (name, value) in &request_headers {
-            let ok_name = !name.is_empty()
-                && name
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b));
-            let ok_value = value
-                .bytes()
-                .all(|b| b == b'\t' || (0x20..0x7f).contains(&b));
-            if !ok_name || !ok_value {
-                return Err(Error::invalid_argument(format!(
-                    "The update request header {name:?} is invalid."
-                )));
-            }
-        }
-        Ok(ResolvedConfig {
-            url,
-            channel,
-            allow_downgrade: self.allow_downgrade.unwrap_or(false),
-            allow_prerelease: self.allow_prerelease.unwrap_or(false),
-            auto_download: self.auto_download.unwrap_or(true),
-            auto_install_on_app_quit: self.auto_install_on_app_quit.unwrap_or(true),
-            auto_run_app_after_install: self.auto_run_app_after_install.unwrap_or(true),
-            force_dev_update_config: force_dev,
-            request_headers,
-        })
-    }
-}
-
-/// The feed file for `channel` on `os` (I.2 #1): `<channel>.yml` on Windows,
-/// `<channel>-mac.yml` on macOS, `<channel>-linux.yml` on Linux.
-///
-/// ```
-/// use tauri_plugin_overwolf::paths::TargetOs;
-/// use tauri_plugin_overwolf::updater::feed_file_name;
-/// assert_eq!(feed_file_name("latest", TargetOs::Windows), "latest.yml");
-/// assert_eq!(feed_file_name("beta", TargetOs::Macos), "beta-mac.yml");
-/// assert_eq!(feed_file_name("latest", TargetOs::Linux), "latest-linux.yml");
-/// ```
-#[must_use]
-pub fn feed_file_name(channel: &str, os: TargetOs) -> String {
-    match os {
-        TargetOs::Windows => format!("{channel}.yml"),
-        TargetOs::Macos => format!("{channel}-mac.yml"),
-        TargetOs::Linux => format!("{channel}-linux.yml"),
-    }
-}
-
 /// The staged-rollout bucket (0 to 100) of a `stagingId` (I.2 #5). It is
 /// electron-updater's rule: the 32-bit big-endian number at bytes 12 to 15
 /// of the UUID, as a share of `0xFFFFFFFF`, so the same id lands in the same
@@ -414,6 +305,8 @@ pub enum Availability {
     SameVersion,
     /// The feed version is older and downgrades are off.
     Older,
+    /// The feed version is a prerelease and prereleases are off.
+    Prerelease,
     /// The feed's `minimumSystemVersion` is above this OS release.
     Unsupported,
     /// This client is outside the staged rollout.
@@ -473,14 +366,13 @@ pub fn os_supports(minimum: Option<&serde_json::Value>, os_release: &str) -> Opt
 ///
 /// 1. an equal version (`semver.eq`, build metadata ignored) is never an
 ///    update;
-/// 2. `minimumSystemVersion` above `os_release` is not supported;
-/// 3. the staged rollout: `bucket` is called only when the feed has a
+/// 2. a prerelease is offered only with `allow_prerelease` (CONTRACT I.2
+///    #4; electron-updater's generic provider ignores the switch);
+/// 3. `minimumSystemVersion` above `os_release` is not supported;
+/// 4. the staged rollout: `bucket` is called only when the feed has a
 ///    numeric `stagingPercentage`, so the staging id is created lazily, as
 ///    electron-updater does;
-/// 4. newer (`semver.gt`), or older (`semver.lt`) with `allow_downgrade`.
-///
-/// Prereleases are not filtered: the generic provider never reads
-/// `allowPrerelease`.
+/// 5. newer (`semver.gt`), or older (`semver.lt`) with `allow_downgrade`.
 ///
 /// # Errors
 ///
@@ -491,7 +383,7 @@ pub fn os_supports(minimum: Option<&serde_json::Value>, os_release: &str) -> Opt
 /// let v = |s: &str| semver::Version::parse(s).unwrap();
 /// let mut info = UpdateInfo { version: "2.0.0".into(), ..Default::default() };
 /// let check = |cur: &str, info: &UpdateInfo, down: bool, bucket: u8| {
-///     is_update_available(&v(cur), info, down, "10.0.22631", || Some(bucket)).unwrap()
+///     is_update_available(&v(cur), info, down, false, "10.0.22631", || Some(bucket)).unwrap()
 /// };
 /// assert_eq!(check("1.0.0", &info, false, 5), Availability::Available);
 /// assert_eq!(check("2.0.0", &info, false, 5), Availability::SameVersion);
@@ -508,6 +400,7 @@ pub fn is_update_available(
     current: &semver::Version,
     info: &UpdateInfo,
     allow_downgrade: bool,
+    allow_prerelease: bool,
     os_release: &str,
     bucket: impl FnOnce() -> Option<u8>,
 ) -> Result<Availability, Error> {
@@ -516,6 +409,9 @@ pub fn is_update_available(
     let order = latest.cmp_precedence(current);
     if order == Ordering::Equal {
         return Ok(Availability::SameVersion);
+    }
+    if !latest.pre.is_empty() && !allow_prerelease {
+        return Ok(Availability::Prerelease);
     }
     if os_supports(info.minimum_system_version.as_ref(), os_release) == Some(false) {
         return Ok(Availability::Unsupported);
@@ -533,18 +429,10 @@ pub fn is_update_available(
     }
 }
 
-/// The installer kinds of I.2 #6 / I.4.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InstallerKind {
-    /// Windows NSIS `setup.exe`.
-    Nsis,
-    /// Windows `.msi`.
-    Msi,
-    /// macOS `.zip` holding the `.app`.
-    MacZip,
-    /// Linux `.AppImage`.
-    AppImage,
-}
+/// The message of the `unsupported` error for a feed that offers only an
+/// `.msi` (D24).
+pub const MSI_UNSUPPORTED: &str =
+    "MSI is not supported for Overwolf distribution (docs/PRODUCTION-CHECKLIST.md#installers)";
 
 fn path_ends_with(url: &str, ext: &str) -> bool {
     let path = url.split(['?', '#']).next().unwrap_or_default();
@@ -553,28 +441,35 @@ fn path_ends_with(url: &str, ext: &str) -> bool {
         && path[path.len() - ext.len()..].eq_ignore_ascii_case(ext)
 }
 
-/// The file to download on `os` (I.2 #6): Windows `.exe` (NSIS) else
-/// `.msi`; macOS `.zip`; Linux `.AppImage`.
+/// The installer to download (I.2 #6, D24): the release's NSIS `.exe`.
+///
+/// # Errors
+///
+/// `unsupported` with [`MSI_UNSUPPORTED`] when the release has only an
+/// `.msi`; `backend` when it has no Windows installer or the entry has no
+/// SHA-512.
 ///
 /// ```
-/// use tauri_plugin_overwolf::paths::TargetOs;
-/// use tauri_plugin_overwolf::updater::{choose_file, feed::{UpdateFileInfo, UpdateInfo}, InstallerKind};
+/// use tauri_plugin_overwolf::updater::{choose_installer, feed::{UpdateFileInfo, UpdateInfo}};
 /// let file = |u: &str| UpdateFileInfo { url: u.into(), sha512: "x".into(), ..Default::default() };
 /// let info = UpdateInfo { version: "1.0.0".into(), files: vec![file("App.msi"), file("setup.EXE")], ..Default::default() };
-/// let (f, kind) = choose_file(&info, TargetOs::Windows).unwrap();
-/// assert_eq!((f.url.as_str(), kind), ("setup.EXE", InstallerKind::Nsis));
-/// assert!(choose_file(&info, TargetOs::Macos).is_none());
+/// assert_eq!(choose_installer(&info).unwrap().url, "setup.EXE");
+/// let msi = UpdateInfo { files: vec![file("App.msi")], ..info };
+/// assert_eq!(choose_installer(&msi).unwrap_err().code(), tauri_plugin_overwolf::ErrorCode::Unsupported);
 /// ```
-#[must_use]
-pub fn choose_file(info: &UpdateInfo, os: TargetOs) -> Option<(&UpdateFileInfo, InstallerKind)> {
+pub fn choose_installer(info: &UpdateInfo) -> Result<&UpdateFileInfo, Error> {
     let find = |ext: &str| info.files.iter().find(|f| path_ends_with(&f.url, ext));
-    match os {
-        TargetOs::Windows => find(".exe")
-            .map(|f| (f, InstallerKind::Nsis))
-            .or_else(|| find(".msi").map(|f| (f, InstallerKind::Msi))),
-        TargetOs::Macos => find(".zip").map(|f| (f, InstallerKind::MacZip)),
-        TargetOs::Linux => find(".appimage").map(|f| (f, InstallerKind::AppImage)),
+    let Some(file) = find(".exe") else {
+        return Err(if find(".msi").is_some() {
+            Error::unsupported(MSI_UNSUPPORTED)
+        } else {
+            Error::backend("The update feed has no Windows installer (.exe).")
+        });
+    };
+    if file.sha512.trim().is_empty() {
+        return Err(Error::backend("The update feed entry has no SHA-512."));
     }
+    Ok(file)
 }
 
 /// Resolves a feed file `url` against the feed base (I.2 #6), as
@@ -598,70 +493,6 @@ pub fn resolve_file_url(base: &Url, file: &str) -> Result<Url, Error> {
         .map_err(|_| Error::invalid_argument("An update file URL does not parse."))
 }
 
-/// `UpdateCheckResult` (I.5): what `updater_check` returns.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UpdateCheckResult {
-    /// The feed's update info.
-    pub update_info: UpdateInfo,
-    /// The same value (electron-updater keeps it for compatibility).
-    pub version_info: UpdateInfo,
-    /// Whether the client offers the update (I.2 #4, #5).
-    pub is_update_available: bool,
-}
-
-/// `ProgressInfo` of `download-progress` (I.3), with electron-updater's
-/// fields in its order: `{ total, delta, transferred, percent,
-/// bytesPerSecond }`.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProgressInfo {
-    /// Bytes to download.
-    pub total: u64,
-    /// Bytes downloaded since the previous `download-progress`.
-    pub delta: u64,
-    /// Bytes downloaded so far.
-    pub transferred: u64,
-    /// `transferred / total * 100`.
-    pub percent: f64,
-    /// Average speed since the download started, rounded.
-    pub bytes_per_second: u64,
-}
-
-impl ProgressInfo {
-    /// The progress after `transferred` of `total` bytes in `elapsed_ms`,
-    /// `delta` of them since the previous event.
-    ///
-    /// ```
-    /// use tauri_plugin_overwolf::updater::ProgressInfo;
-    /// let p = ProgressInfo::new(50, 20, 200, 1000);
-    /// assert_eq!((p.percent, p.bytes_per_second, p.delta), (25.0, 50, 20));
-    /// assert_eq!(ProgressInfo::new(5, 5, 10, 3000).bytes_per_second, 2);
-    /// ```
-    #[must_use]
-    pub fn new(transferred: u64, delta: u64, total: u64, elapsed_ms: u64) -> Self {
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "a percentage of byte counts below 2^52"
-        )]
-        let percent = if total == 0 {
-            0.0
-        } else {
-            transferred as f64 * 100.0 / total as f64
-        };
-        let elapsed = elapsed_ms.max(1);
-        ProgressInfo {
-            total,
-            delta,
-            transferred,
-            percent,
-            // Math.round(transferred / seconds).
-            bytes_per_second: transferred.saturating_mul(1000).saturating_add(elapsed / 2)
-                / elapsed,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -671,101 +502,31 @@ mod tests {
         semver::Version::parse(s).unwrap()
     }
 
-    #[test]
-    fn resolve_rules() {
-        let base = UpdaterConfig {
-            provider: Some("generic".into()),
-            url: Some("https://feed.example.com/app?x=1#y".into()),
-            ..Default::default()
-        };
-        let r = base.resolve(None, false).unwrap();
-        assert_eq!(r.url.as_str(), "https://feed.example.com/app/");
-        let bad = |c: UpdaterConfig, debug: bool| c.resolve(None, debug).unwrap_err().code();
-        assert_eq!(
-            bad(
-                UpdaterConfig {
-                    provider: Some("github".into()),
-                    ..base.clone()
-                },
-                false
-            ),
-            crate::ErrorCode::InvalidArgument
-        );
-        assert!(
-            UpdaterConfig {
-                url: None,
-                ..base.clone()
-            }
-            .resolve(None, false)
-            .is_err()
-        );
-        for ch in ["", "../x", ".hidden", "a/b", &"x".repeat(65)] {
-            assert!(
-                UpdaterConfig {
-                    channel: Some(ch.to_owned()),
-                    ..base.clone()
-                }
-                .resolve(None, false)
-                .is_err(),
-                "{ch:?}"
-            );
-        }
-        let mut headers = BTreeMap::new();
-        headers.insert("X-Bad\n".to_owned(), "v".to_owned());
-        assert!(
-            UpdaterConfig {
-                request_headers: Some(headers),
-                ..base.clone()
-            }
-            .resolve(None, false)
-            .is_err()
-        );
-        // forceDevUpdateConfig is a debug-build feature.
-        let dev = DevUpdateConfig {
-            provider: Some("generic".into()),
-            url: Some("http://127.0.0.1:9/feed".into()),
-            channel: Some("beta".into()),
-        };
-        let forced = UpdaterConfig {
-            force_dev_update_config: Some(true),
-            ..base.clone()
-        };
-        let r = forced.resolve(Some(&dev), true).unwrap();
-        assert_eq!(
-            (r.url.as_str(), r.channel.as_str()),
-            ("http://127.0.0.1:9/feed/", "beta")
-        );
-        let r = forced.resolve(Some(&dev), false).unwrap();
-        assert_eq!(r.url.as_str(), "https://feed.example.com/app/");
-        // Without an embedded copy the feed from setFeedURL is checked (the
-        // sample sets both); with neither there is nothing to check.
-        let r = forced.resolve(None, true).unwrap();
-        assert_eq!(r.url.as_str(), "https://feed.example.com/app/");
-        let no_feed = UpdaterConfig {
-            url: None,
-            ..forced.clone()
-        };
-        assert!(no_feed.resolve(None, true).is_err());
-    }
-
     fn check(current: &str, info: &UpdateInfo, downgrade: bool, bucket: u8) -> Availability {
-        is_update_available(&v(current), info, downgrade, "10.0.22631", || Some(bucket)).unwrap()
+        is_update_available(&v(current), info, downgrade, false, "10.0.22631", || {
+            Some(bucket)
+        })
+        .unwrap()
     }
 
     #[test]
     fn availability_rules() {
-        // electron-updater's generic provider offers prereleases: it never
-        // reads allowPrerelease.
+        // Prereleases only with allowPrerelease (CONTRACT I.2 #4).
         let mut info = UpdateInfo {
             version: "1.1.0-beta.1".into(),
             ..Default::default()
         };
-        assert_eq!(check("1.0.0", &info, false, 0), Availability::Available);
-        assert_eq!(check("1.1.0", &info, false, 0), Availability::Older);
+        assert_eq!(check("1.0.0", &info, false, 0), Availability::Prerelease);
+        let pre = |cur: &str, info: &UpdateInfo, down: bool| {
+            is_update_available(&v(cur), info, down, true, "10.0.22631", || None).unwrap()
+        };
+        assert_eq!(pre("1.0.0", &info, false), Availability::Available);
+        assert_eq!(pre("1.1.0", &info, false), Availability::Older);
+        assert_eq!(pre("1.1.0-beta.1", &info, false), Availability::SameVersion);
         info.version = "v1.0.1".into();
         assert_eq!(check("1.0.0", &info, false, 0), Availability::Available);
         info.version = "1.0".into();
-        assert!(is_update_available(&v("1.0.0"), &info, false, "1.0.0", || None).is_err());
+        assert!(is_update_available(&v("1.0.0"), &info, false, false, "1.0.0", || None).is_err());
         // Build metadata: semver.eq / gt ignore it, so the same release is
         // never offered again, also with downgrades on.
         info.version = "1.2.3+20261001".into();
@@ -791,7 +552,7 @@ mod tests {
         assert_eq!(check("2.0.0", &info, false, 0), Availability::SameVersion);
         info.staging_percentage = None;
         let asked = std::cell::Cell::new(false);
-        let r = is_update_available(&v("1.0.0"), &info, false, "1.0.0", || {
+        let r = is_update_available(&v("1.0.0"), &info, false, false, "1.0.0", || {
             asked.set(true);
             Some(0)
         });
@@ -808,7 +569,7 @@ mod tests {
             ..Default::default()
         };
         // Checked before the rollout, as electron-updater does.
-        let r = is_update_available(&v("1.0.0"), &info, false, "10.0.19045", || Some(0));
+        let r = is_update_available(&v("1.0.0"), &info, false, false, "10.0.19045", || Some(0));
         assert_eq!(r.unwrap(), Availability::Unsupported);
         info.staging_percentage = None;
         for (os, want) in [
@@ -817,7 +578,7 @@ mod tests {
             // Not comparable: supported, with electron-updater's warning.
             ("unknown", Availability::Available),
         ] {
-            let r = is_update_available(&v("1.0.0"), &info, false, os, || None);
+            let r = is_update_available(&v("1.0.0"), &info, false, false, os, || None);
             assert_eq!(r.unwrap(), want, "{os}");
         }
         // A number throws in semver.lt: supported.
@@ -860,34 +621,47 @@ mod tests {
     }
 
     #[test]
-    fn file_choice_per_os() {
-        let file = |u: &str| UpdateFileInfo {
+    fn installer_choice() {
+        let file = |u: &str, sha: &str| UpdateFileInfo {
             url: u.into(),
-            sha512: "x".into(),
+            sha512: sha.into(),
             ..Default::default()
         };
-        let info = UpdateInfo {
+        let info = |files| UpdateInfo {
             version: "1.0.0".into(),
-            files: vec![
-                file("App-1.0.0.msi"),
-                file("App-1.0.0-mac.zip?sig=1"),
-                file("App-1.0.0.AppImage"),
-            ],
+            files,
             ..Default::default()
         };
-        assert_eq!(
-            choose_file(&info, TargetOs::Windows).unwrap().1,
-            InstallerKind::Msi
-        );
-        assert_eq!(
-            choose_file(&info, TargetOs::Macos).unwrap().1,
-            InstallerKind::MacZip
-        );
-        assert_eq!(
-            choose_file(&info, TargetOs::Linux).unwrap().1,
-            InstallerKind::AppImage
-        );
+        // NSIS only (D24): an MSI-only release is `unsupported`, with the
+        // documented message.
+        let msi = choose_installer(&info(vec![file("App-1.0.0.msi", "x")])).unwrap_err();
+        assert_eq!(msi.code(), crate::ErrorCode::Unsupported);
+        assert!(msi.to_string().contains(MSI_UNSUPPORTED), "{msi}");
+        let none = choose_installer(&info(vec![file("App.zip", "x")])).unwrap_err();
+        assert_eq!(none.code(), crate::ErrorCode::Backend);
+        let no_hash = choose_installer(&info(vec![file("setup.exe?sig=1", " ")])).unwrap_err();
+        assert_eq!(no_hash.code(), crate::ErrorCode::Backend);
+        let both = info(vec![file("a.msi", "x"), file("b.Exe?sig=1", "y")]);
+        assert_eq!(choose_installer(&both).unwrap().url, "b.Exe?sig=1");
         assert!(path_ends_with("x.exe", ".EXE"));
         assert!(!path_ends_with("é", ".exe"));
+    }
+
+    #[test]
+    fn feed_urls() {
+        let base = feed_base(Url::parse("https://feed.example.com/apps/abc?x=1").unwrap());
+        assert_eq!(base.as_str(), "https://feed.example.com/apps/abc/");
+        let url = feed_url(&base, "latest", "aaaaaaaaaaaa").unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://feed.example.com/apps/abc/latest.yml?noCache=aaaaaaaaaaaa"
+        );
+        for ch in ["", "../x", ".hidden", "a/b", &"x".repeat(65)] {
+            assert!(feed_url(&base, ch, "t").is_err(), "{ch:?}");
+        }
+        assert_eq!(
+            overwolf_feed("abcdefghijklmnopabcdefghijklmnop").as_str(),
+            "https://electron-updates.overwolf.com/electron-updates/electron/abcdefghijklmnopabcdefghijklmnop/"
+        );
     }
 }
