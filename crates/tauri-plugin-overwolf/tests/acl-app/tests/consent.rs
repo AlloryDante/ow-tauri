@@ -22,8 +22,8 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tauri::test::MockRuntime;
 use tauri::{App, AppHandle, WebviewUrl};
+use tauri_plugin_overwolf::Builder;
 use tauri_plugin_overwolf::consent::{DEFAULT_CMP_URL, STARTUP_CMP_URL, clear_consent_url};
-use tauri_plugin_overwolf::{Builder, OverwolfExt};
 
 use common::{CMP_PAGE, Capture, Outcome, code, invoke, origin, outcome, wait_until};
 
@@ -373,6 +373,8 @@ fn js_cmp_url_off_the_allowlist_is_invalid_argument() {
 #[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn the_modal_privacy_window_is_parented_to_an_ad_hosting_window() {
+    use tauri_plugin_overwolf::OverwolfExt as _;
+
     let capture = Capture::hanging_eu_only();
     let (app, _dir) = fixture(
         "consent-modal",

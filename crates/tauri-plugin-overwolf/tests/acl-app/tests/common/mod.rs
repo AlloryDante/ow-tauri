@@ -447,6 +447,14 @@ impl Channels {
     }
 }
 
+/// Held while a mock event loop runs. In a debug build on macOS, Tauri's
+/// `RunEvent::Ready` handler sets the Dock icon (`setApplicationIconImage`)
+/// on whatever thread runs the loop, which is a test thread here. `AppKit`
+/// drawing from two test threads at once crashes the binary (SIGSEGV /
+/// SIGTRAP in `-[NSDockTile display]`, seen on the macOS CI runner and in
+/// about 2 of 3 local runs of `lifecycle`), so the loops take turns.
+static EVENT_LOOP: Mutex<()> = Mutex::new(());
+
 /// Runs `app` on the mock event loop. Once `RunEvent::Ready` arrived (the
 /// plugin's start, DESIGN §4.2), `worker` runs on a thread of its own;
 /// then every window is destroyed so the loop ends (`ExitRequested`,
@@ -454,12 +462,15 @@ impl Channels {
 /// plugin. Returns the worker's value; a worker panic fails the test after
 /// the app exited. The run fails when the app has not exited after
 /// [`RUN_LIMIT`].
+///
+/// One event loop runs at a time in a test binary ([`EVENT_LOOP`]).
 pub fn run_with<T, W, E>(app: App<MockRuntime>, worker: W, mut on_event: E) -> T
 where
     T: Send + 'static,
     W: FnOnce(&AppHandle<MockRuntime>) -> T + Send + 'static,
     E: FnMut(&AppHandle<MockRuntime>, &RunEvent) + 'static,
 {
+    let _one_loop = EVENT_LOOP.lock().unwrap_or_else(PoisonError::into_inner);
     let slot: Arc<Mutex<Option<std::thread::Result<T>>>> = Arc::new(Mutex::new(None));
     let out = Arc::clone(&slot);
     let mut worker = Some(worker);

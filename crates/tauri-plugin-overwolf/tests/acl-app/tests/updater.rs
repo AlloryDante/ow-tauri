@@ -14,7 +14,7 @@ mod common;
 
 use serde_json::{Value, json};
 
-use common::{Outcome, code, invoke, origin, outcome};
+use common::{Outcome, invoke, origin, outcome};
 
 /// The update client's commands (`overwolf:updater`).
 const UPDATER: [&str; 4] = [
@@ -77,7 +77,7 @@ fn the_updater_is_unsupported_without_the_feature_or_off_windows() {
         } else {
             "not-found"
         };
-        assert_eq!(code(&r), Some(want), "{cmd}: {r:?}");
+        assert_eq!(common::code(&r), Some(want), "{cmd}: {r:?}");
     }
 }
 
